@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="">
+
+<title>Redis实战——分布式限流方案 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="Redis实战——分布式限流方案">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/12/17/%E6%8A%80%E6%9C%AF/2023/Redis%E5%AE%9E%E6%88%98-%E5%88%86%E5%B8%83%E5%BC%8F%E9%99%90%E6%B5%81%E6%96%B9%E6%A1%88/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="">
+
+  
+  
+  
+  <meta name="description" content="前言大促期间接口被刷爆，数据库CPU100%。2023年用Redis实现了多种分布式限流方案，从简单的计数器到滑动窗口，再到令牌桶，每种方案都有适用场景。限流算法对比算法特点适用场景固定窗口简单但有临界问题粗粒度限流滑动窗口平滑无临界精确限流漏桶恒定速率处理流量整形令牌桶允许突发流量API限流固定窗口限流12">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+<script> console.log(" 欢迎 "); </script>
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+</aside>
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">Redis实战——分布式限流方案</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-12-17T02:00:00.000Z">2023-12-17</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/Redis/">Redis</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>大促期间接口被刷爆，数据库CPU 100%。2023年用Redis实现了多种分布式限流方案，从简单的计数器到滑动窗口，再到令牌桶，每种方案都有适用场景。</p>
+<h2 id="限流算法对比"><a href="#限流算法对比" class="headerlink" title="限流算法对比"></a>限流算法对比</h2><table>
+<thead>
+<tr>
+<th>算法</th>
+<th>特点</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>固定窗口</td>
+<td>简单但有临界问题</td>
+<td>粗粒度限流</td>
+</tr>
+<tr>
+<td>滑动窗口</td>
+<td>平滑无临界</td>
+<td>精确限流</td>
+</tr>
+<tr>
+<td>漏桶</td>
+<td>恒定速率处理</td>
+<td>流量整形</td>
+</tr>
+<tr>
+<td>令牌桶</td>
+<td>允许突发流量</td>
+<td>API限流</td>
+</tr>
+</tbody></table>
+<h2 id="固定窗口限流"><a href="#固定窗口限流" class="headerlink" title="固定窗口限流"></a>固定窗口限流</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">FixedWindowRateLimiter</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryAcquire</span><span class="params">(String key, <span class="type">int</span> limit, <span class="type">int</span> windowSeconds)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">redisKey</span> <span class="operator">=</span> <span class="string">&quot;rate:fixed:&quot;</span> + key;</span><br><span class="line">        <span class="type">Long</span> <span class="variable">count</span> <span class="operator">=</span> redisTemplate.opsForValue().increment(redisKey);</span><br><span class="line">        <span class="keyword">if</span> (count == <span class="number">1</span>) &#123;</span><br><span class="line">            redisTemplate.expire(redisKey, windowSeconds, TimeUnit.SECONDS);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> count &lt;= limit;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 问题：临界点两倍流量</span></span><br><span class="line"><span class="comment">// [0:00-1:00) 100请求（限制100/分钟）</span></span><br><span class="line"><span class="comment">// [0:59] 100请求 → [1:00] 100请求</span></span><br><span class="line"><span class="comment">// 0:59~1:01这2秒内可能通过200请求</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="滑动窗口限流"><a href="#滑动窗口限流" class="headerlink" title="滑动窗口限流"></a>滑动窗口限流</h2><h3 id="基于ZSet实现"><a href="#基于ZSet实现" class="headerlink" title="基于ZSet实现"></a>基于ZSet实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SlidingWindowRateLimiter</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">LUA_SCRIPT</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;local key = KEYS[1]</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local limit = tonumber(ARGV[1])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local window = tonumber(ARGV[2])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local now = tonumber(ARGV[3])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local memberId = ARGV[4]</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;ZREMRANGEBYSCORE&#x27;, key, 0, now - window * 1000)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local count = redis.call(&#x27;ZCARD&#x27;, key)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;if count &gt;= limit then return 0 end</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;ZADD&#x27;, key, now, memberId .. &#x27;:&#x27; .. now)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;PEXPIRE&#x27;, key, window * 1000)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;return 1&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryAcquire</span><span class="params">(String key, <span class="type">int</span> limit, <span class="type">int</span> windowSeconds, String memberId)</span> &#123;</span><br><span class="line">        DefaultRedisScript&lt;Long&gt; script = <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(LUA_SCRIPT, Long.class);</span><br><span class="line">        <span class="type">Long</span> <span class="variable">result</span> <span class="operator">=</span> redisTemplate.execute(script,</span><br><span class="line">            Collections.singletonList(<span class="string">&quot;rate:sliding:&quot;</span> + key),</span><br><span class="line">            String.valueOf(limit), String.valueOf(windowSeconds),</span><br><span class="line">            String.valueOf(System.currentTimeMillis()), memberId);</span><br><span class="line">        <span class="keyword">return</span> Long.valueOf(<span class="number">1L</span>).equals(result);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="使用"><a href="#使用" class="headerlink" title="使用"></a>使用</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@RestController</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderController</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SlidingWindowRateLimiter rateLimiter;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@PostMapping(&quot;/order/create&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> Result&lt;Void&gt; <span class="title function_">createOrder</span><span class="params">(<span class="meta">@RequestBody</span> OrderDTO dto)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;order:create:&quot;</span> + UserContext.getUserId();</span><br><span class="line">        <span class="keyword">if</span> (!rateLimiter.tryAcquire(key, <span class="number">10</span>, <span class="number">60</span>, UUID.randomUUID().toString())) &#123;</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(<span class="string">&quot;操作过于频繁，请稍后重试&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> Result.success(orderService.createOrder(dto));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="令牌桶限流"><a href="#令牌桶限流" class="headerlink" title="令牌桶限流"></a>令牌桶限流</h2><h3 id="Lua脚本实现"><a href="#Lua脚本实现" class="headerlink" title="Lua脚本实现"></a>Lua脚本实现</h3><figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">local</span> key = KEYS[<span class="number">1</span>]</span><br><span class="line"><span class="keyword">local</span> maxTokens = <span class="built_in">tonumber</span>(ARGV[<span class="number">1</span>])</span><br><span class="line"><span class="keyword">local</span> rate = <span class="built_in">tonumber</span>(ARGV[<span class="number">2</span>])      <span class="comment">-- 每秒生成令牌数</span></span><br><span class="line"><span class="keyword">local</span> now = <span class="built_in">tonumber</span>(ARGV[<span class="number">3</span>])</span><br><span class="line"><span class="keyword">local</span> requested = <span class="built_in">tonumber</span>(ARGV[<span class="number">4</span>]) <span class="comment">-- 请求令牌数</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 获取当前令牌数和上次更新时间</span></span><br><span class="line"><span class="keyword">local</span> tokens = <span class="built_in">tonumber</span>(redis.call(<span class="string">&#x27;HGET&#x27;</span>, key, <span class="string">&#x27;tokens&#x27;</span>)) <span class="keyword">or</span> maxTokens</span><br><span class="line"><span class="keyword">local</span> lastTime = <span class="built_in">tonumber</span>(redis.call(<span class="string">&#x27;HGET&#x27;</span>, key, <span class="string">&#x27;lastTime&#x27;</span>)) <span class="keyword">or</span> now</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 计算新增令牌</span></span><br><span class="line"><span class="keyword">local</span> elapsed = (now - lastTime) / <span class="number">1000</span>  <span class="comment">-- 毫秒转秒</span></span><br><span class="line"><span class="keyword">local</span> newTokens = <span class="built_in">math</span>.<span class="built_in">min</span>(maxTokens, tokens + elapsed * rate)</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 判断是否有足够令牌</span></span><br><span class="line"><span class="keyword">if</span> newTokens &gt;= requested <span class="keyword">then</span></span><br><span class="line">    newTokens = newTokens - requested</span><br><span class="line">    redis.call(<span class="string">&#x27;HMSET&#x27;</span>, key, <span class="string">&#x27;tokens&#x27;</span>, newTokens, <span class="string">&#x27;lastTime&#x27;</span>, now)</span><br><span class="line">    <span class="keyword">return</span> <span class="number">1</span></span><br><span class="line"><span class="keyword">else</span></span><br><span class="line">    redis.call(<span class="string">&#x27;HMSET&#x27;</span>, key, <span class="string">&#x27;tokens&#x27;</span>, newTokens, <span class="string">&#x27;lastTime&#x27;</span>, now)</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span></span><br><span class="line"><span class="keyword">end</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="Java实现"><a href="#Java实现" class="headerlink" title="Java实现"></a>Java实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">TokenBucketRateLimiter</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">LUA_SCRIPT</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;local key = KEYS[1]</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local maxTokens = tonumber(ARGV[1])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local rate = tonumber(ARGV[2])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local now = tonumber(ARGV[3])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local requested = tonumber(ARGV[4])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local tokens = tonumber(redis.call(&#x27;HGET&#x27;, key, &#x27;tokens&#x27;)) or maxTokens</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local lastTime = tonumber(redis.call(&#x27;HGET&#x27;, key, &#x27;lastTime&#x27;)) or now</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local elapsed = (now - lastTime) / 1000</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local newTokens = math.min(maxTokens, tokens + elapsed * rate)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;if newTokens &gt;= requested then</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;  newTokens = newTokens - requested</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;  redis.call(&#x27;HMSET&#x27;, key, &#x27;tokens&#x27;, newTokens, &#x27;lastTime&#x27;, now)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;  return 1</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;else</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;  redis.call(&#x27;HMSET&#x27;, key, &#x27;tokens&#x27;, newTokens, &#x27;lastTime&#x27;, now)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;  return 0</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;end&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryAcquire</span><span class="params">(String key, <span class="type">int</span> maxTokens, <span class="type">int</span> ratePerSecond, <span class="type">int</span> requested)</span> &#123;</span><br><span class="line">        DefaultRedisScript&lt;Long&gt; script = <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(LUA_SCRIPT, Long.class);</span><br><span class="line">        <span class="type">Long</span> <span class="variable">result</span> <span class="operator">=</span> redisTemplate.execute(script,</span><br><span class="line">            Collections.singletonList(<span class="string">&quot;rate:token:&quot;</span> + key),</span><br><span class="line">            String.valueOf(maxTokens), String.valueOf(ratePerSecond),</span><br><span class="line">            String.valueOf(System.currentTimeMillis()), String.valueOf(requested));</span><br><span class="line">        <span class="keyword">return</span> Long.valueOf(<span class="number">1L</span>).equals(result);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="注解式限流"><a href="#注解式限流" class="headerlink" title="注解式限流"></a>注解式限流</h2><h3 id="自定义注解"><a href="#自定义注解" class="headerlink" title="自定义注解"></a>自定义注解</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Target(ElementType.METHOD)</span></span><br><span class="line"><span class="meta">@Retention(RetentionPolicy.RUNTIME)</span></span><br><span class="line"><span class="keyword">public</span> <span class="meta">@interface</span> RateLimit &#123;</span><br><span class="line">    String <span class="title function_">key</span><span class="params">()</span>;                    <span class="comment">// 限流key</span></span><br><span class="line">    <span class="type">int</span> <span class="title function_">limit</span><span class="params">()</span> <span class="keyword">default</span> <span class="number">100</span>;         <span class="comment">// 限制次数</span></span><br><span class="line">    <span class="type">int</span> <span class="title function_">window</span><span class="params">()</span> <span class="keyword">default</span> <span class="number">60</span>;         <span class="comment">// 时间窗口(秒)</span></span><br><span class="line">    LimitType <span class="title function_">type</span><span class="params">()</span> <span class="keyword">default</span> LimitType.IP;  <span class="comment">// 限流类型</span></span><br><span class="line">    String <span class="title function_">message</span><span class="params">()</span> <span class="keyword">default</span> <span class="string">&quot;操作过于频繁&quot;</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">enum</span> <span class="title class_">LimitType</span> &#123;</span><br><span class="line">    IP,       <span class="comment">// 按IP限流</span></span><br><span class="line">    USER,     <span class="comment">// 按用户限流</span></span><br><span class="line">    GLOBAL    <span class="comment">// 全局限流</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="AOP实现"><a href="#AOP实现" class="headerlink" title="AOP实现"></a>AOP实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Aspect</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RateLimitAspect</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SlidingWindowRateLimiter rateLimiter;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Before(&quot;@annotation(rateLimit)&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">before</span><span class="params">(JoinPoint joinPoint, RateLimit rateLimit)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> buildKey(rateLimit);</span><br><span class="line">        <span class="type">boolean</span> <span class="variable">allowed</span> <span class="operator">=</span> rateLimiter.tryAcquire(</span><br><span class="line">            key, rateLimit.limit(), rateLimit.window(), </span><br><span class="line">            UUID.randomUUID().toString());</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (!allowed) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;接口限流: key=&#123;&#125;, limit=&#123;&#125;/&#123;&#125;s&quot;</span>, key, rateLimit.limit(), rateLimit.window());</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(rateLimit.message());</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> String <span class="title function_">buildKey</span><span class="params">(RateLimit rateLimit)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">switch</span> (rateLimit.type()) &#123;</span><br><span class="line">            <span class="keyword">case</span> IP -&gt; rateLimit.key() + <span class="string">&quot;:&quot;</span> + getClientIP();</span><br><span class="line">            <span class="keyword">case</span> USER -&gt; rateLimit.key() + <span class="string">&quot;:&quot;</span> + UserContext.getUserId();</span><br><span class="line">            <span class="keyword">case</span> GLOBAL -&gt; rateLimit.key();</span><br><span class="line">        &#125;;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> String <span class="title function_">getClientIP</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">ServletRequestAttributes</span> <span class="variable">attrs</span> <span class="operator">=</span> (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();</span><br><span class="line">        <span class="keyword">if</span> (attrs != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="type">HttpServletRequest</span> <span class="variable">request</span> <span class="operator">=</span> attrs.getRequest();</span><br><span class="line">            <span class="type">String</span> <span class="variable">ip</span> <span class="operator">=</span> request.getHeader(<span class="string">&quot;X-Forwarded-For&quot;</span>);</span><br><span class="line">            <span class="keyword">return</span> ip != <span class="literal">null</span> ? ip : request.getRemoteAddr();</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> <span class="string">&quot;unknown&quot;</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="使用-1"><a href="#使用-1" class="headerlink" title="使用"></a>使用</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@RestController</span></span><br><span class="line"><span class="meta">@RequestMapping(&quot;/api&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ApiController</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@RateLimit(key = &quot;query&quot;, limit = 100, window = 60, type = LimitType.IP)</span></span><br><span class="line">    <span class="meta">@GetMapping(&quot;/query&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> Result&lt;?&gt; query(<span class="meta">@RequestParam</span> String keyword) &#123;</span><br><span class="line">        <span class="keyword">return</span> Result.success(searchService.search(keyword));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@RateLimit(key = &quot;submit&quot;, limit = 5, window = 60, type = LimitType.USER, </span></span><br><span class="line"><span class="meta">               message = &quot;提交太频繁，请1分钟后重试&quot;)</span></span><br><span class="line">    <span class="meta">@PostMapping(&quot;/submit&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> Result&lt;Void&gt; <span class="title function_">submit</span><span class="params">(<span class="meta">@RequestBody</span> SubmitDTO dto)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> Result.success(submitService.submit(dto));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="网关层限流"><a href="#网关层限流" class="headerlink" title="网关层限流"></a>网关层限流</h2><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># SpringCloud Gateway + Redis限流</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">cloud:</span></span><br><span class="line">    <span class="attr">gateway:</span></span><br><span class="line">      <span class="attr">routes:</span></span><br><span class="line">        <span class="bullet">-</span> <span class="attr">id:</span> <span class="string">user-service</span></span><br><span class="line">          <span class="attr">uri:</span> <span class="string">lb://user-service</span></span><br><span class="line">          <span class="attr">predicates:</span></span><br><span class="line">            <span class="bullet">-</span> <span class="string">Path=/api/user/**</span></span><br><span class="line">          <span class="attr">filters:</span></span><br><span class="line">            <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">RequestRateLimiter</span></span><br><span class="line">              <span class="attr">args:</span></span><br><span class="line">                <span class="attr">redis-rate-limiter.replenishRate:</span> <span class="number">100</span>  <span class="comment"># 每秒100个令牌</span></span><br><span class="line">                <span class="attr">redis-rate-limiter.burstCapacity:</span> <span class="number">200</span>   <span class="comment"># 突发200个</span></span><br><span class="line">                <span class="attr">key-resolver:</span> <span class="string">&quot;#&#123;@ipKeyResolver&#125;&quot;</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">GatewayRateLimitConfig</span> &#123;</span><br><span class="line">    <span class="meta">@Bean</span></span><br><span class="line">    <span class="keyword">public</span> KeyResolver <span class="title function_">ipKeyResolver</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> exchange -&gt; Mono.just(</span><br><span class="line">            exchange.getRequest().getRemoteAddress().getAddress().getHostAddress()</span><br><span class="line">        );</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-分布式限流有哪些算法？"><a href="#1-分布式限流有哪些算法？" class="headerlink" title="1. 分布式限流有哪些算法？"></a>1. 分布式限流有哪些算法？</h3><p>固定窗口（简单有临界问题）、滑动窗口（平滑）、漏桶（恒定速率）、令牌桶（允许突发）。推荐令牌桶。</p>
+<h3 id="2-滑动窗口怎么实现？"><a href="#2-滑动窗口怎么实现？" class="headerlink" title="2. 滑动窗口怎么实现？"></a>2. 滑动窗口怎么实现？</h3><p>用ZSet存储每次请求的时间戳，ZREMRANGEBYSCORE清除过期数据，ZCARD统计窗口内请求数。Lua脚本保证原子性。</p>
+<h3 id="3-令牌桶和漏桶的区别？"><a href="#3-令牌桶和漏桶的区别？" class="headerlink" title="3. 令牌桶和漏桶的区别？"></a>3. 令牌桶和漏桶的区别？</h3><p>令牌桶允许突发流量（桶里有令牌就可以立即处理），漏桶恒定速率处理（不管来多少请求都以固定速率处理）。API限流用令牌桶，流量整形用漏桶。</p>
+<h2 id="最佳实践"><a href="#最佳实践" class="headerlink" title="最佳实践"></a>最佳实践</h2><ol>
+<li><strong>API限流用令牌桶</strong>：允许短时突发</li>
+<li><strong>Lua脚本保证原子性</strong>：避免竞态条件</li>
+<li><strong>注解式限流</strong>：代码侵入性最小</li>
+<li><strong>网关层+应用层双重限流</strong>：网关粗粒度，应用细粒度</li>
+<li><strong>限流后友好提示</strong>：不要直接500</li>
+</ol>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>分布式限流是保护系统的最后一道防线。2023年实战后，核心认知是：<strong>固定窗口简单但有临界问题，滑动窗口精确，令牌桶允许突发</strong>。Lua脚本保证原子性，注解+AOP实现优雅限流，网关+应用双重保障。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/12/10/%E6%8A%80%E6%9C%AF/2023/MyBatis%E5%8A%A8%E6%80%81SQL%E6%BA%90%E7%A0%81-XmlScriptBuilder%E8%A7%A3%E6%9E%90/">MyBatis动态SQL源码——XmlScriptBuilder解析</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/12/31/%E6%8A%80%E6%9C%AF/2023/2023%E5%B9%B4%E5%BA%A6%E6%80%BB%E7%BB%93-%E8%84%B1%E7%A6%BBCRUD%E5%86%85%E5%8D%B7%E8%BF%9B%E9%98%B6%E5%90%AF%E8%88%AA/">2023年度总结——脱离CRUD内卷，进阶启航</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="date-display"></span> <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      const dateDisplay = document.getElementById('date-display');
+      const year = now.getFullYear();
+      const month = formatTime(now.getMonth() + 1);
+      const day = formatTime(now.getDate());
+      dateDisplay.textContent = `${year}-${month}-${day}`;
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%90%E6%B5%81%E7%AE%97%E6%B3%95%E5%AF%B9%E6%AF%94"><span class="toc-number">2.</span> <span class="toc-text">限流算法对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%BA%E5%AE%9A%E7%AA%97%E5%8F%A3%E9%99%90%E6%B5%81"><span class="toc-number">3.</span> <span class="toc-text">固定窗口限流</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3%E9%99%90%E6%B5%81"><span class="toc-number">4.</span> <span class="toc-text">滑动窗口限流</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9F%BA%E4%BA%8EZSet%E5%AE%9E%E7%8E%B0"><span class="toc-number">4.1.</span> <span class="toc-text">基于ZSet实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8"><span class="toc-number">4.2.</span> <span class="toc-text">使用</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%A4%E7%89%8C%E6%A1%B6%E9%99%90%E6%B5%81"><span class="toc-number">5.</span> <span class="toc-text">令牌桶限流</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Lua%E8%84%9A%E6%9C%AC%E5%AE%9E%E7%8E%B0"><span class="toc-number">5.1.</span> <span class="toc-text">Lua脚本实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Java%E5%AE%9E%E7%8E%B0"><span class="toc-number">5.2.</span> <span class="toc-text">Java实现</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%B3%A8%E8%A7%A3%E5%BC%8F%E9%99%90%E6%B5%81"><span class="toc-number">6.</span> <span class="toc-text">注解式限流</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%87%AA%E5%AE%9A%E4%B9%89%E6%B3%A8%E8%A7%A3"><span class="toc-number">6.1.</span> <span class="toc-text">自定义注解</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#AOP%E5%AE%9E%E7%8E%B0"><span class="toc-number">6.2.</span> <span class="toc-text">AOP实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8-1"><span class="toc-number">6.3.</span> <span class="toc-text">使用</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%BD%91%E5%85%B3%E5%B1%82%E9%99%90%E6%B5%81"><span class="toc-number">7.</span> <span class="toc-text">网关层限流</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91%E9%97%AE%E9%A2%98"><span class="toc-number">8.</span> <span class="toc-text">面试高频问题</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%88%86%E5%B8%83%E5%BC%8F%E9%99%90%E6%B5%81%E6%9C%89%E5%93%AA%E4%BA%9B%E7%AE%97%E6%B3%95%EF%BC%9F"><span class="toc-number">8.1.</span> <span class="toc-text">1. 分布式限流有哪些算法？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3%E6%80%8E%E4%B9%88%E5%AE%9E%E7%8E%B0%EF%BC%9F"><span class="toc-number">8.2.</span> <span class="toc-text">2. 滑动窗口怎么实现？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E4%BB%A4%E7%89%8C%E6%A1%B6%E5%92%8C%E6%BC%8F%E6%A1%B6%E7%9A%84%E5%8C%BA%E5%88%AB%EF%BC%9F"><span class="toc-number">8.3.</span> <span class="toc-text">3. 令牌桶和漏桶的区别？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">9.</span> <span class="toc-text">最佳实践</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">10.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/Redis/" class="tag" aria-label="标签: #Redis">#Redis</a>
+            
+                <a href="/tags/Lua/" class="tag" aria-label="标签: #Lua">#Lua</a>
+            
+                <a href="/tags/%E9%99%90%E6%B5%81/" class="tag" aria-label="标签: #限流">#限流</a>
+            
+                <a href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/" class="tag" aria-label="标签: #分布式">#分布式</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(161)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(80)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/Redis/" aria-label="分类: Redis">
+                        Redis
+                        <span>(9)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+    <!-- No categories available -->
+
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="">
+
+<title>RabbitMQ消息幂等性——如何保证消息只被消费一次 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="RabbitMQ消息幂等性——如何保证消息只被消费一次">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/04/09/%E6%8A%80%E6%9C%AF/2023/RabbitMQ%E6%B6%88%E6%81%AF%E5%B9%82%E7%AD%89%E6%80%A7-%E5%A6%82%E4%BD%95%E4%BF%9D%E8%AF%81%E6%B6%88%E6%81%AF%E5%8F%AA%E8%A2%AB%E6%B6%88%E8%B4%B9%E4%B8%80%E6%AC%A1/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="">
+
+  
+  
+  
+  <meta name="description" content="前言线上踩过一次坑：RabbitMQ消费者重复消费导致用户被扣了两次款。排查发现是消费者处理完成后ACK失败，RabbitMQ重新投递消息，导致重复消费。这次事故让我深刻认识到：消息幂等性不是可选项，而是必选项。为什么会重复消费12345678910消息重复投递的三大场景：场景1：生产者重试生产者发送消息→网">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+<script> console.log(" 欢迎 "); </script>
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+</aside>
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">RabbitMQ消息幂等性——如何保证消息只被消费一次</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-04-09T02:00:00.000Z">2023-04-09</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/">消息队列</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>线上踩过一次坑：RabbitMQ消费者重复消费导致用户被扣了两次款。排查发现是消费者处理完成后ACK失败，RabbitMQ重新投递消息，导致重复消费。这次事故让我深刻认识到：消息幂等性不是可选项，而是必选项。</p>
+<h2 id="为什么会重复消费"><a href="#为什么会重复消费" class="headerlink" title="为什么会重复消费"></a>为什么会重复消费</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">消息重复投递的三大场景：</span><br><span class="line"></span><br><span class="line">场景1：生产者重试</span><br><span class="line">  生产者发送消息 → 网络超时 → 重试发送 → 消费者收到两条相同消息</span><br><span class="line"></span><br><span class="line">场景2：消费者ACK失败</span><br><span class="line">  消费者处理完成 → 网络抖动ACK丢失 → RabbitMQ未收到ACK → 重新投递</span><br><span class="line"></span><br><span class="line">场景3：消费者处理超时</span><br><span class="line">  消费者处理耗时 → 超过消费超时时间 → RabbitMQ认为消费失败 → 重新投递</span><br></pre></td></tr></table></figure>
+
+<h2 id="什么是幂等性"><a href="#什么是幂等性" class="headerlink" title="什么是幂等性"></a>什么是幂等性</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">幂等性：同一操作执行一次和执行多次产生的效果相同</span><br><span class="line"></span><br><span class="line">非幂等操作：扣款100元 → 执行3次 → 扣了300元</span><br><span class="line">幂等操作：设置用户名为张三 → 执行3次 → 还是张三</span><br><span class="line"></span><br><span class="line">消息幂等性：同一条消息消费一次和消费多次的结果一致</span><br></pre></td></tr></table></figure>
+
+<h2 id="幂等性解决方案"><a href="#幂等性解决方案" class="headerlink" title="幂等性解决方案"></a>幂等性解决方案</h2><h3 id="方案一：唯一消息ID-去重表"><a href="#方案一：唯一消息ID-去重表" class="headerlink" title="方案一：唯一消息ID + 去重表"></a>方案一：唯一消息ID + 去重表</h3><p>最通用、最可靠的方案。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 1. 生产者发送消息时携带唯一ID</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderProducer</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RabbitTemplate rabbitTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">sendOrderMessage</span><span class="params">(Order order)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">msgId</span> <span class="operator">=</span> IdUtil.simpleUUID();</span><br><span class="line">        <span class="type">Message</span> <span class="variable">message</span> <span class="operator">=</span> MessageBuilder</span><br><span class="line">            .withBody(JSON.toJSONString(order).getBytes())</span><br><span class="line">            .setMessageId(msgId)  <span class="comment">// 设置唯一消息ID</span></span><br><span class="line">            .setContentType(<span class="string">&quot;application/json&quot;</span>)</span><br><span class="line">            .build();</span><br><span class="line"></span><br><span class="line">        rabbitTemplate.convertAndSend(<span class="string">&quot;order.exchange&quot;</span>, <span class="string">&quot;order.create&quot;</span>, message);</span><br><span class="line">        log.info(<span class="string">&quot;发送订单消息: orderId=&#123;&#125;, msgId=&#123;&#125;&quot;</span>, order.getId(), msgId);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 2. 消费者消费前去重表校验</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderConsumer</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> MsgConsumeRecordMapper consumeRecordMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> OrderService orderService;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@RabbitListener(queues = &quot;order.queue&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">handleOrderMessage</span><span class="params">(Message message, Channel channel)</span> </span><br><span class="line">            <span class="keyword">throws</span> IOException &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">msgId</span> <span class="operator">=</span> message.getMessageProperties().getMessageId();</span><br><span class="line">        <span class="type">long</span> <span class="variable">deliveryTag</span> <span class="operator">=</span> message.getMessageProperties().getDeliveryTag();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 幂等校验：查询去重表</span></span><br><span class="line">            <span class="type">MsgConsumeRecord</span> <span class="variable">record</span> <span class="operator">=</span> consumeRecordMapper.selectByMsgId(msgId);</span><br><span class="line">            <span class="keyword">if</span> (record != <span class="literal">null</span>) &#123;</span><br><span class="line">                log.warn(<span class="string">&quot;消息已消费，跳过: msgId=&#123;&#125;&quot;</span>, msgId);</span><br><span class="line">                channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">                <span class="keyword">return</span>;</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 解析消息</span></span><br><span class="line">            <span class="type">String</span> <span class="variable">body</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">String</span>(message.getBody());</span><br><span class="line">            <span class="type">Order</span> <span class="variable">order</span> <span class="operator">=</span> JSON.parseObject(body, Order.class);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 业务处理</span></span><br><span class="line">            orderService.processOrder(order);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 记录消费成功（写入去重表）</span></span><br><span class="line">            <span class="type">MsgConsumeRecord</span> <span class="variable">consumeRecord</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">MsgConsumeRecord</span>();</span><br><span class="line">            consumeRecord.setMsgId(msgId);</span><br><span class="line">            consumeRecord.setQueueName(<span class="string">&quot;order.queue&quot;</span>);</span><br><span class="line">            consumeRecord.setConsumeTime(LocalDateTime.now());</span><br><span class="line">            consumeRecordMapper.insert(consumeRecord);</span><br><span class="line"></span><br><span class="line">            channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">            log.info(<span class="string">&quot;消息消费成功: msgId=&#123;&#125;&quot;</span>, msgId);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;消息消费失败: msgId=&#123;&#125;&quot;</span>, msgId, e);</span><br><span class="line">            channel.basicNack(deliveryTag, <span class="literal">false</span>, <span class="literal">true</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="去重表设计"><a href="#去重表设计" class="headerlink" title="去重表设计"></a>去重表设计</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">CREATE TABLE</span> `msg_consume_record` (</span><br><span class="line">    `id` <span class="type">bigint</span> <span class="keyword">NOT NULL</span> AUTO_INCREMENT,</span><br><span class="line">    `msg_id` <span class="type">varchar</span>(<span class="number">64</span>) <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;消息唯一ID&#x27;</span>,</span><br><span class="line">    `queue_name` <span class="type">varchar</span>(<span class="number">128</span>) <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;队列名称&#x27;</span>,</span><br><span class="line">    `consume_time` datetime <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;消费时间&#x27;</span>,</span><br><span class="line">    `create_time` datetime <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="built_in">CURRENT_TIMESTAMP</span>,</span><br><span class="line">    <span class="keyword">PRIMARY KEY</span> (`id`),</span><br><span class="line">    <span class="keyword">UNIQUE</span> KEY `uk_msg_id_queue` (`msg_id`, `queue_name`)  <span class="comment">-- 联合唯一索引</span></span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB <span class="keyword">DEFAULT</span> CHARSET<span class="operator">=</span>utf8mb4 COMMENT<span class="operator">=</span><span class="string">&#x27;消息消费去重表&#x27;</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="方案二：业务状态机"><a href="#方案二：业务状态机" class="headerlink" title="方案二：业务状态机"></a>方案二：业务状态机</h3><p>利用业务自身的状态流转保证幂等。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderConsumer</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> OrderMapper orderMapper;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@RabbitListener(queues = &quot;order.queue&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">handleOrderMessage</span><span class="params">(String message, Channel channel,</span></span><br><span class="line"><span class="params">            <span class="meta">@Header(AmqpHeaders.DELIVERY_TAG)</span> <span class="type">long</span> deliveryTag)</span> <span class="keyword">throws</span> IOException &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">Order</span> <span class="variable">order</span> <span class="operator">=</span> JSON.parseObject(message, Order.class);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 利用业务状态保证幂等</span></span><br><span class="line">            <span class="comment">// 只有&quot;待支付&quot;状态的订单才能执行&quot;支付成功&quot;操作</span></span><br><span class="line">            <span class="comment">// 重复消费时状态已变更，条件不满足，不会重复执行</span></span><br><span class="line">            <span class="type">int</span> <span class="variable">rows</span> <span class="operator">=</span> orderMapper.updateOrderStatus(</span><br><span class="line">                order.getId(), </span><br><span class="line">                OrderStatus.PAID,      <span class="comment">// 目标状态</span></span><br><span class="line">                OrderStatus.UNPAID     <span class="comment">// 期望当前状态（CAS思想）</span></span><br><span class="line">            );</span><br><span class="line"></span><br><span class="line">            <span class="keyword">if</span> (rows == <span class="number">0</span>) &#123;</span><br><span class="line">                log.info(<span class="string">&quot;订单状态已变更，跳过: orderId=&#123;&#125;&quot;</span>, order.getId());</span><br><span class="line">                channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">                <span class="keyword">return</span>;</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 执行后续业务</span></span><br><span class="line">            log.info(<span class="string">&quot;订单支付成功: orderId=&#123;&#125;&quot;</span>, order.getId());</span><br><span class="line">            channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;消费失败&quot;</span>, e);</span><br><span class="line">            channel.basicNack(deliveryTag, <span class="literal">false</span>, <span class="literal">true</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// Mapper中的SQL</span></span><br><span class="line"><span class="meta">@Update(&quot;UPDATE `order` SET status = #&#123;targetStatus&#125; &quot; +</span></span><br><span class="line"><span class="meta">        &quot;WHERE id = #&#123;orderId&#125; AND status = #&#123;currentStatus&#125;&quot;)</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">updateOrderStatus</span><span class="params">(<span class="meta">@Param(&quot;orderId&quot;)</span> Long orderId,</span></span><br><span class="line"><span class="params">                      <span class="meta">@Param(&quot;targetStatus&quot;)</span> Integer targetStatus,</span></span><br><span class="line"><span class="params">                      <span class="meta">@Param(&quot;currentStatus&quot;)</span> Integer currentStatus)</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="方案三：Redis去重"><a href="#方案三：Redis去重" class="headerlink" title="方案三：Redis去重"></a>方案三：Redis去重</h3><p>适合高并发场景，性能优于数据库去重表。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderConsumer</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> StringRedisTemplate redisTemplate;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> OrderService orderService;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">CONSUME_KEY_PREFIX</span> <span class="operator">=</span> <span class="string">&quot;mq:consume:&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@RabbitListener(queues = &quot;order.queue&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">handleOrderMessage</span><span class="params">(Message message, Channel channel)</span> </span><br><span class="line">            <span class="keyword">throws</span> IOException &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">msgId</span> <span class="operator">=</span> message.getMessageProperties().getMessageId();</span><br><span class="line">        <span class="type">long</span> <span class="variable">deliveryTag</span> <span class="operator">=</span> message.getMessageProperties().getDeliveryTag();</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> CONSUME_KEY_PREFIX + msgId;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// Redis SETNX去重</span></span><br><span class="line">            <span class="type">Boolean</span> <span class="variable">absent</span> <span class="operator">=</span> redisTemplate.opsForValue()</span><br><span class="line">                .setIfAbsent(key, <span class="string">&quot;1&quot;</span>, <span class="number">24</span>, TimeUnit.HOURS);</span><br><span class="line"></span><br><span class="line">            <span class="keyword">if</span> (Boolean.FALSE.equals(absent)) &#123;</span><br><span class="line">                log.warn(<span class="string">&quot;消息已消费，跳过: msgId=&#123;&#125;&quot;</span>, msgId);</span><br><span class="line">                channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">                <span class="keyword">return</span>;</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 业务处理</span></span><br><span class="line">            <span class="type">String</span> <span class="variable">body</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">String</span>(message.getBody());</span><br><span class="line">            <span class="type">Order</span> <span class="variable">order</span> <span class="operator">=</span> JSON.parseObject(body, Order.class);</span><br><span class="line">            orderService.processOrder(order);</span><br><span class="line"></span><br><span class="line">            channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            <span class="comment">// 业务失败，删除Redis标记，允许重新消费</span></span><br><span class="line">            redisTemplate.delete(key);</span><br><span class="line">            log.error(<span class="string">&quot;消息消费失败: msgId=&#123;&#125;&quot;</span>, msgId, e);</span><br><span class="line">            channel.basicNack(deliveryTag, <span class="literal">false</span>, <span class="literal">true</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="方案四：乐观锁"><a href="#方案四：乐观锁" class="headerlink" title="方案四：乐观锁"></a>方案四：乐观锁</h3><p>适合更新类操作。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 利用版本号实现幂等</span></span><br><span class="line"><span class="meta">@Update(&quot;UPDATE account SET balance = balance - #&#123;amount&#125;, &quot; +</span></span><br><span class="line"><span class="meta">        &quot;version = version + 1 &quot; +</span></span><br><span class="line"><span class="meta">        &quot;WHERE id = #&#123;id&#125; AND version = #&#123;version&#125;&quot;)</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">deductBalance</span><span class="params">(<span class="meta">@Param(&quot;id&quot;)</span> Long id, </span></span><br><span class="line"><span class="params">                  <span class="meta">@Param(&quot;amount&quot;)</span> BigDecimal amount,</span></span><br><span class="line"><span class="params">                  <span class="meta">@Param(&quot;version&quot;)</span> Integer version)</span>;</span><br></pre></td></tr></table></figure>
+
+<h2 id="方案对比"><a href="#方案对比" class="headerlink" title="方案对比"></a>方案对比</h2><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>适用场景</th>
+<th>性能</th>
+<th>可靠性</th>
+<th>实现复杂度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>去重表</td>
+<td>通用场景</td>
+<td>中</td>
+<td>高</td>
+<td>中</td>
+</tr>
+<tr>
+<td>业务状态机</td>
+<td>有状态流转的业务</td>
+<td>高</td>
+<td>高</td>
+<td>低</td>
+</tr>
+<tr>
+<td>Redis去重</td>
+<td>高并发场景</td>
+<td>高</td>
+<td>中</td>
+<td>低</td>
+</tr>
+<tr>
+<td>乐观锁</td>
+<td>更新类操作</td>
+<td>高</td>
+<td>高</td>
+<td>低</td>
+</tr>
+</tbody></table>
+<h2 id="幂等性设计原则"><a href="#幂等性设计原则" class="headerlink" title="幂等性设计原则"></a>幂等性设计原则</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">1. 消息必须携带唯一ID</span><br><span class="line">   - 生产者生成全局唯一ID（UUID/雪花算法）</span><br><span class="line">   - 写入Message的messageId属性</span><br><span class="line"></span><br><span class="line">2. 消费前先判断是否已消费</span><br><span class="line">   - 数据库去重表 / Redis SETNX / 业务状态</span><br><span class="line"></span><br><span class="line">3. 判断与消费必须原子性</span><br><span class="line">   - 去重表写入和业务操作在同一事务中</span><br><span class="line">   - Redis SETNX和业务操作需要考虑一致性</span><br><span class="line"></span><br><span class="line">4. 消费失败要清除去重标记</span><br><span class="line">   - 允许重新消费，避免消息永久丢失</span><br><span class="line"></span><br><span class="line">5. 去重记录设置过期时间</span><br><span class="line">   - 避免去重表无限膨胀</span><br><span class="line">   - Redis设置TTL，数据库定期清理</span><br></pre></td></tr></table></figure>
+
+<h2 id="完整幂等消费模板"><a href="#完整幂等消费模板" class="headerlink" title="完整幂等消费模板"></a>完整幂等消费模板</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">IdempotentConsumer</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> MsgConsumeRecordMapper consumeRecordMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> StringRedisTemplate redisTemplate;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> OrderService orderService;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">CONSUME_KEY_PREFIX</span> <span class="operator">=</span> <span class="string">&quot;mq:consume:&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@RabbitListener(queues = &quot;order.queue&quot;)</span></span><br><span class="line">    <span class="meta">@Transactional(rollbackFor = Exception.class)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">handleOrderMessage</span><span class="params">(Message message, Channel channel)</span> </span><br><span class="line">            <span class="keyword">throws</span> IOException &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">msgId</span> <span class="operator">=</span> message.getMessageProperties().getMessageId();</span><br><span class="line">        <span class="type">long</span> <span class="variable">deliveryTag</span> <span class="operator">=</span> message.getMessageProperties().getDeliveryTag();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 第一层：Redis快速去重（性能优化）</span></span><br><span class="line">            <span class="type">String</span> <span class="variable">redisKey</span> <span class="operator">=</span> CONSUME_KEY_PREFIX + msgId;</span><br><span class="line">            <span class="type">Boolean</span> <span class="variable">absent</span> <span class="operator">=</span> redisTemplate.opsForValue()</span><br><span class="line">                .setIfAbsent(redisKey, <span class="string">&quot;1&quot;</span>, <span class="number">24</span>, TimeUnit.HOURS);</span><br><span class="line">            <span class="keyword">if</span> (Boolean.FALSE.equals(absent)) &#123;</span><br><span class="line">                log.warn(<span class="string">&quot;Redis去重命中，跳过: msgId=&#123;&#125;&quot;</span>, msgId);</span><br><span class="line">                channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">                <span class="keyword">return</span>;</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 第二层：数据库精确去重（可靠性保障）</span></span><br><span class="line">            <span class="type">MsgConsumeRecord</span> <span class="variable">record</span> <span class="operator">=</span> consumeRecordMapper.selectByMsgId(msgId);</span><br><span class="line">            <span class="keyword">if</span> (record != <span class="literal">null</span>) &#123;</span><br><span class="line">                log.warn(<span class="string">&quot;数据库去重命中，跳过: msgId=&#123;&#125;&quot;</span>, msgId);</span><br><span class="line">                channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">                <span class="keyword">return</span>;</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 业务处理</span></span><br><span class="line">            <span class="type">String</span> <span class="variable">body</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">String</span>(message.getBody());</span><br><span class="line">            <span class="type">Order</span> <span class="variable">order</span> <span class="operator">=</span> JSON.parseObject(body, Order.class);</span><br><span class="line">            orderService.processOrder(order);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 写入去重记录（与业务在同一事务中）</span></span><br><span class="line">            <span class="type">MsgConsumeRecord</span> <span class="variable">consumeRecord</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">MsgConsumeRecord</span>();</span><br><span class="line">            consumeRecord.setMsgId(msgId);</span><br><span class="line">            consumeRecord.setQueueName(<span class="string">&quot;order.queue&quot;</span>);</span><br><span class="line">            consumeRecord.setConsumeTime(LocalDateTime.now());</span><br><span class="line">            consumeRecordMapper.insert(consumeRecord);</span><br><span class="line"></span><br><span class="line">            channel.basicAck(deliveryTag, <span class="literal">false</span>);</span><br><span class="line">            log.info(<span class="string">&quot;消息消费成功: msgId=&#123;&#125;&quot;</span>, msgId);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            <span class="comment">// 清除Redis标记，允许重新消费</span></span><br><span class="line">            redisTemplate.delete(CONSUME_KEY_PREFIX + msgId);</span><br><span class="line">            log.error(<span class="string">&quot;消息消费失败: msgId=&#123;&#125;&quot;</span>, msgId, e);</span><br><span class="line">            channel.basicNack(deliveryTag, <span class="literal">false</span>, <span class="literal">true</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>消息幂等性的核心思想：<strong>消费前先判断，已消费则跳过</strong>。选择方案时，优先考虑业务自身是否具备幂等性（状态机、乐观锁），其次选择通用方案（去重表、Redis）。高并发场景推荐Redis+数据库双层去重，兼顾性能和可靠性。记住：任何MQ消费者，第一件事就是考虑幂等性，不要等出了线上事故再补救。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/04/09/%E6%8A%80%E6%9C%AF/2023/Redis%E8%BF%87%E6%9C%9F%E7%AD%96%E7%95%A5%E4%B8%8E%E5%86%85%E5%AD%98%E6%B7%98%E6%B1%B0-%E6%95%B0%E6%8D%AE%E4%B8%8D%E4%BC%9A%E6%B0%B8%E8%BF%9C%E5%AD%98%E5%9C%A8/">Redis过期策略与内存淘汰——数据不会永远存在</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/04/09/%E6%8A%80%E6%9C%AF/2023/RabbitMQ%E6%AD%BB%E4%BF%A1%E9%98%9F%E5%88%97%E4%B8%8E%E5%BB%B6%E8%BF%9F%E9%98%9F%E5%88%97-%E8%AE%A2%E5%8D%95%E8%B6%85%E6%97%B6%E5%8F%96%E6%B6%88%E7%9A%84%E4%BC%98%E9%9B%85%E5%AE%9E%E7%8E%B0/">RabbitMQ死信队列与延迟队列——订单超时取消的优雅实现</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="date-display"></span> <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      const dateDisplay = document.getElementById('date-display');
+      const year = now.getFullYear();
+      const month = formatTime(now.getMonth() + 1);
+      const day = formatTime(now.getDate());
+      dateDisplay.textContent = `${year}-${month}-${day}`;
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BC%9A%E9%87%8D%E5%A4%8D%E6%B6%88%E8%B4%B9"><span class="toc-number">2.</span> <span class="toc-text">为什么会重复消费</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%80%E4%B9%88%E6%98%AF%E5%B9%82%E7%AD%89%E6%80%A7"><span class="toc-number">3.</span> <span class="toc-text">什么是幂等性</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B9%82%E7%AD%89%E6%80%A7%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88"><span class="toc-number">4.</span> <span class="toc-text">幂等性解决方案</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%96%B9%E6%A1%88%E4%B8%80%EF%BC%9A%E5%94%AF%E4%B8%80%E6%B6%88%E6%81%AFID-%E5%8E%BB%E9%87%8D%E8%A1%A8"><span class="toc-number">4.1.</span> <span class="toc-text">方案一：唯一消息ID + 去重表</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%BB%E9%87%8D%E8%A1%A8%E8%AE%BE%E8%AE%A1"><span class="toc-number">4.2.</span> <span class="toc-text">去重表设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%96%B9%E6%A1%88%E4%BA%8C%EF%BC%9A%E4%B8%9A%E5%8A%A1%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">4.3.</span> <span class="toc-text">方案二：业务状态机</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%96%B9%E6%A1%88%E4%B8%89%EF%BC%9ARedis%E5%8E%BB%E9%87%8D"><span class="toc-number">4.4.</span> <span class="toc-text">方案三：Redis去重</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%96%B9%E6%A1%88%E5%9B%9B%EF%BC%9A%E4%B9%90%E8%A7%82%E9%94%81"><span class="toc-number">4.5.</span> <span class="toc-text">方案四：乐观锁</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%96%B9%E6%A1%88%E5%AF%B9%E6%AF%94"><span class="toc-number">5.</span> <span class="toc-text">方案对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B9%82%E7%AD%89%E6%80%A7%E8%AE%BE%E8%AE%A1%E5%8E%9F%E5%88%99"><span class="toc-number">6.</span> <span class="toc-text">幂等性设计原则</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%AE%8C%E6%95%B4%E5%B9%82%E7%AD%89%E6%B6%88%E8%B4%B9%E6%A8%A1%E6%9D%BF"><span class="toc-number">7.</span> <span class="toc-text">完整幂等消费模板</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">8.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E5%B9%82%E7%AD%89%E6%80%A7/" class="tag" aria-label="标签: #幂等性">#幂等性</a>
+            
+                <a href="/tags/RabbitMQ/" class="tag" aria-label="标签: #RabbitMQ">#RabbitMQ</a>
+            
+                <a href="/tags/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/" class="tag" aria-label="标签: #消息队列">#消息队列</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(161)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(80)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/" aria-label="分类: 消息队列">
+                        消息队列
+                        <span>(7)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+    <!-- No categories available -->
+
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

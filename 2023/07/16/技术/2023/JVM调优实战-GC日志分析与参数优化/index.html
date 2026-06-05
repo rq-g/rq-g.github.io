@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="">
+
+<title>JVM调优实战——GC日志分析与参数优化 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="JVM调优实战——GC日志分析与参数优化">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/07/16/%E6%8A%80%E6%9C%AF/2023/JVM%E8%B0%83%E4%BC%98%E5%AE%9E%E6%88%98-GC%E6%97%A5%E5%BF%97%E5%88%86%E6%9E%90%E4%B8%8E%E5%8F%82%E6%95%B0%E4%BC%98%E5%8C%96/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="">
+
+  
+  
+  
+  <meta name="description" content="前言线上服务每隔一段时间就卡顿一次，用户投诉页面无响应。排查发现是FullGC导致的STW。2023年学会JVM调优后，通过分析GC日志、调整参数，将FullGC频率从每小时一次降到每天一次。GC调优的目标12345678910不是消除GC，而是：1.降低FullGC频率（最好不发生）2.降低YoungGC停">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+<script> console.log(" 欢迎 "); </script>
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+</aside>
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">JVM调优实战——GC日志分析与参数优化</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-07-16T02:00:00.000Z">2023-07-16</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/JVM/">JVM</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>线上服务每隔一段时间就卡顿一次，用户投诉页面无响应。排查发现是Full GC导致的STW。2023年学会JVM调优后，通过分析GC日志、调整参数，将Full GC频率从每小时一次降到每天一次。</p>
+<h2 id="GC调优的目标"><a href="#GC调优的目标" class="headerlink" title="GC调优的目标"></a>GC调优的目标</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">不是消除GC，而是：</span><br><span class="line">1. 降低Full GC频率（最好不发生）</span><br><span class="line">2. 降低Young GC停顿时间</span><br><span class="line">3. 降低GC总耗时占比（&lt;1%）</span><br><span class="line">4. 避免OOM</span><br><span class="line"></span><br><span class="line">核心原则：</span><br><span class="line">- 多数情况不需要调优，默认参数已经很好</span><br><span class="line">- 先优化代码，再调JVM</span><br><span class="line">- 调优前必须有GC日志和监控数据</span><br></pre></td></tr></table></figure>
+
+<h2 id="开启GC日志"><a href="#开启GC日志" class="headerlink" title="开启GC日志"></a>开启GC日志</h2><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># JDK8</span></span><br><span class="line">-XX:+PrintGCDetails </span><br><span class="line">-XX:+PrintGCDateStamps </span><br><span class="line">-XX:+PrintGCTimeStamps </span><br><span class="line">-XX:+PrintGCApplicationStoppedTime </span><br><span class="line">-XX:+PrintGCApplicationConcurrentTime</span><br><span class="line">-Xloggc:/data/logs/gc.log</span><br><span class="line">-XX:+UseGCLogFileRotation </span><br><span class="line">-XX:NumberOfGCLogFiles=10 </span><br><span class="line">-XX:GCLogFileSize=50M</span><br><span class="line"></span><br><span class="line"><span class="comment"># JDK9+</span></span><br><span class="line">-Xlog:gc*:file=/data/logs/gc.log:<span class="keyword">time</span>,<span class="built_in">uptime</span>,level,tags:filecount=10,filesize=50M</span><br></pre></td></tr></table></figure>
+
+<h2 id="GC日志分析"><a href="#GC日志分析" class="headerlink" title="GC日志分析"></a>GC日志分析</h2><h3 id="Young-GC日志"><a href="#Young-GC日志" class="headerlink" title="Young GC日志"></a>Young GC日志</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">2023-07-16T10:00:00.123+0800: 10.567: [GC (Allocation Failure) </span><br><span class="line">  [PSYoungGen: 262144K-&gt;32768K(305664K)] </span><br><span class="line">  262144K-&gt;45678K(1015808K), 0.0234567 secs] </span><br><span class="line">  [Times: user=0.08 sys=0.01, real=0.02 secs]</span><br><span class="line"></span><br><span class="line">解读：</span><br><span class="line">- GC (Allocation Failure)：分配失败触发Young GC</span><br><span class="line">- PSYoungGen：Parallel Scavenge收集器</span><br><span class="line">- 262144K-&gt;32768K：新生代从256MB降到32MB</span><br><span class="line">- 305664K：新生代总大小298MB</span><br><span class="line">- 262144K-&gt;45678K：整个堆从256MB降到44MB</span><br><span class="line">- 1015808K：堆总大小991MB</span><br><span class="line">- 0.0234567 secs：GC耗时23ms</span><br><span class="line">- user+sys &gt; real：多线程并行GC</span><br></pre></td></tr></table></figure>
+
+<h3 id="Full-GC日志"><a href="#Full-GC日志" class="headerlink" title="Full GC日志"></a>Full GC日志</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">2023-07-16T10:05:00.456+0800: 310.567: [Full GC (Metadata GC Threshold) </span><br><span class="line">  [PSYoungGen: 32768K-&gt;0K(305664K)] </span><br><span class="line">  [ParOldGen: 456789K-&gt;234567K(710144K)] </span><br><span class="line">  489557K-&gt;234567K(1015808K), </span><br><span class="line">  [Metaspace: 56789K-&gt;56789K(110592K)], 1.2345678 secs] </span><br><span class="line">  [Times: user=3.45 sys=0.12, real=1.23 secs]</span><br><span class="line"></span><br><span class="line">解读：</span><br><span class="line">- Full GC (Metadata GC Threshold)：Metaspace不足触发</span><br><span class="line">- PSYoungGen：新生代清空</span><br><span class="line">- ParOldGen：老年代从446MB降到229MB</span><br><span class="line">- Metaspace：元空间55MB</span><br><span class="line">- 1.2345678 secs：Full GC耗时1.2秒！</span><br></pre></td></tr></table></figure>
+
+<h3 id="GC日志分析工具"><a href="#GC日志分析工具" class="headerlink" title="GC日志分析工具"></a>GC日志分析工具</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">1. GCViewer：可视化GC日志</span><br><span class="line">2. GCEasy：在线分析 https://gceasy.io</span><br><span class="line">3. GCPlot：在线分析</span><br></pre></td></tr></table></figure>
+
+<h2 id="调优场景"><a href="#调优场景" class="headerlink" title="调优场景"></a>调优场景</h2><h3 id="场景1：频繁Full-GC"><a href="#场景1：频繁Full-GC" class="headerlink" title="场景1：频繁Full GC"></a>场景1：频繁Full GC</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 现象：每小时Full GC一次，每次1-2秒</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 分析jstat</span></span><br><span class="line">jstat -gcutil &lt;pid&gt; 1000 10</span><br><span class="line"><span class="comment"># O(老年代使用率)持续增长 → 内存泄漏或对象过早晋升</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 排查步骤</span></span><br><span class="line"><span class="comment"># 1. 检查是否有内存泄漏</span></span><br><span class="line">jmap -histo &lt;pid&gt; | <span class="built_in">head</span> -20</span><br><span class="line"><span class="comment"># 查看对象数量排行</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 检查大对象</span></span><br><span class="line">jmap -histo &lt;pid&gt; | grep <span class="string">&quot;class_name&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. dump分析</span></span><br><span class="line">jmap -dump:format=b,file=heap.hprof &lt;pid&gt;</span><br><span class="line"><span class="comment"># MAT分析Leak Suspects</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="场景2：Young-GC停顿过长"><a href="#场景2：Young-GC停顿过长" class="headerlink" title="场景2：Young GC停顿过长"></a>场景2：Young GC停顿过长</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 现象：Young GC偶尔耗时&gt;100ms</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 原因1：新生代太大</span></span><br><span class="line"><span class="comment"># -Xmn过大 → 每次GC扫描区域大</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 解决：适当减小新生代</span></span><br><span class="line">-Xmn512m  <span class="comment"># 从1G降到512m</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 原因2：对象存活率高</span></span><br><span class="line"><span class="comment"># 大量对象从Survivor晋升到老年代 → 复制开销大</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 解决：增大Survivor区</span></span><br><span class="line">-XX:SurvivorRatio=6  <span class="comment"># Eden:S0:S1 = 6:1:1（默认8:1:1）</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="场景3：G1调优"><a href="#场景3：G1调优" class="headerlink" title="场景3：G1调优"></a>场景3：G1调优</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 场景：8G堆，G1收集器，偶尔出现200ms+停顿</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 默认参数</span></span><br><span class="line">-Xmx8g -XX:+UseG1GC</span><br><span class="line"></span><br><span class="line"><span class="comment"># 调优参数</span></span><br><span class="line">-Xmx8g </span><br><span class="line">-XX:+UseG1GC</span><br><span class="line">-XX:MaxGCPauseMillis=100       <span class="comment"># 目标停顿100ms</span></span><br><span class="line">-XX:G1HeapRegionSize=4m        <span class="comment"># Region大小</span></span><br><span class="line">-XX:InitiatingHeapOccupancyPercent=40  <span class="comment"># 堆40%触发并发标记</span></span><br><span class="line">-XX:G1MixedGCCountTarget=16    <span class="comment"># Mixed GC分16次完成</span></span><br><span class="line">-XX:G1MixedGCLiveThresholdPercent=80  <span class="comment"># Region存活率&lt;80%才回收</span></span><br><span class="line">-XX:ConcGCThreads=4            <span class="comment"># 并发标记线程数</span></span><br><span class="line">-XX:ParallelGCThreads=8        <span class="comment"># STW阶段并行线程数</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="场景4：元空间溢出"><a href="#场景4：元空间溢出" class="headerlink" title="场景4：元空间溢出"></a>场景4：元空间溢出</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 现象：Full GC (Metadata GC Threshold) 频繁</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 原因：动态生成大量类（CGLIB、Groovy、JSP）</span></span><br><span class="line"><span class="comment"># Metaspace默认无上限，会持续增长直到触发Full GC</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 解决</span></span><br><span class="line">-XX:MetaspaceSize=256m         <span class="comment"># 初始大小</span></span><br><span class="line">-XX:MaxMetaspaceSize=512m      <span class="comment"># 最大大小</span></span><br><span class="line"><span class="comment"># 限制元空间大小，避免无限增长</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="常用JVM参数模板"><a href="#常用JVM参数模板" class="headerlink" title="常用JVM参数模板"></a>常用JVM参数模板</h2><h3 id="4G堆-G1（推荐）"><a href="#4G堆-G1（推荐）" class="headerlink" title="4G堆+G1（推荐）"></a>4G堆+G1（推荐）</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">java -server   -Xms4g -Xmx4g   -XX:+UseG1GC   -XX:MaxGCPauseMillis=100   -XX:G1HeapRegionSize=4m   -XX:InitiatingHeapOccupancyPercent=40   -XX:MetaspaceSize=256m   -XX:MaxMetaspaceSize=512m   -XX:+HeapDumpOnOutOfMemoryError   -XX:HeapDumpPath=/data/logs/   -Xlog:gc*:file=/data/logs/gc.log:<span class="keyword">time</span>,<span class="built_in">uptime</span>:filecount=10,filesize=50M   -jar app.jar</span><br></pre></td></tr></table></figure>
+
+<h3 id="8G堆-G1（高并发）"><a href="#8G堆-G1（高并发）" class="headerlink" title="8G堆+G1（高并发）"></a>8G堆+G1（高并发）</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">java -server   -Xms8g -Xmx8g   -XX:+UseG1GC   -XX:MaxGCPauseMillis=200   -XX:G1HeapRegionSize=8m   -XX:InitiatingHeapOccupancyPercent=35   -XX:G1MixedGCCountTarget=16   -XX:ConcGCThreads=4   -XX:ParallelGCThreads=8   -XX:MetaspaceSize=256m   -XX:MaxMetaspaceSize=512m   -XX:+HeapDumpOnOutOfMemoryError   -XX:HeapDumpPath=/data/logs/   -Xlog:gc*:file=/data/logs/gc.log:<span class="keyword">time</span>,<span class="built_in">uptime</span>:filecount=10,filesize=50M   -jar app.jar</span><br></pre></td></tr></table></figure>
+
+<h3 id="2G堆-ZGC（低延迟）"><a href="#2G堆-ZGC（低延迟）" class="headerlink" title="2G堆+ZGC（低延迟）"></a>2G堆+ZGC（低延迟）</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">java -server   -Xms2g -Xmx2g   -XX:+UseZGC   -XX:ZCollectionInterval=0   -XX:ZAllocationSpikeTolerance=2   -XX:MetaspaceSize=256m   -XX:MaxMetaspaceSize=512m   -XX:+HeapDumpOnOutOfMemoryError   -XX:HeapDumpPath=/data/logs/   -Xlog:gc*:file=/data/logs/gc.log:<span class="keyword">time</span>,<span class="built_in">uptime</span>:filecount=10,filesize=50M   -jar app.jar</span><br></pre></td></tr></table></figure>
+
+<h2 id="GC指标监控"><a href="#GC指标监控" class="headerlink" title="GC指标监控"></a>GC指标监控</h2><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 关键指标</span></span><br><span class="line">1. Young GC频率：正常几秒一次</span><br><span class="line">2. Young GC耗时：正常&lt;50ms</span><br><span class="line">3. Full GC频率：正常几小时一次</span><br><span class="line">4. Full GC耗时：G1正常&lt;500ms</span><br><span class="line">5. 老年代使用率：正常&lt;70%</span><br><span class="line">6. GC总耗时占比：&lt;1%</span><br><span class="line">7. 对象晋升速率：正常&lt;10MB/秒</span><br><span class="line"></span><br><span class="line"><span class="comment"># 计算GC耗时占比</span></span><br><span class="line"><span class="comment"># 总GC时间 / 运行时间 &lt; 1%</span></span><br><span class="line"><span class="comment"># 例：运行10小时，GC总耗时36秒 → 36/36000 = 0.1% ✅</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-什么时候需要JVM调优？"><a href="#1-什么时候需要JVM调优？" class="headerlink" title="1. 什么时候需要JVM调优？"></a>1. 什么时候需要JVM调优？</h3><p>Full GC频率过高、Young GC停顿过长、GC耗时占比&gt;1%、频繁OOM。大多数情况默认参数够用。</p>
+<h3 id="2-G1调优的核心参数？"><a href="#2-G1调优的核心参数？" class="headerlink" title="2. G1调优的核心参数？"></a>2. G1调优的核心参数？</h3><p>MaxGCPauseMillis（目标停顿时间）、InitiatingHeapOccupancyPercent（并发标记触发阈值）、G1MixedGCCountTarget（Mixed GC分次）。</p>
+<h3 id="3-如何分析GC日志？"><a href="#3-如何分析GC日志？" class="headerlink" title="3. 如何分析GC日志？"></a>3. 如何分析GC日志？</h3><p>看Young GC频率和耗时、Full GC频率和耗时、老年代使用率趋势。用GCEasy等工具可视化分析。</p>
+<h2 id="最佳实践"><a href="#最佳实践" class="headerlink" title="最佳实践"></a>最佳实践</h2><ol>
+<li><strong>Xms&#x3D;Xmx</strong>：避免堆动态扩容</li>
+<li><strong>开启HeapDumpOnOutOfMemoryError</strong>：OOM时自动dump</li>
+<li><strong>开启GC日志</strong>：线上必须开启</li>
+<li><strong>G1优先</strong>：JDK9+默认，JDK8也推荐</li>
+<li><strong>先优化代码再调JVM</strong>：JVM调优是最后的手段</li>
+</ol>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>JVM调优不是玄学，而是基于GC日志和监控数据的科学优化。2023年实战后，核心认知是：<strong>大多数情况默认参数够用，调优的核心是减少Full GC频率和降低GC停顿</strong>。开启GC日志、分析GC数据、调整关键参数——这是JVM调优的三板斧。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/07/16/%E6%8A%80%E6%9C%AF/2023/StampedLock%E4%B8%8E%E4%B9%90%E8%A7%82%E8%AF%BB-%E6%AF%94ReadWriteLock%E6%9B%B4%E5%BF%AB%E7%9A%84%E9%94%81/">StampedLock与乐观读——比ReadWriteLock更快的锁</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/07/23/%E6%8A%80%E6%9C%AF/2023/MySQL%E5%88%86%E5%BA%93%E5%88%86%E8%A1%A8%E5%85%A5%E9%97%A8-%E4%BD%95%E6%97%B6%E5%88%86%E5%A6%82%E4%BD%95%E5%88%86/">MySQL分库分表入门——何时分如何分</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="date-display"></span> <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      const dateDisplay = document.getElementById('date-display');
+      const year = now.getFullYear();
+      const month = formatTime(now.getMonth() + 1);
+      const day = formatTime(now.getDate());
+      dateDisplay.textContent = `${year}-${month}-${day}`;
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#GC%E8%B0%83%E4%BC%98%E7%9A%84%E7%9B%AE%E6%A0%87"><span class="toc-number">2.</span> <span class="toc-text">GC调优的目标</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BC%80%E5%90%AFGC%E6%97%A5%E5%BF%97"><span class="toc-number">3.</span> <span class="toc-text">开启GC日志</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#GC%E6%97%A5%E5%BF%97%E5%88%86%E6%9E%90"><span class="toc-number">4.</span> <span class="toc-text">GC日志分析</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Young-GC%E6%97%A5%E5%BF%97"><span class="toc-number">4.1.</span> <span class="toc-text">Young GC日志</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Full-GC%E6%97%A5%E5%BF%97"><span class="toc-number">4.2.</span> <span class="toc-text">Full GC日志</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#GC%E6%97%A5%E5%BF%97%E5%88%86%E6%9E%90%E5%B7%A5%E5%85%B7"><span class="toc-number">4.3.</span> <span class="toc-text">GC日志分析工具</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B0%83%E4%BC%98%E5%9C%BA%E6%99%AF"><span class="toc-number">5.</span> <span class="toc-text">调优场景</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9C%BA%E6%99%AF1%EF%BC%9A%E9%A2%91%E7%B9%81Full-GC"><span class="toc-number">5.1.</span> <span class="toc-text">场景1：频繁Full GC</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9C%BA%E6%99%AF2%EF%BC%9AYoung-GC%E5%81%9C%E9%A1%BF%E8%BF%87%E9%95%BF"><span class="toc-number">5.2.</span> <span class="toc-text">场景2：Young GC停顿过长</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9C%BA%E6%99%AF3%EF%BC%9AG1%E8%B0%83%E4%BC%98"><span class="toc-number">5.3.</span> <span class="toc-text">场景3：G1调优</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9C%BA%E6%99%AF4%EF%BC%9A%E5%85%83%E7%A9%BA%E9%97%B4%E6%BA%A2%E5%87%BA"><span class="toc-number">5.4.</span> <span class="toc-text">场景4：元空间溢出</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B8%B8%E7%94%A8JVM%E5%8F%82%E6%95%B0%E6%A8%A1%E6%9D%BF"><span class="toc-number">6.</span> <span class="toc-text">常用JVM参数模板</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4G%E5%A0%86-G1%EF%BC%88%E6%8E%A8%E8%8D%90%EF%BC%89"><span class="toc-number">6.1.</span> <span class="toc-text">4G堆+G1（推荐）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8G%E5%A0%86-G1%EF%BC%88%E9%AB%98%E5%B9%B6%E5%8F%91%EF%BC%89"><span class="toc-number">6.2.</span> <span class="toc-text">8G堆+G1（高并发）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2G%E5%A0%86-ZGC%EF%BC%88%E4%BD%8E%E5%BB%B6%E8%BF%9F%EF%BC%89"><span class="toc-number">6.3.</span> <span class="toc-text">2G堆+ZGC（低延迟）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#GC%E6%8C%87%E6%A0%87%E7%9B%91%E6%8E%A7"><span class="toc-number">7.</span> <span class="toc-text">GC指标监控</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91%E9%97%AE%E9%A2%98"><span class="toc-number">8.</span> <span class="toc-text">面试高频问题</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E9%9C%80%E8%A6%81JVM%E8%B0%83%E4%BC%98%EF%BC%9F"><span class="toc-number">8.1.</span> <span class="toc-text">1. 什么时候需要JVM调优？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-G1%E8%B0%83%E4%BC%98%E7%9A%84%E6%A0%B8%E5%BF%83%E5%8F%82%E6%95%B0%EF%BC%9F"><span class="toc-number">8.2.</span> <span class="toc-text">2. G1调优的核心参数？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E5%A6%82%E4%BD%95%E5%88%86%E6%9E%90GC%E6%97%A5%E5%BF%97%EF%BC%9F"><span class="toc-number">8.3.</span> <span class="toc-text">3. 如何分析GC日志？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">9.</span> <span class="toc-text">最佳实践</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">10.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96/" class="tag" aria-label="标签: #性能优化">#性能优化</a>
+            
+                <a href="/tags/JVM/" class="tag" aria-label="标签: #JVM">#JVM</a>
+            
+                <a href="/tags/GC%E8%B0%83%E4%BC%98/" class="tag" aria-label="标签: #GC调优">#GC调优</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(161)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(80)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/JVM/" aria-label="分类: JVM">
+                        JVM
+                        <span>(7)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+    <!-- No categories available -->
+
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

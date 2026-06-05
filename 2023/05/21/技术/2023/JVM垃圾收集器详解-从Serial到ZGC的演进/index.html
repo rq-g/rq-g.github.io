@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="">
+
+<title>JVM垃圾收集器详解——从Serial到ZGC的演进 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="JVM垃圾收集器详解——从Serial到ZGC的演进">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/05/21/%E6%8A%80%E6%9C%AF/2023/JVM%E5%9E%83%E5%9C%BE%E6%94%B6%E9%9B%86%E5%99%A8%E8%AF%A6%E8%A7%A3-%E4%BB%8ESerial%E5%88%B0ZGC%E7%9A%84%E6%BC%94%E8%BF%9B/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="">
+
+  
+  
+  
+  <meta name="description" content="前言线上服务每隔一段时间就卡顿一次，排查发现是FullGC导致的STW（StopTheWorld）。当时完全不懂垃圾收集器的区别，更不知道怎么选择和调优。2023年系统学习JVM垃圾收集器后，终于能根据业务场景选择合适的GC。垃圾收集器全览123456789101112131415新生代收集器老年代收集器整代">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+<script> console.log(" 欢迎 "); </script>
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+</aside>
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">JVM垃圾收集器详解——从Serial到ZGC的演进</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-05-21T02:00:00.000Z">2023-05-21</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/JVM/">JVM</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>线上服务每隔一段时间就卡顿一次，排查发现是Full GC导致的STW（Stop The World）。当时完全不懂垃圾收集器的区别，更不知道怎么选择和调优。2023年系统学习JVM垃圾收集器后，终于能根据业务场景选择合适的GC。</p>
+<h2 id="垃圾收集器全览"><a href="#垃圾收集器全览" class="headerlink" title="垃圾收集器全览"></a>垃圾收集器全览</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">    新生代收集器              老年代收集器           整代收集器</span><br><span class="line">┌─────────────┐        ┌─────────────┐      ┌─────────────┐</span><br><span class="line">│   Serial    │───────→│  Serial Old │      │             │</span><br><span class="line">└─────────────┘        └─────────────┘      │             │</span><br><span class="line">┌─────────────┐        ┌─────────────┐      │             │</span><br><span class="line">│   ParNew    │───────→│     CMS     │      │             │</span><br><span class="line">└─────────────┘        └─────────────┘      │             │</span><br><span class="line">┌─────────────┐        ┌─────────────┐      │             │</span><br><span class="line">│  Parallel   │───────→│  Parallel   │      │             │</span><br><span class="line">│  Scavenge   │        │    Old      │      │             │</span><br><span class="line">└─────────────┘        └─────────────┘      │             │</span><br><span class="line">                                            │     G1      │</span><br><span class="line">                                            │             │</span><br><span class="line">                                            │     ZGC     │</span><br><span class="line">                                            └─────────────┘</span><br></pre></td></tr></table></figure>
+
+<h2 id="评估指标"><a href="#评估指标" class="headerlink" title="评估指标"></a>评估指标</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">1. 吞吐量：应用运行时间 / 总时间（越高越好）</span><br><span class="line">2. 停顿时间：GC造成的STW时间（越短越好）</span><br><span class="line">3. 内存占用：GC本身占用的内存（越少越好）</span><br><span class="line"></span><br><span class="line">三者不可兼得，根据业务选择：</span><br><span class="line">- 批处理/离线计算：吞吐量优先</span><br><span class="line">- 在线服务/交互式：停顿时间优先</span><br></pre></td></tr></table></figure>
+
+<h2 id="Serial收集器"><a href="#Serial收集器" class="headerlink" title="Serial收集器"></a>Serial收集器</h2><h3 id="特点"><a href="#特点" class="headerlink" title="特点"></a>特点</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">- 单线程收集</span><br><span class="line">- STW（Stop The World）</span><br><span class="line">- 简单高效（无多线程开销）</span><br><span class="line">- 客户端模式默认收集器</span><br></pre></td></tr></table></figure>
+
+<h3 id="工作流程"><a href="#工作流程" class="headerlink" title="工作流程"></a>工作流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">新生代：Serial（标记-复制）</span><br><span class="line">    ↓</span><br><span class="line">老年代：Serial Old（标记-整理）</span><br><span class="line"></span><br><span class="line">STW: [----GC----]           [----GC----]</span><br><span class="line">应用: [运行]    [暂停→恢复] [运行]    [暂停→恢复]</span><br></pre></td></tr></table></figure>
+
+<h3 id="适用场景"><a href="#适用场景" class="headerlink" title="适用场景"></a>适用场景</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">- 客户端应用</span><br><span class="line">- 堆内存较小（&lt;200MB）</span><br><span class="line">- 单核CPU</span><br></pre></td></tr></table></figure>
+
+<h2 id="ParNew收集器"><a href="#ParNew收集器" class="headerlink" title="ParNew收集器"></a>ParNew收集器</h2><h3 id="特点-1"><a href="#特点-1" class="headerlink" title="特点"></a>特点</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">- Serial的多线程版本</span><br><span class="line">- 配合CMS使用</span><br><span class="line">- 默认线程数=CPU核数</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 参数</span></span><br><span class="line">-XX:+UseParNewGC               <span class="comment"># 使用ParNew</span></span><br><span class="line">-XX:ParallelGCThreads=4        <span class="comment"># GC线程数</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="Parallel-Scavenge收集器"><a href="#Parallel-Scavenge收集器" class="headerlink" title="Parallel Scavenge收集器"></a>Parallel Scavenge收集器</h2><h3 id="特点-2"><a href="#特点-2" class="headerlink" title="特点"></a>特点</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">- 吞吐量优先</span><br><span class="line">- JDK8默认新生代收集器</span><br><span class="line">- 自适应调节策略（ERG）</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 参数</span></span><br><span class="line">-XX:+UseParallelGC             <span class="comment"># 新生代用Parallel Scavenge</span></span><br><span class="line">-XX:+UseParallelOldGC          <span class="comment"># 老年代用Parallel Old</span></span><br><span class="line">-XX:MaxGCPauseMillis=200       <span class="comment"># 最大停顿时间目标</span></span><br><span class="line">-XX:GCTimeRatio=99             <span class="comment"># 吞吐量目标（1/(1+99)=1%的GC时间）</span></span><br><span class="line">-XX:+UseAdaptiveSizePolicy     <span class="comment"># 自适应调整</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="吞吐量优先的原因"><a href="#吞吐量优先的原因" class="headerlink" title="吞吐量优先的原因"></a>吞吐量优先的原因</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Parallel Scavenge的目标是达到可控制的吞吐量</span></span><br><span class="line"><span class="comment">// 会根据MaxGCPauseMillis和GCTimeRatio自动调整：</span></span><br><span class="line"><span class="comment">// - 新生代大小</span></span><br><span class="line"><span class="comment">// - Eden和Survivor比例</span></span><br><span class="line"><span class="comment">// - 晋升老年代的对象年龄</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 适合：后台运算、批处理、离线分析</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="CMS收集器"><a href="#CMS收集器" class="headerlink" title="CMS收集器"></a>CMS收集器</h2><h3 id="特点-3"><a href="#特点-3" class="headerlink" title="特点"></a>特点</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">- 低停顿（Concurrent Mark Sweep）</span><br><span class="line">- 标记-清除算法</span><br><span class="line">- 首次实现并发收集</span><br><span class="line">- JDK9被标记为Deprecated</span><br></pre></td></tr></table></figure>
+
+<h3 id="四个阶段"><a href="#四个阶段" class="headerlink" title="四个阶段"></a>四个阶段</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">1. 初始标记（STW）：标记GC Roots直接关联的对象，速度很快</span><br><span class="line">2. 并发标记：从GC Roots遍历对象图，与用户线程并发</span><br><span class="line">3. 重新标记（STW）：修正并发标记期间变动的对象，短暂STW</span><br><span class="line">4. 并发清除：清除死亡对象，与用户线程并发</span><br><span class="line"></span><br><span class="line">时间线：</span><br><span class="line">STW:  [初始标记]                    [重新标记]</span><br><span class="line">并发:           [---并发标记---]                [---并发清除---]</span><br><span class="line">用户:  [暂停→恢复] [继续运行    ] [暂停→恢复] [继续运行      ]</span><br></pre></td></tr></table></figure>
+
+<h3 id="CMS的问题"><a href="#CMS的问题" class="headerlink" title="CMS的问题"></a>CMS的问题</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">1. 内存碎片：标记-清除不压缩，长期运行后碎片严重</span><br><span class="line">   解决：-XX:CMSFullGCsBeforeCompaction=5  每5次Full GC后压缩</span><br><span class="line"></span><br><span class="line">2. 浮动垃圾：并发清除阶段产生的新垃圾，本次无法收集</span><br><span class="line">   解决：预留空间 -XX:CMSInitiatingOccupancyFraction=70</span><br><span class="line">   老年代使用70%就触发CMS</span><br><span class="line"></span><br><span class="line">3. Concurrent Mode Failure：预留空间不够，退化为Serial Old</span><br><span class="line">   表现：长时间Full GC STW</span><br><span class="line">   解决：调低CMSInitiatingOccupancyFraction</span><br><span class="line"></span><br><span class="line">4. CPU敏感：并发阶段占用CPU，默认启动(CPU核数+3)/4个线程</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># CMS参数</span></span><br><span class="line">-XX:+UseConcMarkSweepGC                    <span class="comment"># 使用CMS</span></span><br><span class="line">-XX:CMSInitiatingOccupancyFraction=70      <span class="comment"># 老年代70%触发</span></span><br><span class="line">-XX:+UseCMSCompactAtFullCollection         <span class="comment"># Full GC时压缩</span></span><br><span class="line">-XX:CMSFullGCsBeforeCompaction=5           <span class="comment"># 5次Full GC后压缩</span></span><br><span class="line">-XX:ConcGCThreads=4                        <span class="comment"># 并发线程数</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="G1收集器"><a href="#G1收集器" class="headerlink" title="G1收集器"></a>G1收集器</h2><h3 id="特点-4"><a href="#特点-4" class="headerlink" title="特点"></a>特点</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">- JDK9默认收集器</span><br><span class="line">- 面向服务端</span><br><span class="line">- 分Region收集</span><br><span class="line">- 可预测停顿时间</span><br><span class="line">- 标记-整理+复制算法（无碎片）</span><br></pre></td></tr></table></figure>
+
+<h3 id="Region划分"><a href="#Region划分" class="headerlink" title="Region划分"></a>Region划分</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">┌────┬────┬────┬────┬────┬────┬────┬────┐</span><br><span class="line">│ E  │ E  │ S  │ O  │ O  │ H  │ E  │ O  │</span><br><span class="line">├────┼────┼────┼────┼────┼────┼────┼────┤</span><br><span class="line">│ O  │ E  │ E  │ O  │ E  │ O  │ S  │ E  │</span><br><span class="line">└────┴────┴────┴────┴────┴────┴────┴────┘</span><br><span class="line"></span><br><span class="line">E = Eden区</span><br><span class="line">S = Survivor区</span><br><span class="line">O = Old区</span><br><span class="line">H = Humongous区（大对象，&gt;Region一半大小）</span><br><span class="line"></span><br><span class="line">每个Region大小：1MB~32MB，默认堆/2048</span><br><span class="line">-XX:G1HeapRegionSize=4m</span><br></pre></td></tr></table></figure>
+
+<h3 id="混合收集"><a href="#混合收集" class="headerlink" title="混合收集"></a>混合收集</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">G1不只分新生代/老年代收集，而是优先收集垃圾最多的Region</span><br><span class="line"></span><br><span class="line">Young GC：收集所有Eden和Survivor的Region</span><br><span class="line">Mixed GC：收集所有Eden和Survivor + 部分老年代Region</span><br><span class="line">Full GC：退化为单线程收集整个堆（要避免！）</span><br><span class="line"></span><br><span class="line">G1的核心：维护每个Region的回收价值（垃圾占比），</span><br><span class="line">优先回收价值高的Region，在目标停顿时间内回收最多垃圾</span><br></pre></td></tr></table></figure>
+
+<h3 id="三个阶段"><a href="#三个阶段" class="headerlink" title="三个阶段"></a>三个阶段</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">1. Young GC：回收所有Eden Region</span><br><span class="line">   - 存活对象复制到Survivor或Old Region</span><br><span class="line">   - STW但时间可控</span><br><span class="line"></span><br><span class="line">2. 并发标记：</span><br><span class="line">   - 初始标记（STW，借Young GC完成）</span><br><span class="line">   - 并发标记（与用户线程并发）</span><br><span class="line">   - 最终标记（STW，处理SATB缓冲区）</span><br><span class="line">   - 筛选回收（STW，选择回收价值高的Region）</span><br><span class="line"></span><br><span class="line">3. Mixed GC：</span><br><span class="line">   - 收集所有Young Region + 部分Old Region</span><br><span class="line">   - 根据MaxGCPauseMillis选择回收哪些Old Region</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># G1参数</span></span><br><span class="line">-XX:+UseG1GC                      <span class="comment"># 使用G1</span></span><br><span class="line">-XX:MaxGCPauseMillis=200          <span class="comment"># 目标停顿200ms</span></span><br><span class="line">-XX:G1HeapRegionSize=4m           <span class="comment"># Region大小</span></span><br><span class="line">-XX:InitiatingHeapOccupancyPercent=45  <span class="comment"># 堆使用45%触发并发标记</span></span><br><span class="line">-XX:G1MixedGCCountTarget=8        <span class="comment"># Mixed GC次数目标</span></span><br><span class="line">-XX:G1MixedGCLiveThresholdPercent=85   <span class="comment"># Region存活率&lt;85%才回收</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="G1调优实战"><a href="#G1调优实战" class="headerlink" title="G1调优实战"></a>G1调优实战</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 场景：服务偶尔出现1-2秒的停顿</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 1. 分析GC日志</span></span><br><span class="line"><span class="comment"># -XX:+PrintGCDetails -XX:+PrintGCDateStamps -Xloggc:/data/logs/gc.log</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 发现Mixed GC停顿过长</span></span><br><span class="line"><span class="comment"># 调低每次Mixed GC回收的Region数</span></span><br><span class="line">-XX:G1MixedGCCountTarget=16       <span class="comment"># 增加Mixed GC次数，每次少回收</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 发现大对象频繁分配</span></span><br><span class="line"><span class="comment"># 增大Region大小</span></span><br><span class="line">-XX:G1HeapRegionSize=8m</span><br><span class="line"></span><br><span class="line"><span class="comment"># 4. 发现并发标记启动太晚</span></span><br><span class="line"><span class="comment"># 降低触发阈值</span></span><br><span class="line">-XX:InitiatingHeapOccupancyPercent=35</span><br></pre></td></tr></table></figure>
+
+<h2 id="ZGC收集器"><a href="#ZGC收集器" class="headerlink" title="ZGC收集器"></a>ZGC收集器</h2><h3 id="特点-5"><a href="#特点-5" class="headerlink" title="特点"></a>特点</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">- JDK15+生产可用</span><br><span class="line">- 停顿时间&lt;1ms（JDK16+&lt;0.1ms）</span><br><span class="line">- 停顿时间不随堆大小增加</span><br><span class="line">- 支持TB级堆（最大16TB）</span><br><span class="line">- 基于 colored pointers + 读屏障实现</span><br></pre></td></tr></table></figure>
+
+<h3 id="核心技术"><a href="#核心技术" class="headerlink" title="核心技术"></a>核心技术</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">1. 染色指针（Colored Pointers）：</span><br><span class="line">   在64位指针中借用几位存储GC信息</span><br><span class="line">   不需要额外的Mark Word空间</span><br><span class="line"></span><br><span class="line">2. 读屏障（Load Barrier）：</span><br><span class="line">   在对象引用加载时检查指针颜色</span><br><span class="line">   如果引用指向旧地址，自动修正为新地址</span><br><span class="line">   保证应用始终使用最新对象</span><br><span class="line"></span><br><span class="line">3. 并发整理：</span><br><span class="line">   对象移动与应用线程并发执行</span><br><span class="line">   通过读屏障保证正确性</span><br></pre></td></tr></table></figure>
+
+<h3 id="工作流程-1"><a href="#工作流程-1" class="headerlink" title="工作流程"></a>工作流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">STW:  [初始标记]  [再标记]</span><br><span class="line">并发:         [---并发标记---]  [---并发转移---]</span><br><span class="line">用户:  [暂停] [继续运行       ] [继续运行       ]</span><br><span class="line"></span><br><span class="line">关键：只有初始标记和再标记是STW，且时间极短（&lt;1ms）</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ZGC参数</span></span><br><span class="line">-XX:+UseZGC                      <span class="comment"># 使用ZGC</span></span><br><span class="line">-XX:ZCollectionInterval=0        <span class="comment"># GC间隔（0=自适应）</span></span><br><span class="line">-XX:ZAllocationSpikeTolerance=2  <span class="comment"># 分配尖峰容忍度</span></span><br><span class="line">-XX:+UnlockDiagnosticVMOptions   <span class="comment"># 解锁诊断选项</span></span><br><span class="line">-XX:+ZStatisticsForceTrace       <span class="comment"># 强制追踪</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="收集器选择指南"><a href="#收集器选择指南" class="headerlink" title="收集器选择指南"></a>收集器选择指南</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────┬────────────────────────────┐</span><br><span class="line">│ 场景             │ 推荐收集器                  │</span><br><span class="line">├─────────────────┼────────────────────────────┤</span><br><span class="line">│ JDK8 默认       │ Parallel Scavenge + Old    │</span><br><span class="line">│ JDK8 低延迟     │ ParNew + CMS               │</span><br><span class="line">│ JDK9+ 默认      │ G1                         │</span><br><span class="line">│ 大内存(&gt;8G)     │ G1                         │</span><br><span class="line">│ 超大内存(&gt;32G)  │ ZGC                        │</span><br><span class="line">│ 批处理/离线     │ Parallel Scavenge + Old    │</span><br><span class="line">│ 在线服务        │ G1 或 ZGC                  │</span><br><span class="line">│ 实时性要求极高   │ ZGC                        │</span><br><span class="line">└─────────────────┴────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h2 id="GC日志分析实战"><a href="#GC日志分析实战" class="headerlink" title="GC日志分析实战"></a>GC日志分析实战</h2><h3 id="开启GC日志"><a href="#开启GC日志" class="headerlink" title="开启GC日志"></a>开启GC日志</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># JDK8</span></span><br><span class="line">-XX:+PrintGCDetails </span><br><span class="line">-XX:+PrintGCDateStamps </span><br><span class="line">-XX:+PrintGCTimeStamps </span><br><span class="line">-XX:+PrintGCApplicationStoppedTime </span><br><span class="line">-Xloggc:/data/logs/gc.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># JDK9+</span></span><br><span class="line">-Xlog:gc*:file=/data/logs/gc.log:<span class="keyword">time</span>,<span class="built_in">uptime</span>,level,tags</span><br></pre></td></tr></table></figure>
+
+<h3 id="日志分析工具"><a href="#日志分析工具" class="headerlink" title="日志分析工具"></a>日志分析工具</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">1. GCViewer：可视化GC日志</span><br><span class="line">2. GCEasy：在线分析 https://gceasy.io</span><br><span class="line">3. JDK自带：jhsdb jmap --pid &lt;pid&gt;</span><br></pre></td></tr></table></figure>
+
+<h3 id="关键指标"><a href="#关键指标" class="headerlink" title="关键指标"></a>关键指标</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">1. Young GC频率：正常几秒一次</span><br><span class="line">2. Young GC耗时：正常&lt;50ms</span><br><span class="line">3. Full GC频率：正常几小时一次</span><br><span class="line">4. Full GC耗时：G1正常&lt;500ms</span><br><span class="line">5. 堆使用率：老年代&lt;70%</span><br><span class="line">6. GC总耗时占比：&lt;1%</span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-CMS和G1的区别？"><a href="#1-CMS和G1的区别？" class="headerlink" title="1. CMS和G1的区别？"></a>1. CMS和G1的区别？</h3><p>CMS是标记-清除，有内存碎片；G1是标记-整理+复制，无碎片。CMS固定分代，G1分Region。CMS停顿不可控，G1可预测停顿时间。</p>
+<h3 id="2-G1的Mixed-GC是什么？"><a href="#2-G1的Mixed-GC是什么？" class="headerlink" title="2. G1的Mixed GC是什么？"></a>2. G1的Mixed GC是什么？</h3><p>Mixed GC &#x3D; Young GC + 部分Old Region回收。G1根据回收价值选择Old Region，在目标停顿时间内回收最多垃圾。</p>
+<h3 id="3-ZGC为什么停顿这么短？"><a href="#3-ZGC为什么停顿这么短？" class="headerlink" title="3. ZGC为什么停顿这么短？"></a>3. ZGC为什么停顿这么短？</h3><p>通过染色指针+读屏障实现并发整理，对象移动与应用线程并发执行。STW阶段只做根扫描，时间与堆大小无关。</p>
+<h2 id="最佳实践"><a href="#最佳实践" class="headerlink" title="最佳实践"></a>最佳实践</h2><ol>
+<li><strong>JDK8用G1替代CMS</strong>：CMS已Deprecated</li>
+<li><strong>JDK9+默认G1</strong>：大部分场景够用</li>
+<li><strong>大内存用ZGC</strong>：停顿时间极短</li>
+<li><strong>开启GC日志</strong>：线上必须开启</li>
+<li><strong>避免Full GC</strong>：调整参数减少Full GC频率</li>
+</ol>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>垃圾收集器的选择直接影响服务稳定性。2023年系统学习后，核心认知是：<strong>Parallel吞吐量优先、CMS低延迟但有碎片、G1平衡方案、ZGC终极方案</strong>。选择合适的收集器+合理调优，才能避免GC导致的线上卡顿。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/05/20/%E6%8A%80%E6%9C%AF/2023/%E5%B9%B6%E5%8F%91%E5%AE%B9%E5%99%A8%E5%AF%B9%E6%AF%94-CopyOnWriteArrayList%E4%B8%8EConcurrentHashMap/">并发容器对比——CopyOnWriteArrayList与ConcurrentHashMap</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/05/21/%E6%8A%80%E6%9C%AF/2023/JVM%E5%91%BD%E4%BB%A4%E8%A1%8C%E5%B7%A5%E5%85%B7%E5%AE%9E%E6%88%98-jps-jstack-jmap-jstat%E6%8E%92%E6%9F%A5%E6%8C%87%E5%8D%97/">JVM命令行工具实战——jps、jstack、jmap、jstat排查指南</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="date-display"></span> <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      const dateDisplay = document.getElementById('date-display');
+      const year = now.getFullYear();
+      const month = formatTime(now.getMonth() + 1);
+      const day = formatTime(now.getDate());
+      dateDisplay.textContent = `${year}-${month}-${day}`;
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9E%83%E5%9C%BE%E6%94%B6%E9%9B%86%E5%99%A8%E5%85%A8%E8%A7%88"><span class="toc-number">2.</span> <span class="toc-text">垃圾收集器全览</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%AF%84%E4%BC%B0%E6%8C%87%E6%A0%87"><span class="toc-number">3.</span> <span class="toc-text">评估指标</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Serial%E6%94%B6%E9%9B%86%E5%99%A8"><span class="toc-number">4.</span> <span class="toc-text">Serial收集器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E7%82%B9"><span class="toc-number">4.1.</span> <span class="toc-text">特点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B7%A5%E4%BD%9C%E6%B5%81%E7%A8%8B"><span class="toc-number">4.2.</span> <span class="toc-text">工作流程</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%80%82%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">4.3.</span> <span class="toc-text">适用场景</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#ParNew%E6%94%B6%E9%9B%86%E5%99%A8"><span class="toc-number">5.</span> <span class="toc-text">ParNew收集器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E7%82%B9-1"><span class="toc-number">5.1.</span> <span class="toc-text">特点</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Parallel-Scavenge%E6%94%B6%E9%9B%86%E5%99%A8"><span class="toc-number">6.</span> <span class="toc-text">Parallel Scavenge收集器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E7%82%B9-2"><span class="toc-number">6.1.</span> <span class="toc-text">特点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%90%9E%E5%90%90%E9%87%8F%E4%BC%98%E5%85%88%E7%9A%84%E5%8E%9F%E5%9B%A0"><span class="toc-number">6.2.</span> <span class="toc-text">吞吐量优先的原因</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#CMS%E6%94%B6%E9%9B%86%E5%99%A8"><span class="toc-number">7.</span> <span class="toc-text">CMS收集器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E7%82%B9-3"><span class="toc-number">7.1.</span> <span class="toc-text">特点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9B%9B%E4%B8%AA%E9%98%B6%E6%AE%B5"><span class="toc-number">7.2.</span> <span class="toc-text">四个阶段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#CMS%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">7.3.</span> <span class="toc-text">CMS的问题</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#G1%E6%94%B6%E9%9B%86%E5%99%A8"><span class="toc-number">8.</span> <span class="toc-text">G1收集器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E7%82%B9-4"><span class="toc-number">8.1.</span> <span class="toc-text">特点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Region%E5%88%92%E5%88%86"><span class="toc-number">8.2.</span> <span class="toc-text">Region划分</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%B7%B7%E5%90%88%E6%94%B6%E9%9B%86"><span class="toc-number">8.3.</span> <span class="toc-text">混合收集</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E4%B8%AA%E9%98%B6%E6%AE%B5"><span class="toc-number">8.4.</span> <span class="toc-text">三个阶段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#G1%E8%B0%83%E4%BC%98%E5%AE%9E%E6%88%98"><span class="toc-number">8.5.</span> <span class="toc-text">G1调优实战</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#ZGC%E6%94%B6%E9%9B%86%E5%99%A8"><span class="toc-number">9.</span> <span class="toc-text">ZGC收集器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%89%B9%E7%82%B9-5"><span class="toc-number">9.1.</span> <span class="toc-text">特点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF"><span class="toc-number">9.2.</span> <span class="toc-text">核心技术</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B7%A5%E4%BD%9C%E6%B5%81%E7%A8%8B-1"><span class="toc-number">9.3.</span> <span class="toc-text">工作流程</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%94%B6%E9%9B%86%E5%99%A8%E9%80%89%E6%8B%A9%E6%8C%87%E5%8D%97"><span class="toc-number">10.</span> <span class="toc-text">收集器选择指南</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#GC%E6%97%A5%E5%BF%97%E5%88%86%E6%9E%90%E5%AE%9E%E6%88%98"><span class="toc-number">11.</span> <span class="toc-text">GC日志分析实战</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BC%80%E5%90%AFGC%E6%97%A5%E5%BF%97"><span class="toc-number">11.1.</span> <span class="toc-text">开启GC日志</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%97%A5%E5%BF%97%E5%88%86%E6%9E%90%E5%B7%A5%E5%85%B7"><span class="toc-number">11.2.</span> <span class="toc-text">日志分析工具</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E6%8C%87%E6%A0%87"><span class="toc-number">11.3.</span> <span class="toc-text">关键指标</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91%E9%97%AE%E9%A2%98"><span class="toc-number">12.</span> <span class="toc-text">面试高频问题</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-CMS%E5%92%8CG1%E7%9A%84%E5%8C%BA%E5%88%AB%EF%BC%9F"><span class="toc-number">12.1.</span> <span class="toc-text">1. CMS和G1的区别？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-G1%E7%9A%84Mixed-GC%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">12.2.</span> <span class="toc-text">2. G1的Mixed GC是什么？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-ZGC%E4%B8%BA%E4%BB%80%E4%B9%88%E5%81%9C%E9%A1%BF%E8%BF%99%E4%B9%88%E7%9F%AD%EF%BC%9F"><span class="toc-number">12.3.</span> <span class="toc-text">3. ZGC为什么停顿这么短？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">13.</span> <span class="toc-text">最佳实践</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">14.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/JVM/" class="tag" aria-label="标签: #JVM">#JVM</a>
+            
+                <a href="/tags/%E8%B0%83%E4%BC%98/" class="tag" aria-label="标签: #调优">#调优</a>
+            
+                <a href="/tags/GC/" class="tag" aria-label="标签: #GC">#GC</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(161)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(80)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/JVM/" aria-label="分类: JVM">
+                        JVM
+                        <span>(7)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+    <!-- No categories available -->
+
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>
