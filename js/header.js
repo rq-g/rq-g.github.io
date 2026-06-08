@@ -88,9 +88,4 @@ document.addEventListener('DOMContentLoaded', function() {
     setupMobileMenu();
     highlightCurrentPage();
     setupScrollBehavior();
-
-    // 确保汉堡菜单在窗口调整大小时正常显示
-    window.addEventListener('resize', function() {
-        setupMobileMenu(); // 每次调整大小都检查汉堡菜单
-    });
 });

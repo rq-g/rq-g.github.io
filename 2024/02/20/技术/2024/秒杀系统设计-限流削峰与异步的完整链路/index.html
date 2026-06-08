@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>秒杀系统设计——限流、削峰与异步的完整链路 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="秒杀系统设计——限流、削峰与异步的完整链路">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2024/02/20/%E6%8A%80%E6%9C%AF/2024/%E7%A7%92%E6%9D%80%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1-%E9%99%90%E6%B5%81%E5%89%8A%E5%B3%B0%E4%B8%8E%E5%BC%82%E6%AD%A5%E7%9A%84%E5%AE%8C%E6%95%B4%E9%93%BE%E8%B7%AF/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言第一次做秒杀活动，10万人抢1000件商品，开售瞬间系统直接打挂。复盘后发现：前端没限流、后端同步处理、库存超卖、数据库扛不住。经过三轮优化，最终实现了稳定可用的秒杀系统。秒杀系统核心挑战1234567891011121314151.瞬时高并发10万人同时点击→瞬间QPS飙升到数万→限流：只放少量请求到后">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+</aside>
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">秒杀系统设计——限流、削峰与异步的完整链路</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2024-02-20T10:32:28.000Z">2024-02-20</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2024/">2024</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2024/%E9%AB%98%E5%B9%B6%E5%8F%91/">高并发</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>第一次做秒杀活动，10万人抢1000件商品，开售瞬间系统直接打挂。复盘后发现：前端没限流、后端同步处理、库存超卖、数据库扛不住。经过三轮优化，最终实现了稳定可用的秒杀系统。</p>
+<h2 id="秒杀系统核心挑战"><a href="#秒杀系统核心挑战" class="headerlink" title="秒杀系统核心挑战"></a>秒杀系统核心挑战</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">1. 瞬时高并发</span><br><span class="line">   10万人同时点击 → 瞬间QPS飙升到数万</span><br><span class="line">   → 限流：只放少量请求到后端</span><br><span class="line"></span><br><span class="line">2. 库存防超卖</span><br><span class="line">   1000件商品，不能卖出1001件</span><br><span class="line">   → Redis原子扣减 + 数据库乐观锁</span><br><span class="line"></span><br><span class="line">3. 防刷防黑</span><br><span class="line">   机器人刷单、同一用户重复抢购</span><br><span class="line">   → 用户维度的限流和去重</span><br><span class="line"></span><br><span class="line">4. 保证高可用</span><br><span class="line">   秒杀期间系统不能挂</span><br><span class="line">   → 异步解耦，保护核心链路</span><br></pre></td></tr></table></figure>
+
+<h2 id="架构演进"><a href="#架构演进" class="headerlink" title="架构演进"></a>架构演进</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">V1.0 裸奔版（第一次秒杀，直接打挂）</span><br><span class="line">  用户 → 网关 → 秒杀服务 → 数据库</span><br><span class="line">  问题：所有请求直达数据库，数据库CPU 100%</span><br><span class="line"></span><br><span class="line">V2.0 缓存版（加了Redis，还是超卖）</span><br><span class="line">  用户 → 网关 → 秒杀服务 → Redis(库存) → 数据库</span><br><span class="line">  问题：Redis扣减和数据库扣减不是原子操作</span><br><span class="line"></span><br><span class="line">V3.0 完整版（限流+削峰+异步+防超卖）</span><br><span class="line">  用户 → 网关限流 → 秒杀服务 → Redis原子扣减</span><br><span class="line">    → 发送MQ消息 → 异步创建订单 → 数据库</span><br></pre></td></tr></table></figure>
+
+<h2 id="第一层：前端限流"><a href="#第一层：前端限流" class="headerlink" title="第一层：前端限流"></a>第一层：前端限流</h2><figure class="highlight javascript"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 前端防重复点击</span></span><br><span class="line"><span class="keyword">let</span> isSubmitting = <span class="literal">false</span>;</span><br><span class="line"><span class="keyword">async</span> <span class="keyword">function</span> <span class="title function_">seckill</span>(<span class="params">productId</span>) &#123;</span><br><span class="line">    <span class="keyword">if</span> (isSubmitting) <span class="keyword">return</span>;</span><br><span class="line">    isSubmitting = <span class="literal">true</span>;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">const</span> res = <span class="keyword">await</span> api.<span class="title function_">post</span>(<span class="string">&#x27;/seckill/execute&#x27;</span>, &#123; productId &#125;);</span><br><span class="line">        <span class="keyword">if</span> (res.<span class="property">success</span>) &#123;</span><br><span class="line">            <span class="title function_">showMessage</span>(<span class="string">&#x27;抢购成功，正在创建订单...&#x27;</span>);</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="title function_">showMessage</span>(res.<span class="property">message</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        <span class="comment">// 5秒后才能再次点击</span></span><br><span class="line">        <span class="built_in">setTimeout</span>(<span class="function">() =&gt;</span> &#123; isSubmitting = <span class="literal">false</span>; &#125;, <span class="number">5000</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 按钮置灰 + 倒计时</span></span><br><span class="line"><span class="keyword">function</span> <span class="title function_">startCountdown</span>(<span class="params"></span>) &#123;</span><br><span class="line">    <span class="variable language_">document</span>.<span class="title function_">getElementById</span>(<span class="string">&#x27;seckillBtn&#x27;</span>).<span class="property">disabled</span> = <span class="literal">true</span>;</span><br><span class="line">    <span class="keyword">let</span> countdown = <span class="number">5</span>;</span><br><span class="line">    <span class="keyword">const</span> timer = <span class="built_in">setInterval</span>(<span class="function">() =&gt;</span> &#123;</span><br><span class="line">        countdown--;</span><br><span class="line">        <span class="variable language_">document</span>.<span class="title function_">getElementById</span>(<span class="string">&#x27;seckillBtn&#x27;</span>).<span class="property">textContent</span> = <span class="string">`<span class="subst">$&#123;countdown&#125;</span>秒后可再次抢购`</span>;</span><br><span class="line">        <span class="keyword">if</span> (countdown &lt;= <span class="number">0</span>) &#123;</span><br><span class="line">            <span class="built_in">clearInterval</span>(timer);</span><br><span class="line">            <span class="variable language_">document</span>.<span class="title function_">getElementById</span>(<span class="string">&#x27;seckillBtn&#x27;</span>).<span class="property">disabled</span> = <span class="literal">false</span>;</span><br><span class="line">            <span class="variable language_">document</span>.<span class="title function_">getElementById</span>(<span class="string">&#x27;seckillBtn&#x27;</span>).<span class="property">textContent</span> = <span class="string">&#x27;立即抢购&#x27;</span>;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;, <span class="number">1000</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="第二层：网关限流"><a href="#第二层：网关限流" class="headerlink" title="第二层：网关限流"></a>第二层：网关限流</h2><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Spring Cloud Gateway限流配置</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">cloud:</span></span><br><span class="line">    <span class="attr">gateway:</span></span><br><span class="line">      <span class="attr">routes:</span></span><br><span class="line">        <span class="bullet">-</span> <span class="attr">id:</span> <span class="string">seckill-route</span></span><br><span class="line">          <span class="attr">uri:</span> <span class="string">lb://seckill-service</span></span><br><span class="line">          <span class="attr">predicates:</span></span><br><span class="line">            <span class="bullet">-</span> <span class="string">Path=/seckill/**</span></span><br><span class="line">          <span class="attr">filters:</span></span><br><span class="line">            <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">RequestRateLimiter</span></span><br><span class="line">              <span class="attr">args:</span></span><br><span class="line">                <span class="attr">redis-rate-limiter.replenishRate:</span> <span class="number">100</span>   <span class="comment"># 每秒100个令牌</span></span><br><span class="line">                <span class="attr">redis-rate-limiter.burstCapacity:</span> <span class="number">200</span>   <span class="comment"># 桶容量200</span></span><br><span class="line">                <span class="attr">key-resolver:</span> <span class="string">&quot;#&#123;@userKeyResolver&#125;&quot;</span>     <span class="comment"># 按用户限流</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">GatewayRateLimiterConfig</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 按用户ID限流</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Bean</span></span><br><span class="line">    <span class="keyword">public</span> KeyResolver <span class="title function_">userKeyResolver</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> exchange -&gt; Mono.just(</span><br><span class="line">            exchange.getRequest().getHeaders().getFirst(<span class="string">&quot;X-User-Id&quot;</span>) != <span class="literal">null</span></span><br><span class="line">                ? exchange.getRequest().getHeaders().getFirst(<span class="string">&quot;X-User-Id&quot;</span>)</span><br><span class="line">                : exchange.getRequest().getRemoteAddress().getAddress().getHostAddress()</span><br><span class="line">        );</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="第三层：服务端限流-校验"><a href="#第三层：服务端限流-校验" class="headerlink" title="第三层：服务端限流+校验"></a>第三层：服务端限流+校验</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SeckillService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> RedissonClient redissonClient;</span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> RocketMQTemplate rocketMQTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">STOCK_KEY</span> <span class="operator">=</span> <span class="string">&quot;seckill:stock:&quot;</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">USER_BOUGHT_KEY</span> <span class="operator">=</span> <span class="string">&quot;seckill:bought:&quot;</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">LUA_SCRIPT</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;if redis.call(&#x27;get&#x27;, KEYS[1]) == false then &quot;</span> +</span><br><span class="line">        <span class="string">&quot;  return -1 &quot;</span> +                              <span class="comment">// 活动不存在</span></span><br><span class="line">        <span class="string">&quot;end &quot;</span> +</span><br><span class="line">        <span class="string">&quot;if tonumber(redis.call(&#x27;get&#x27;, KEYS[1])) &lt;= 0 then &quot;</span> +</span><br><span class="line">        <span class="string">&quot;  return 0 &quot;</span> +                               <span class="comment">// 库存不足</span></span><br><span class="line">        <span class="string">&quot;end &quot;</span> +</span><br><span class="line">        <span class="string">&quot;if redis.call(&#x27;sismember&#x27;, KEYS[2], ARGV[1]) == 1 then &quot;</span> +</span><br><span class="line">        <span class="string">&quot;  return 2 &quot;</span> +                               <span class="comment">// 已购买</span></span><br><span class="line">        <span class="string">&quot;end &quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;decr&#x27;, KEYS[1]) &quot;</span> +              <span class="comment">// 扣减库存</span></span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;sadd&#x27;, KEYS[2], ARGV[1]) &quot;</span> +     <span class="comment">// 标记已购买</span></span><br><span class="line">        <span class="string">&quot;return 1 &quot;</span>;                                  <span class="comment">// 成功</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 秒杀核心逻辑（Redis Lua原子操作）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> SeckillResult <span class="title function_">execute</span><span class="params">(Long userId, Long productId)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 活动校验</span></span><br><span class="line">        <span class="keyword">if</span> (!isActivityActive(productId)) &#123;</span><br><span class="line">            <span class="keyword">return</span> SeckillResult.fail(<span class="string">&quot;活动未开始或已结束&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 用户维度的限流（5秒内只能请求一次）</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">rateLimitKey</span> <span class="operator">=</span> <span class="string">&quot;seckill:rate:&quot;</span> + userId + <span class="string">&quot;:&quot;</span> + productId;</span><br><span class="line">        <span class="type">Boolean</span> <span class="variable">allowed</span> <span class="operator">=</span> redisTemplate.opsForValue()</span><br><span class="line">            .setIfAbsent(rateLimitKey, <span class="string">&quot;1&quot;</span>, <span class="number">5</span>, TimeUnit.SECONDS);</span><br><span class="line">        <span class="keyword">if</span> (Boolean.FALSE.equals(allowed)) &#123;</span><br><span class="line">            <span class="keyword">return</span> SeckillResult.fail(<span class="string">&quot;操作过于频繁，请稍后重试&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. Redis Lua原子操作：扣库存 + 防重复购买</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">stockKey</span> <span class="operator">=</span> STOCK_KEY + productId;</span><br><span class="line">        <span class="type">String</span> <span class="variable">boughtKey</span> <span class="operator">=</span> USER_BOUGHT_KEY + productId;</span><br><span class="line">        <span class="type">Long</span> <span class="variable">result</span> <span class="operator">=</span> redisTemplate.execute(</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(LUA_SCRIPT, Long.class),</span><br><span class="line">            Arrays.asList(stockKey, boughtKey),</span><br><span class="line">            userId.toString()</span><br><span class="line">        );</span><br><span class="line"></span><br><span class="line">        <span class="keyword">switch</span> (result.intValue()) &#123;</span><br><span class="line">            <span class="keyword">case</span> -<span class="number">1</span>: <span class="keyword">return</span> SeckillResult.fail(<span class="string">&quot;活动不存在&quot;</span>);</span><br><span class="line">            <span class="keyword">case</span> <span class="number">0</span>:  <span class="keyword">return</span> SeckillResult.fail(<span class="string">&quot;已售罄&quot;</span>);</span><br><span class="line">            <span class="keyword">case</span> <span class="number">2</span>:  <span class="keyword">return</span> SeckillResult.fail(<span class="string">&quot;您已购买过该商品&quot;</span>);</span><br><span class="line">            <span class="keyword">case</span> <span class="number">1</span>:</span><br><span class="line">                <span class="comment">// 4. 发送MQ消息，异步创建订单</span></span><br><span class="line">                <span class="type">SeckillMessage</span> <span class="variable">msg</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">SeckillMessage</span>(userId, productId);</span><br><span class="line">                rocketMQTemplate.asyncSend(<span class="string">&quot;seckill_order_topic&quot;</span>,</span><br><span class="line">                    MessageBuilder.withPayload(msg).build(),</span><br><span class="line">                    <span class="keyword">new</span> <span class="title class_">SendCallback</span>() &#123;</span><br><span class="line">                        <span class="meta">@Override</span></span><br><span class="line">                        <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">onSuccess</span><span class="params">(SendResult sendResult)</span> &#123;</span><br><span class="line">                            log.info(<span class="string">&quot;秒杀消息发送成功: userId=&#123;&#125;, productId=&#123;&#125;&quot;</span>, userId, productId);</span><br><span class="line">                        &#125;</span><br><span class="line">                        <span class="meta">@Override</span></span><br><span class="line">                        <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">onException</span><span class="params">(Throwable e)</span> &#123;</span><br><span class="line">                            log.error(<span class="string">&quot;秒杀消息发送失败，需要回补库存: userId=&#123;&#125;, productId=&#123;&#125;&quot;</span>,</span><br><span class="line">                                userId, productId, e);</span><br><span class="line">                            <span class="comment">// 回补Redis库存</span></span><br><span class="line">                            redisTemplate.opsForValue().increment(stockKey);</span><br><span class="line">                            redisTemplate.opsForSet().remove(boughtKey, userId.toString());</span><br><span class="line">                        &#125;</span><br><span class="line">                    &#125;</span><br><span class="line">                );</span><br><span class="line">                <span class="keyword">return</span> SeckillResult.success(<span class="string">&quot;抢购成功，正在创建订单&quot;</span>);</span><br><span class="line">            <span class="keyword">default</span>: <span class="keyword">return</span> SeckillResult.fail(<span class="string">&quot;系统异常&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">isActivityActive</span><span class="params">(Long productId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">status</span> <span class="operator">=</span> redisTemplate.opsForValue()</span><br><span class="line">            .get(<span class="string">&quot;seckill:activity:&quot;</span> + productId);</span><br><span class="line">        <span class="keyword">return</span> <span class="string">&quot;active&quot;</span>.equals(status);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="第四层：异步创建订单"><a href="#第四层：异步创建订单" class="headerlink" title="第四层：异步创建订单"></a>第四层：异步创建订单</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RocketMQMessageListener(</span></span><br><span class="line"><span class="meta">    topic = &quot;seckill_order_topic&quot;,</span></span><br><span class="line"><span class="meta">    consumerGroup = &quot;seckill-order-consumer&quot;</span></span><br><span class="line"><span class="meta">)</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SeckillOrderConsumer</span> <span class="keyword">implements</span> <span class="title class_">RocketMQListener</span>&lt;String&gt; &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> OrderService orderService;</span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">onMessage</span><span class="params">(String message)</span> &#123;</span><br><span class="line">        <span class="type">SeckillMsg</span> <span class="variable">msg</span> <span class="operator">=</span> JsonUtils.fromJson(message, SeckillMsg.class);</span><br><span class="line">        log.info(<span class="string">&quot;收到秒杀订单消息: userId=&#123;&#125;, productId=&#123;&#125;&quot;</span>, msg.getUserId(), msg.getProductId());</span><br><span class="line"></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 创建订单（数据库乐观锁二次校验库存）</span></span><br><span class="line">            <span class="type">Order</span> <span class="variable">order</span> <span class="operator">=</span> orderService.createSeckillOrder(msg.getUserId(), msg.getProductId());</span><br><span class="line">            log.info(<span class="string">&quot;秒杀订单创建成功: orderId=&#123;&#125;&quot;</span>, order.getId());</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;秒杀订单创建失败，回补库存&quot;</span>, e);</span><br><span class="line">            <span class="comment">// 回补Redis库存</span></span><br><span class="line">            redisTemplate.opsForValue().increment(<span class="string">&quot;seckill:stock:&quot;</span> + msg.getProductId());</span><br><span class="line">            redisTemplate.opsForSet().remove(<span class="string">&quot;seckill:bought:&quot;</span> + msg.getProductId(),</span><br><span class="line">                msg.getUserId().toString());</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="订单服务——数据库乐观锁"><a href="#订单服务——数据库乐观锁" class="headerlink" title="订单服务——数据库乐观锁"></a>订单服务——数据库乐观锁</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> OrderMapper orderMapper;</span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> ProductMapper productMapper;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Transactional(rollbackFor = Exception.class)</span></span><br><span class="line">    <span class="keyword">public</span> Order <span class="title function_">createSeckillOrder</span><span class="params">(Long userId, Long productId)</span> &#123;</span><br><span class="line">        <span class="comment">// 数据库乐观锁二次校验库存（防止Redis和DB数据不一致）</span></span><br><span class="line">        <span class="type">int</span> <span class="variable">updated</span> <span class="operator">=</span> productMapper.decreaseStock(productId);</span><br><span class="line">        <span class="keyword">if</span> (updated == <span class="number">0</span>) &#123;</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(<span class="string">&quot;库存不足&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 创建订单</span></span><br><span class="line">        <span class="type">Order</span> <span class="variable">order</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Order</span>();</span><br><span class="line">        order.setUserId(userId);</span><br><span class="line">        order.setProductId(productId);</span><br><span class="line">        order.setStatus(OrderStatus.CREATED.getCode());</span><br><span class="line">        orderMapper.insert(order);</span><br><span class="line">        <span class="keyword">return</span> order;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">&lt;!-- 乐观锁扣减库存 --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">update</span> <span class="attr">id</span>=<span class="string">&quot;decreaseStock&quot;</span>&gt;</span></span><br><span class="line">    UPDATE product SET stock = stock - 1</span><br><span class="line">    WHERE id = #&#123;productId&#125; AND stock &gt; 0</span><br><span class="line"><span class="tag">&lt;/<span class="name">update</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="活动预热"><a href="#活动预热" class="headerlink" title="活动预热"></a>活动预热</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SeckillActivityPreheat</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> SeckillActivityMapper activityMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 活动开始前预热库存到Redis</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 */5 * * * ?&quot;)</span> <span class="comment">// 每5分钟检查</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">preheatStock</span><span class="params">()</span> &#123;</span><br><span class="line">        List&lt;SeckillActivity&gt; activities = activityMapper</span><br><span class="line">            .selectUpcoming(LocalDateTime.now().plusMinutes(<span class="number">10</span>));</span><br><span class="line"></span><br><span class="line">        <span class="keyword">for</span> (SeckillActivity activity : activities) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">stockKey</span> <span class="operator">=</span> <span class="string">&quot;seckill:stock:&quot;</span> + activity.getProductId();</span><br><span class="line">            <span class="comment">// 如果Redis中没有库存数据，从DB加载</span></span><br><span class="line">            <span class="keyword">if</span> (!redisTemplate.hasKey(stockKey)) &#123;</span><br><span class="line">                redisTemplate.opsForValue().set(stockKey,</span><br><span class="line">                    String.valueOf(activity.getStock()));</span><br><span class="line">                redisTemplate.opsForValue().set(</span><br><span class="line">                    <span class="string">&quot;seckill:activity:&quot;</span> + activity.getProductId(), <span class="string">&quot;active&quot;</span>);</span><br><span class="line">                log.info(<span class="string">&quot;秒杀活动预热: productId=&#123;&#125;, stock=&#123;&#125;&quot;</span>,</span><br><span class="line">                    activity.getProductId(), activity.getStock());</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="防刷策略"><a href="#防刷策略" class="headerlink" title="防刷策略"></a>防刷策略</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">1. 用户维度防刷</span><br><span class="line">   → 同一用户5秒内只能请求一次</span><br><span class="line">   → 同一用户同一商品只能买一次</span><br><span class="line"></span><br><span class="line">2. IP维度防刷</span><br><span class="line">   → 同一IP每秒最多10次请求</span><br><span class="line">   → 超过阈值封禁IP</span><br><span class="line"></span><br><span class="line">3. 验码防机器人</span><br><span class="line">   → 秒杀前先获取图形验证码</span><br><span class="line">   → 验证通过才能参与秒杀</span><br><span class="line"></span><br><span class="line">4. 接口隐藏</span><br><span class="line">   → 秒杀URL动态生成，带时间戳和签名</span><br><span class="line">   → 防止提前知道秒杀接口地址</span><br><span class="line"></span><br><span class="line">5. 数学题验证</span><br><span class="line">   → 点击抢购后弹出简单计算题</span><br><span class="line">   → 答对后才能提交（同时起到削峰效果）</span><br></pre></td></tr></table></figure>
+
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>秒杀系统的核心是”四层防护+异步解耦”：前端限流防重复点击、网关限流控制总流量、服务端Lua原子操作防超卖、MQ异步创建订单保护数据库。每一层都在过滤无效请求，最终到达数据库的请求量是可控的。关键是不要让所有流量直达数据库。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2024/02/10/%E6%8A%80%E6%9C%AF/2024/%E5%A4%9A%E7%BA%A7%E7%BC%93%E5%AD%98%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1-%E4%BB%8E200ms%E5%88%B020ms%E7%9A%84%E6%80%A7%E8%83%BD%E9%A3%9E%E8%B7%83/">多级缓存架构设计——从200ms到20ms的性能飞跃</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2024/02/28/%E6%8A%80%E6%9C%AF/2024/%E6%B5%81%E9%87%8F%E5%89%8A%E5%B3%B0%E4%B8%8E%E5%BC%82%E6%AD%A5%E8%A7%A3%E8%80%A6-MQ%E5%9C%A8%E9%AB%98%E5%B9%B6%E5%8F%91%E5%9C%BA%E6%99%AF%E7%9A%84%E6%AD%A3%E7%A1%AE%E7%94%A8%E6%B3%95/">流量削峰与异步解耦——MQ在高并发场景的正确用法</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%A7%92%E6%9D%80%E7%B3%BB%E7%BB%9F%E6%A0%B8%E5%BF%83%E6%8C%91%E6%88%98"><span class="toc-number">2.</span> <span class="toc-text">秒杀系统核心挑战</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9E%B6%E6%9E%84%E6%BC%94%E8%BF%9B"><span class="toc-number">3.</span> <span class="toc-text">架构演进</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%B8%80%E5%B1%82%EF%BC%9A%E5%89%8D%E7%AB%AF%E9%99%90%E6%B5%81"><span class="toc-number">4.</span> <span class="toc-text">第一层：前端限流</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%BA%8C%E5%B1%82%EF%BC%9A%E7%BD%91%E5%85%B3%E9%99%90%E6%B5%81"><span class="toc-number">5.</span> <span class="toc-text">第二层：网关限流</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%B8%89%E5%B1%82%EF%BC%9A%E6%9C%8D%E5%8A%A1%E7%AB%AF%E9%99%90%E6%B5%81-%E6%A0%A1%E9%AA%8C"><span class="toc-number">6.</span> <span class="toc-text">第三层：服务端限流+校验</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E5%9B%9B%E5%B1%82%EF%BC%9A%E5%BC%82%E6%AD%A5%E5%88%9B%E5%BB%BA%E8%AE%A2%E5%8D%95"><span class="toc-number">7.</span> <span class="toc-text">第四层：异步创建订单</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AE%A2%E5%8D%95%E6%9C%8D%E5%8A%A1%E2%80%94%E2%80%94%E6%95%B0%E6%8D%AE%E5%BA%93%E4%B9%90%E8%A7%82%E9%94%81"><span class="toc-number">7.1.</span> <span class="toc-text">订单服务——数据库乐观锁</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%B4%BB%E5%8A%A8%E9%A2%84%E7%83%AD"><span class="toc-number">8.</span> <span class="toc-text">活动预热</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%98%B2%E5%88%B7%E7%AD%96%E7%95%A5"><span class="toc-number">9.</span> <span class="toc-text">防刷策略</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">10.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E5%B9%B6%E5%8F%91/" class="tag" aria-label="标签: #并发">#并发</a>
+            
+                <a href="/tags/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/" class="tag" aria-label="标签: #消息队列">#消息队列</a>
+            
+                <a href="/tags/%E6%80%A7%E8%83%BD/" class="tag" aria-label="标签: #性能">#性能</a>
+            
+                <a href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/" class="tag" aria-label="标签: #分布式">#分布式</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(254)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2024/" aria-label="分类: 2024">
+                        2024
+                        <span>(41)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2024/%E9%AB%98%E5%B9%B6%E5%8F%91/" aria-label="分类: 高并发">
+                        高并发
+                        <span>(4)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+    <!-- No categories available -->
+
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>
