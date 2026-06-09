@@ -1,7 +1,18 @@
-// 创建星空画布
+// 检测是否为文章详情页
+const isPostPage = document.querySelector('.post-page') !== null;
+
+// 创建背景容器
 const container = document.createElement('div');
 container.id = 'starry-background';
 document.body.appendChild(container);
+
+// 如果是文章详情页，设置图片背景
+if (isPostPage) {
+    container.style.backgroundImage = 'url(/images/hua.png)';
+    container.style.backgroundSize = 'cover';
+    container.style.backgroundPosition = 'center';
+    container.style.backgroundRepeat = 'no-repeat';
+}
 
 // 创建Canvas元素
 const canvas = document.createElement('canvas');
