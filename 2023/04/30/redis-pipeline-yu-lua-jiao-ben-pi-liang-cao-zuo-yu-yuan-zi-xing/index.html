@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>Redis Pipeline与Lua脚本——批量操作与原子性 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="Redis Pipeline与Lua脚本——批量操作与原子性">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/04/30/redis-pipeline-yu-lua-jiao-ben-pi-liang-cao-zuo-yu-yuan-zi-xing/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言项目中批量操作Redis时，逐条执行太慢，用Pipeline后性能提升10倍。但Pipeline不保证原子性，遇到需要原子操作的场景，Lua脚本是更好的选择。2023年深入理解了Pipeline和Lua脚本的使用场景和原理。Pipeline——批量操作减少网络往返为什么需要Pipeline12345678">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+            </a>
+            <a href="mailto:gaoruiqiang@email.com" class="social-link" title="邮箱">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                </svg>
+            </a>
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">Redis Pipeline与Lua脚本——批量操作与原子性</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-04-30T10:37:28.000Z">2023-04-30</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/Redis/">Redis</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>项目中批量操作Redis时，逐条执行太慢，用Pipeline后性能提升10倍。但Pipeline不保证原子性，遇到需要原子操作的场景，Lua脚本是更好的选择。2023年深入理解了Pipeline和Lua脚本的使用场景和原理。</p>
+<h2 id="Pipeline——批量操作减少网络往返"><a href="#Pipeline——批量操作减少网络往返" class="headerlink" title="Pipeline——批量操作减少网络往返"></a>Pipeline——批量操作减少网络往返</h2><h3 id="为什么需要Pipeline"><a href="#为什么需要Pipeline" class="headerlink" title="为什么需要Pipeline"></a>为什么需要Pipeline</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">普通模式：每条命令一次网络往返</span><br><span class="line">SET key1 value1  →  网络往返1</span><br><span class="line">SET key2 value2  →  网络往返2</span><br><span class="line">SET key3 value3  →  网络往返3</span><br><span class="line">...</span><br><span class="line">1000条命令 = 1000次网络往返 → 很慢！</span><br><span class="line"></span><br><span class="line">Pipeline模式：多条命令打包一次发送</span><br><span class="line">[SET key1 value1, SET key2 value2, SET key3 value3, ...]  →  1次网络往返</span><br><span class="line">1000条命令 = 1次网络往返 → 快10-100倍！</span><br></pre></td></tr></table></figure>
+
+<h3 id="Pipeline使用"><a href="#Pipeline使用" class="headerlink" title="Pipeline使用"></a>Pipeline使用</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RedisPipelineService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 批量写入</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">batchSet</span><span class="params">(Map&lt;String, Object&gt; data)</span> &#123;</span><br><span class="line">        redisTemplate.executePipelined((RedisCallback&lt;Object&gt;) connection -&gt; &#123;</span><br><span class="line">            <span class="keyword">for</span> (Map.Entry&lt;String, Object&gt; entry : data.entrySet()) &#123;</span><br><span class="line">                connection.set(</span><br><span class="line">                    entry.getKey().getBytes(),</span><br><span class="line">                    JSON.toJSONString(entry.getValue()).getBytes()</span><br><span class="line">                );</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;  <span class="comment">// 必须返回null</span></span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 批量读取</span></span><br><span class="line">    <span class="keyword">public</span> List&lt;Object&gt; <span class="title function_">batchGet</span><span class="params">(List&lt;String&gt; keys)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.executePipelined((RedisCallback&lt;Object&gt;) connection -&gt; &#123;</span><br><span class="line">            <span class="keyword">for</span> (String key : keys) &#123;</span><br><span class="line">                connection.get(key.getBytes());</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 批量删除</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">batchDelete</span><span class="params">(List&lt;String&gt; keys)</span> &#123;</span><br><span class="line">        redisTemplate.executePipelined((RedisCallback&lt;Object&gt;) connection -&gt; &#123;</span><br><span class="line">            <span class="keyword">for</span> (String key : keys) &#123;</span><br><span class="line">                connection.del(key.getBytes());</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：批量缓存用户信息"><a href="#实战：批量缓存用户信息" class="headerlink" title="实战：批量缓存用户信息"></a>实战：批量缓存用户信息</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">UserCacheService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> UserMapper userMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 批量加载用户缓存</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">batchLoadCache</span><span class="params">(List&lt;Long&gt; userIds)</span> &#123;</span><br><span class="line">        List&lt;User&gt; users = userMapper.selectBatchIds(userIds);</span><br><span class="line"></span><br><span class="line">        redisTemplate.executePipelined((RedisCallback&lt;Object&gt;) connection -&gt; &#123;</span><br><span class="line">            <span class="keyword">for</span> (User user : users) &#123;</span><br><span class="line">                <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;user:&quot;</span> + user.getId();</span><br><span class="line">                connection.set(key.getBytes(), </span><br><span class="line">                    JSON.toJSONString(user).getBytes(),</span><br><span class="line">                    Expiration.from(<span class="number">30</span>, TimeUnit.MINUTES),</span><br><span class="line">                    SetOption.upsert());</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 批量获取用户缓存</span></span><br><span class="line">    <span class="keyword">public</span> Map&lt;Long, User&gt; <span class="title function_">batchGetUsers</span><span class="params">(List&lt;Long&gt; userIds)</span> &#123;</span><br><span class="line">        List&lt;Object&gt; results = redisTemplate.executePipelined(</span><br><span class="line">            (RedisCallback&lt;Object&gt;) connection -&gt; &#123;</span><br><span class="line">                <span class="keyword">for</span> (Long id : userIds) &#123;</span><br><span class="line">                    connection.get((<span class="string">&quot;user:&quot;</span> + id).getBytes());</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">            &#125;);</span><br><span class="line"></span><br><span class="line">        Map&lt;Long, User&gt; map = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; userIds.size(); i++) &#123;</span><br><span class="line">            <span class="keyword">if</span> (results.get(i) != <span class="literal">null</span>) &#123;</span><br><span class="line">                <span class="type">User</span> <span class="variable">user</span> <span class="operator">=</span> JSON.parseObject(String.valueOf(results.get(i)), User.class);</span><br><span class="line">                map.put(userIds.get(i), user);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> map;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="Pipeline注意事项"><a href="#Pipeline注意事项" class="headerlink" title="Pipeline注意事项"></a>Pipeline注意事项</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">1. Pipeline不是原子操作：命令之间可能穿插其他客户端的命令</span><br><span class="line">2. Pipeline不是事务：某条命令失败不影响其他命令</span><br><span class="line">3. 批量大小要控制：建议每批500-1000条，避免阻塞Redis</span><br><span class="line">4. Pipeline中的命令不能依赖前一条命令的结果</span><br></pre></td></tr></table></figure>
+
+<h2 id="Lua脚本——原子操作的利器"><a href="#Lua脚本——原子操作的利器" class="headerlink" title="Lua脚本——原子操作的利器"></a>Lua脚本——原子操作的利器</h2><h3 id="为什么需要Lua"><a href="#为什么需要Lua" class="headerlink" title="为什么需要Lua"></a>为什么需要Lua</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">Redis执行Lua脚本时是原子的：</span><br><span class="line">1. 整个脚本作为一个命令执行</span><br><span class="line">2. 执行期间不会被其他命令打断</span><br><span class="line">3. 不需要加锁</span><br><span class="line"></span><br><span class="line">适用场景：</span><br><span class="line">- 需要多个命令原子执行</span><br><span class="line">- 需要前一条命令的结果决定后续操作</span><br><span class="line">- 分布式锁的释放</span><br><span class="line">- 限流器</span><br></pre></td></tr></table></figure>
+
+<h3 id="Lua脚本基础"><a href="#Lua脚本基础" class="headerlink" title="Lua脚本基础"></a>Lua脚本基础</h3><figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- Redis中Lua脚本的内置函数</span></span><br><span class="line"><span class="comment">-- redis.call(&#x27;命令&#x27;, 参数...)    执行Redis命令，出错抛异常</span></span><br><span class="line"><span class="comment">-- redis.pcall(&#x27;命令&#x27;, 参数...)   执行Redis命令，出错返回错误对象</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- KEYS[n]：传入的key参数</span></span><br><span class="line"><span class="comment">-- ARGV[n]：传入的value参数</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 示例：限流脚本</span></span><br><span class="line"><span class="keyword">local</span> key = KEYS[<span class="number">1</span>]</span><br><span class="line"><span class="keyword">local</span> limit = <span class="built_in">tonumber</span>(ARGV[<span class="number">1</span>])</span><br><span class="line"><span class="keyword">local</span> window = <span class="built_in">tonumber</span>(ARGV[<span class="number">2</span>])</span><br><span class="line"></span><br><span class="line"><span class="keyword">local</span> current = <span class="built_in">tonumber</span>(redis.call(<span class="string">&#x27;GET&#x27;</span>, key) <span class="keyword">or</span> <span class="string">&#x27;0&#x27;</span>)</span><br><span class="line"><span class="keyword">if</span> current &gt;= limit <span class="keyword">then</span></span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>  <span class="comment">-- 限流</span></span><br><span class="line"><span class="keyword">end</span></span><br><span class="line"></span><br><span class="line">redis.call(<span class="string">&#x27;INCR&#x27;</span>, key)</span><br><span class="line"><span class="keyword">if</span> current == <span class="number">0</span> <span class="keyword">then</span></span><br><span class="line">    redis.call(<span class="string">&#x27;EXPIRE&#x27;</span>, key, window)</span><br><span class="line"><span class="keyword">end</span></span><br><span class="line"><span class="keyword">return</span> <span class="number">1</span>  <span class="comment">-- 通过</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="Java执行Lua脚本"><a href="#Java执行Lua脚本" class="headerlink" title="Java执行Lua脚本"></a>Java执行Lua脚本</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RedisLuaService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 限流脚本</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">RATE_LIMIT_SCRIPT</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;local key = KEYS[1]</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local limit = tonumber(ARGV[1])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local window = tonumber(ARGV[2])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local current = tonumber(redis.call(&#x27;GET&#x27;, key) or &#x27;0&#x27;)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;if current &gt;= limit then</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;    return 0</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;end</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;INCR&#x27;, key)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;if current == 0 then</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;    redis.call(&#x27;EXPIRE&#x27;, key, window)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;end</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;return 1&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryAcquire</span><span class="params">(String key, <span class="type">int</span> limit, <span class="type">int</span> windowSeconds)</span> &#123;</span><br><span class="line">        DefaultRedisScript&lt;Long&gt; script = <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(RATE_LIMIT_SCRIPT, Long.class);</span><br><span class="line">        <span class="type">Long</span> <span class="variable">result</span> <span class="operator">=</span> redisTemplate.execute(script,</span><br><span class="line">            Collections.singletonList(key),</span><br><span class="line">            String.valueOf(limit), String.valueOf(windowSeconds));</span><br><span class="line">        <span class="keyword">return</span> Long.valueOf(<span class="number">1L</span>).equals(result);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：分布式锁释放"><a href="#实战：分布式锁释放" class="headerlink" title="实战：分布式锁释放"></a>实战：分布式锁释放</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 释放锁的Lua脚本</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">UNLOCK_SCRIPT</span> <span class="operator">=</span></span><br><span class="line">    <span class="string">&quot;if redis.call(&#x27;get&#x27;, KEYS[1]) == ARGV[1] then</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">    <span class="string">&quot;    return redis.call(&#x27;del&#x27;, KEYS[1])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">    <span class="string">&quot;else</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">    <span class="string">&quot;    return 0</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">    <span class="string">&quot;end&quot;</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">unlock</span><span class="params">(String lockKey, String lockValue)</span> &#123;</span><br><span class="line">    DefaultRedisScript&lt;Long&gt; script = <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(UNLOCK_SCRIPT, Long.class);</span><br><span class="line">    <span class="type">Long</span> <span class="variable">result</span> <span class="operator">=</span> redisTemplate.execute(script,</span><br><span class="line">        Collections.singletonList(lockKey), lockValue);</span><br><span class="line">    <span class="keyword">return</span> Long.valueOf(<span class="number">1L</span>).equals(result);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：滑动窗口限流"><a href="#实战：滑动窗口限流" class="headerlink" title="实战：滑动窗口限流"></a>实战：滑动窗口限流</h3><figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 滑动窗口限流脚本</span></span><br><span class="line"><span class="keyword">local</span> key = KEYS[<span class="number">1</span>]</span><br><span class="line"><span class="keyword">local</span> limit = <span class="built_in">tonumber</span>(ARGV[<span class="number">1</span>])</span><br><span class="line"><span class="keyword">local</span> window = <span class="built_in">tonumber</span>(ARGV[<span class="number">2</span>])</span><br><span class="line"><span class="keyword">local</span> now = <span class="built_in">tonumber</span>(ARGV[<span class="number">3</span>])</span><br><span class="line"><span class="keyword">local</span> memberId = ARGV[<span class="number">4</span>]</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 移除过期数据</span></span><br><span class="line">redis.call(<span class="string">&#x27;ZREMRANGEBYSCORE&#x27;</span>, key, <span class="number">0</span>, now - window * <span class="number">1000</span>)</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 统计当前窗口请求数</span></span><br><span class="line"><span class="keyword">local</span> count = redis.call(<span class="string">&#x27;ZCARD&#x27;</span>, key)</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> count &gt;= limit <span class="keyword">then</span></span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>  <span class="comment">-- 限流</span></span><br><span class="line"><span class="keyword">end</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 添加当前请求</span></span><br><span class="line">redis.call(<span class="string">&#x27;ZADD&#x27;</span>, key, now, memberId .. <span class="string">&#x27;:&#x27;</span> .. now)</span><br><span class="line">redis.call(<span class="string">&#x27;EXPIRE&#x27;</span>, key, window)</span><br><span class="line"></span><br><span class="line"><span class="keyword">return</span> <span class="number">1</span>  <span class="comment">-- 通过</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SlidingWindowRateLimiter</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">SLIDING_WINDOW_SCRIPT</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;local key = KEYS[1]</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local limit = tonumber(ARGV[1])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local window = tonumber(ARGV[2])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local now = tonumber(ARGV[3])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local memberId = ARGV[4]</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;ZREMRANGEBYSCORE&#x27;, key, 0, now - window * 1000)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local count = redis.call(&#x27;ZCARD&#x27;, key)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;if count &gt;= limit then return 0 end</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;ZADD&#x27;, key, now, memberId .. &#x27;:&#x27; .. now)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;EXPIRE&#x27;, key, window)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;return 1&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryAcquire</span><span class="params">(String key, <span class="type">int</span> limit, <span class="type">int</span> windowSeconds, String memberId)</span> &#123;</span><br><span class="line">        DefaultRedisScript&lt;Long&gt; script = <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(SLIDING_WINDOW_SCRIPT, Long.class);</span><br><span class="line">        <span class="type">Long</span> <span class="variable">result</span> <span class="operator">=</span> redisTemplate.execute(script,</span><br><span class="line">            Collections.singletonList(key),</span><br><span class="line">            String.valueOf(limit), String.valueOf(windowSeconds),</span><br><span class="line">            String.valueOf(System.currentTimeMillis()), memberId);</span><br><span class="line">        <span class="keyword">return</span> Long.valueOf(<span class="number">1L</span>).equals(result);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：库存扣减（防超卖）"><a href="#实战：库存扣减（防超卖）" class="headerlink" title="实战：库存扣减（防超卖）"></a>实战：库存扣减（防超卖）</h3><figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 库存扣减脚本</span></span><br><span class="line"><span class="keyword">local</span> key = KEYS[<span class="number">1</span>]</span><br><span class="line"><span class="keyword">local</span> quantity = <span class="built_in">tonumber</span>(ARGV[<span class="number">1</span>])</span><br><span class="line"></span><br><span class="line"><span class="keyword">local</span> stock = <span class="built_in">tonumber</span>(redis.call(<span class="string">&#x27;GET&#x27;</span>, key) <span class="keyword">or</span> <span class="string">&#x27;0&#x27;</span>)</span><br><span class="line"><span class="keyword">if</span> stock &lt; quantity <span class="keyword">then</span></span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>  <span class="comment">-- 库存不足</span></span><br><span class="line"><span class="keyword">end</span></span><br><span class="line"></span><br><span class="line">redis.call(<span class="string">&#x27;DECRBY&#x27;</span>, key, quantity)</span><br><span class="line"><span class="keyword">return</span> <span class="number">1</span>  <span class="comment">-- 扣减成功</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">StockLuaService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">DEDUCT_STOCK_SCRIPT</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;local key = KEYS[1]</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local quantity = tonumber(ARGV[1])</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;local stock = tonumber(redis.call(&#x27;GET&#x27;, key) or &#x27;0&#x27;)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;if stock &lt; quantity then return 0 end</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;DECRBY&#x27;, key, quantity)</span></span><br><span class="line"><span class="string">&quot;</span> +</span><br><span class="line">        <span class="string">&quot;return 1&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">deduct</span><span class="params">(String key, <span class="type">int</span> quantity)</span> &#123;</span><br><span class="line">        DefaultRedisScript&lt;Long&gt; script = <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(DEDUCT_STOCK_SCRIPT, Long.class);</span><br><span class="line">        <span class="type">Long</span> <span class="variable">result</span> <span class="operator">=</span> redisTemplate.execute(script,</span><br><span class="line">            Collections.singletonList(key), String.valueOf(quantity));</span><br><span class="line">        <span class="keyword">return</span> Long.valueOf(<span class="number">1L</span>).equals(result);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Pipeline-vs-Lua-vs-Transaction"><a href="#Pipeline-vs-Lua-vs-Transaction" class="headerlink" title="Pipeline vs Lua vs Transaction"></a>Pipeline vs Lua vs Transaction</h2><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Pipeline</th>
+<th>Lua脚本</th>
+<th>Transaction(MULTI)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>原子性</td>
+<td>❌</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>网络往返</td>
+<td>1次</td>
+<td>1次</td>
+<td>多次</td>
+</tr>
+<tr>
+<td>命令间依赖</td>
+<td>❌</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>性能</td>
+<td>最高</td>
+<td>高</td>
+<td>低</td>
+</tr>
+<tr>
+<td>复杂度</td>
+<td>低</td>
+<td>中</td>
+<td>低</td>
+</tr>
+<tr>
+<td>适用场景</td>
+<td>批量读写</td>
+<td>原子操作</td>
+<td>简单事务</td>
+</tr>
+</tbody></table>
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-Pipeline和Lua的区别？"><a href="#1-Pipeline和Lua的区别？" class="headerlink" title="1. Pipeline和Lua的区别？"></a>1. Pipeline和Lua的区别？</h3><p>Pipeline减少网络往返但不保证原子性；Lua脚本原子执行但脚本不能太长。批量读写用Pipeline，原子操作用Lua。</p>
+<h3 id="2-为什么Lua脚本是原子的？"><a href="#2-为什么Lua脚本是原子的？" class="headerlink" title="2. 为什么Lua脚本是原子的？"></a>2. 为什么Lua脚本是原子的？</h3><p>Redis是单线程执行命令的，Lua脚本作为一个整体被执行，执行期间不会处理其他客户端的命令。</p>
+<h3 id="3-Lua脚本有什么限制？"><a href="#3-Lua脚本有什么限制？" class="headerlink" title="3. Lua脚本有什么限制？"></a>3. Lua脚本有什么限制？</h3><p>脚本不能太长（默认5秒超时）；不能有死循环；KEYS参数必须传入所有操作的key（方便集群路由）。</p>
+<h2 id="最佳实践"><a href="#最佳实践" class="headerlink" title="最佳实践"></a>最佳实践</h2><ol>
+<li><strong>批量操作用Pipeline</strong>：减少网络往返</li>
+<li><strong>原子操作用Lua</strong>：保证一致性</li>
+<li><strong>Pipeline分批执行</strong>：每批500-1000条</li>
+<li><strong>Lua脚本设超时</strong>：避免死循环</li>
+<li><strong>Lua中用KEYS传key</strong>：集群环境下必须</li>
+</ol>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>Pipeline和Lua是Redis高性能操作的两把利器。2023年实战后，核心认知是：<strong>Pipeline解决网络往返问题，Lua解决原子性问题</strong>。批量读写用Pipeline，分布式锁释放、限流、库存扣减用Lua——选对工具才能发挥Redis的最大价值。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/04/23/synchronized-yu-lock-suo-dao-di-yong-na-ge/">Synchronized与Lock锁——到底用哪个</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/05/01/concurrenthashmap-yuan-ma-fen-xi-jdk7-yu-jdk8-de-yan-jin/">ConcurrentHashMap源码分析——JDK7与JDK8的演进</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Pipeline%E2%80%94%E2%80%94%E6%89%B9%E9%87%8F%E6%93%8D%E4%BD%9C%E5%87%8F%E5%B0%91%E7%BD%91%E7%BB%9C%E5%BE%80%E8%BF%94"><span class="toc-number">2.</span> <span class="toc-text">Pipeline——批量操作减少网络往返</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81Pipeline"><span class="toc-number">2.1.</span> <span class="toc-text">为什么需要Pipeline</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Pipeline%E4%BD%BF%E7%94%A8"><span class="toc-number">2.2.</span> <span class="toc-text">Pipeline使用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E6%88%98%EF%BC%9A%E6%89%B9%E9%87%8F%E7%BC%93%E5%AD%98%E7%94%A8%E6%88%B7%E4%BF%A1%E6%81%AF"><span class="toc-number">2.3.</span> <span class="toc-text">实战：批量缓存用户信息</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Pipeline%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A1%B9"><span class="toc-number">2.4.</span> <span class="toc-text">Pipeline注意事项</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Lua%E8%84%9A%E6%9C%AC%E2%80%94%E2%80%94%E5%8E%9F%E5%AD%90%E6%93%8D%E4%BD%9C%E7%9A%84%E5%88%A9%E5%99%A8"><span class="toc-number">3.</span> <span class="toc-text">Lua脚本——原子操作的利器</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81Lua"><span class="toc-number">3.1.</span> <span class="toc-text">为什么需要Lua</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Lua%E8%84%9A%E6%9C%AC%E5%9F%BA%E7%A1%80"><span class="toc-number">3.2.</span> <span class="toc-text">Lua脚本基础</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Java%E6%89%A7%E8%A1%8CLua%E8%84%9A%E6%9C%AC"><span class="toc-number">3.3.</span> <span class="toc-text">Java执行Lua脚本</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E6%88%98%EF%BC%9A%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E9%87%8A%E6%94%BE"><span class="toc-number">3.4.</span> <span class="toc-text">实战：分布式锁释放</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E6%88%98%EF%BC%9A%E6%BB%91%E5%8A%A8%E7%AA%97%E5%8F%A3%E9%99%90%E6%B5%81"><span class="toc-number">3.5.</span> <span class="toc-text">实战：滑动窗口限流</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E6%88%98%EF%BC%9A%E5%BA%93%E5%AD%98%E6%89%A3%E5%87%8F%EF%BC%88%E9%98%B2%E8%B6%85%E5%8D%96%EF%BC%89"><span class="toc-number">3.6.</span> <span class="toc-text">实战：库存扣减（防超卖）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Pipeline-vs-Lua-vs-Transaction"><span class="toc-number">4.</span> <span class="toc-text">Pipeline vs Lua vs Transaction</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91%E9%97%AE%E9%A2%98"><span class="toc-number">5.</span> <span class="toc-text">面试高频问题</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-Pipeline%E5%92%8CLua%E7%9A%84%E5%8C%BA%E5%88%AB%EF%BC%9F"><span class="toc-number">5.1.</span> <span class="toc-text">1. Pipeline和Lua的区别？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E4%B8%BA%E4%BB%80%E4%B9%88Lua%E8%84%9A%E6%9C%AC%E6%98%AF%E5%8E%9F%E5%AD%90%E7%9A%84%EF%BC%9F"><span class="toc-number">5.2.</span> <span class="toc-text">2. 为什么Lua脚本是原子的？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-Lua%E8%84%9A%E6%9C%AC%E6%9C%89%E4%BB%80%E4%B9%88%E9%99%90%E5%88%B6%EF%BC%9F"><span class="toc-number">5.3.</span> <span class="toc-text">3. Lua脚本有什么限制？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">6.</span> <span class="toc-text">最佳实践</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">7.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/Redis/" class="tag" aria-label="标签: #Redis">#Redis</a>
+            
+                <a href="/tags/JVM/" class="tag" aria-label="标签: #JVM">#JVM</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(265)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/Redis/" aria-label="分类: Redis">
+                        Redis
+                        <span>(7)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<script>
+    // 打字效果
+    document.addEventListener('DOMContentLoaded', function() {
+        const typedText = document.querySelector('.typed-text');
+        if (typedText) {
+            const text = 'grq';
+            let index = 0;
+            let direction = 1;
+            
+            function type() {
+                if (direction === 1) {
+                    typedText.textContent = text.substring(0, index + 1);
+                    index++;
+                    if (index >= text.length) {
+                        direction = -1;
+                        setTimeout(type, 2000);
+                        return;
+                    }
+                } else {
+                    typedText.textContent = text.substring(0, index - 1);
+                    index--;
+                    if (index <= 0) {
+                        direction = 1;
+                        setTimeout(type, 500);
+                        return;
+                    }
+                }
+                setTimeout(type, 150);
+            }
+            
+            type();
+        }
+    });
+</script>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function overrideHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+    
+    document.addEventListener('DOMContentLoaded', overrideHbeStyles);
+    setTimeout(overrideHbeStyles, 100);
+    setTimeout(overrideHbeStyles, 500);
+    setTimeout(overrideHbeStyles, 1000);
+    setInterval(overrideHbeStyles, 3000);
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

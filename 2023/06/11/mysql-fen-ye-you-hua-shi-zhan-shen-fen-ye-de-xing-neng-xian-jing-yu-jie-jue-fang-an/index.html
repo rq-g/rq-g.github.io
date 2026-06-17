@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MySQL分页优化实战——深分页的性能陷阱与解决方案 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="MySQL分页优化实战——深分页的性能陷阱与解决方案">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/06/11/mysql-fen-ye-you-hua-shi-zhan-shen-fen-ye-de-xing-neng-xian-jing-yu-jie-jue-fang-an/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言运营后台导出10万条数据，翻到第5000页时接口直接超时。排查发现是深分页问题——LIMIT50000,10需要扫描50010行数据再丢弃前50000行。这是MySQL分页的经典性能陷阱，2023年我总结了所有分页优化方案，从此深分页不再是难题。深分页为什么慢12345678--浅分页：很快SELECT*">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+            </a>
+            <a href="mailto:gaoruiqiang@email.com" class="social-link" title="邮箱">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                </svg>
+            </a>
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">MySQL分页优化实战——深分页的性能陷阱与解决方案</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-06-11T14:30:09.000Z">2023-06-11</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL/">MySQL</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>运营后台导出10万条数据，翻到第5000页时接口直接超时。排查发现是深分页问题——LIMIT 50000, 10需要扫描50010行数据再丢弃前50000行。这是MySQL分页的经典性能陷阱，2023年我总结了所有分页优化方案，从此深分页不再是难题。</p>
+<h2 id="深分页为什么慢"><a href="#深分页为什么慢" class="headerlink" title="深分页为什么慢"></a>深分页为什么慢</h2><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 浅分页：很快</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">ORDER</span> <span class="keyword">BY</span> id LIMIT <span class="number">10</span>;</span><br><span class="line"><span class="comment">-- 只扫描10行</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 深分页：很慢</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">ORDER</span> <span class="keyword">BY</span> id LIMIT <span class="number">500000</span>, <span class="number">10</span>;</span><br><span class="line"><span class="comment">-- 扫描500010行，丢弃前500000行，只返回10行</span></span><br><span class="line"><span class="comment">-- 99.998%的工作是浪费的！</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="执行过程分析"><a href="#执行过程分析" class="headerlink" title="执行过程分析"></a>执行过程分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">LIMIT offset, size 的执行过程：</span><br><span class="line"></span><br><span class="line">1. 从索引的起始位置开始扫描</span><br><span class="line">2. 扫描 offset + size 条记录</span><br><span class="line">3. 丢弃前 offset 条记录</span><br><span class="line">4. 返回 size 条记录</span><br><span class="line"></span><br><span class="line">offset越大，扫描的无效数据越多，性能越差</span><br></pre></td></tr></table></figure>
+
+<h2 id="优化方案一：延迟关联（推荐）"><a href="#优化方案一：延迟关联（推荐）" class="headerlink" title="优化方案一：延迟关联（推荐）"></a>优化方案一：延迟关联（推荐）</h2><p>核心思想：先通过覆盖索引快速定位ID，再回表获取完整数据。</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 原始SQL：深分页，慢</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` </span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> </span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> create_time <span class="keyword">DESC</span> </span><br><span class="line">LIMIT <span class="number">500000</span>, <span class="number">10</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化SQL：延迟关联，快</span></span><br><span class="line"><span class="keyword">SELECT</span> o.<span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` o</span><br><span class="line"><span class="keyword">INNER</span> <span class="keyword">JOIN</span> (</span><br><span class="line">    <span class="keyword">SELECT</span> id <span class="keyword">FROM</span> `<span class="keyword">order</span>` </span><br><span class="line">    <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> </span><br><span class="line">    <span class="keyword">ORDER</span> <span class="keyword">BY</span> create_time <span class="keyword">DESC</span> </span><br><span class="line">    LIMIT <span class="number">500000</span>, <span class="number">10</span></span><br><span class="line">) t <span class="keyword">ON</span> o.id <span class="operator">=</span> t.id;</span><br></pre></td></tr></table></figure>
+
+<h3 id="原理分析"><a href="#原理分析" class="headerlink" title="原理分析"></a>原理分析</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 子查询只查id，走覆盖索引，不需要回表</span></span><br><span class="line"><span class="comment">-- 覆盖索引扫描速度远快于全字段扫描</span></span><br><span class="line">EXPLAIN <span class="keyword">SELECT</span> id <span class="keyword">FROM</span> `<span class="keyword">order</span>` </span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> </span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> create_time <span class="keyword">DESC</span> </span><br><span class="line">LIMIT <span class="number">500000</span>, <span class="number">10</span>;</span><br><span class="line"><span class="comment">-- type=range, key=idx_status_create_time, Extra=Using index</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 外层查询通过主键关联，只需要回表10次</span></span><br><span class="line"><span class="comment">-- 从500010次回表 → 10次回表</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="性能对比"><a href="#性能对比" class="headerlink" title="性能对比"></a>性能对比</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">原始SQL：    2.5s</span><br><span class="line">延迟关联SQL： 0.3s</span><br><span class="line">提升：       约8倍</span><br></pre></td></tr></table></figure>
+
+<h2 id="优化方案二：游标分页（适合APP-无限滚动）"><a href="#优化方案二：游标分页（适合APP-无限滚动）" class="headerlink" title="优化方案二：游标分页（适合APP&#x2F;无限滚动）"></a>优化方案二：游标分页（适合APP&#x2F;无限滚动）</h2><p>核心思想：记住上一页最后一条记录的位置，下一页从该位置开始。</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 第一页</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` </span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> </span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> id <span class="keyword">DESC</span> </span><br><span class="line">LIMIT <span class="number">10</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 假设第一页最后一条记录的id = 999990</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第二页：用id替代offset</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` </span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">AND</span> id <span class="operator">&lt;</span> <span class="number">999990</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> id <span class="keyword">DESC</span> </span><br><span class="line">LIMIT <span class="number">10</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第三页：假设第二页最后一条id = 999980</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` </span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">AND</span> id <span class="operator">&lt;</span> <span class="number">999980</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> id <span class="keyword">DESC</span> </span><br><span class="line">LIMIT <span class="number">10</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="MyBatis-Plus实现"><a href="#MyBatis-Plus实现" class="headerlink" title="MyBatis Plus实现"></a>MyBatis Plus实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 传统分页（深分页慢）</span></span><br><span class="line">Page&lt;Order&gt; page = orderMapper.selectPage(</span><br><span class="line">    <span class="keyword">new</span> <span class="title class_">Page</span>&lt;&gt;(<span class="number">50000</span>, <span class="number">10</span>),  <span class="comment">// 第50000页</span></span><br><span class="line">    <span class="keyword">new</span> <span class="title class_">LambdaQueryWrapper</span>&lt;Order&gt;()</span><br><span class="line">        .eq(Order::getStatus, <span class="number">1</span>)</span><br><span class="line">        .orderByDesc(Order::getId)</span><br><span class="line">);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 游标分页（深分页快）</span></span><br><span class="line">List&lt;Order&gt; list = orderMapper.selectList(</span><br><span class="line">    <span class="keyword">new</span> <span class="title class_">LambdaQueryWrapper</span>&lt;Order&gt;()</span><br><span class="line">        .eq(Order::getStatus, <span class="number">1</span>)</span><br><span class="line">        .lt(lastId != <span class="literal">null</span>, Order::getId, lastId)  <span class="comment">// 游标条件</span></span><br><span class="line">        .orderByDesc(Order::getId)</span><br><span class="line">        .last(<span class="string">&quot;LIMIT 10&quot;</span>)</span><br><span class="line">);</span><br></pre></td></tr></table></figure>
+
+<h3 id="游标分页的局限"><a href="#游标分页的局限" class="headerlink" title="游标分页的局限"></a>游标分页的局限</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">优点：</span><br><span class="line">- 深分页性能极好，与页数无关</span><br><span class="line">- 每次查询都是LIMIT 10，扫描行数固定</span><br><span class="line"></span><br><span class="line">缺点：</span><br><span class="line">- 不能跳转到指定页码</span><br><span class="line">- 不适合需要总页数的场景</span><br><span class="line">- 排序字段必须有索引且值唯一</span><br><span class="line">- 新增/删除数据可能导致数据重复或遗漏</span><br></pre></td></tr></table></figure>
+
+<h2 id="优化方案三：Between…And范围查询"><a href="#优化方案三：Between…And范围查询" class="headerlink" title="优化方案三：Between…And范围查询"></a>优化方案三：Between…And范围查询</h2><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 适合按自增主键排序的分页</span></span><br><span class="line"><span class="comment">-- 第一页</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">WHERE</span> id <span class="keyword">BETWEEN</span> <span class="number">1</span> <span class="keyword">AND</span> <span class="number">10</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第二页</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">WHERE</span> id <span class="keyword">BETWEEN</span> <span class="number">11</span> <span class="keyword">AND</span> <span class="number">20</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 问题：如果有删除操作，每页条数可能不足10条</span></span><br><span class="line"><span class="comment">-- 改进：用大于号</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">WHERE</span> id <span class="operator">&gt;</span> <span class="number">0</span> LIMIT <span class="number">10</span>;        <span class="comment">-- 第一页</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">WHERE</span> id <span class="operator">&gt;</span> <span class="number">10</span> LIMIT <span class="number">10</span>;       <span class="comment">-- 第二页</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">WHERE</span> id <span class="operator">&gt;</span> <span class="number">20</span> LIMIT <span class="number">10</span>;       <span class="comment">-- 第三页</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="优化方案四：缓存总结果集"><a href="#优化方案四：缓存总结果集" class="headerlink" title="优化方案四：缓存总结果集"></a>优化方案四：缓存总结果集</h2><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 适合数据量不大且查询条件固定的场景</span></span><br><span class="line"><span class="comment">-- 第一次查询：将结果集ID缓存到Redis</span></span><br><span class="line"><span class="keyword">SELECT</span> id <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">ORDER</span> <span class="keyword">BY</span> create_time <span class="keyword">DESC</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 将所有ID存入Redis List</span></span><br><span class="line"><span class="comment">-- LPUSH order:list id1 id2 id3 ...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 分页时从Redis取ID</span></span><br><span class="line"><span class="comment">-- LRANGE order:list 500000 500009</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 再根据ID查完整数据</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> `<span class="keyword">order</span>` <span class="keyword">WHERE</span> id <span class="keyword">IN</span> (id1, id2, ..., id10);</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderPageService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> StringRedisTemplate redisTemplate;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> OrderMapper orderMapper;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">CACHE_KEY</span> <span class="operator">=</span> <span class="string">&quot;order:page:list&quot;</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">CACHE_TTL</span> <span class="operator">=</span> <span class="number">30</span>; <span class="comment">// 分钟</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 缓存分页方案</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> List&lt;Order&gt; <span class="title function_">pageByCache</span><span class="params">(<span class="type">int</span> pageNum, <span class="type">int</span> pageSize)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">cacheKey</span> <span class="operator">=</span> CACHE_KEY;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 第一次查询时构建缓存</span></span><br><span class="line">        <span class="keyword">if</span> (!Boolean.TRUE.equals(redisTemplate.hasKey(cacheKey))) &#123;</span><br><span class="line">            List&lt;Long&gt; ids = orderMapper.selectIdList();</span><br><span class="line">            <span class="keyword">if</span> (CollUtil.isNotEmpty(ids)) &#123;</span><br><span class="line">                Long[] idArray = ids.stream()</span><br><span class="line">                    .map(String::valueOf)</span><br><span class="line">                    .toArray(Long[]::<span class="keyword">new</span>);</span><br><span class="line">                redisTemplate.opsForList().rightPushAll(cacheKey, </span><br><span class="line">                    ids.stream().map(String::valueOf).collect(Collectors.toList()));</span><br><span class="line">                redisTemplate.expire(cacheKey, CACHE_TTL, TimeUnit.MINUTES);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 从Redis分页取ID</span></span><br><span class="line">        List&lt;String&gt; idStrList = redisTemplate.opsForList()</span><br><span class="line">            .range(cacheKey, (<span class="type">long</span>) (pageNum - <span class="number">1</span>) * pageSize, </span><br><span class="line">                   (<span class="type">long</span>) pageNum * pageSize - <span class="number">1</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (CollUtil.isEmpty(idStrList)) &#123;</span><br><span class="line">            <span class="keyword">return</span> Collections.emptyList();</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 根据ID查完整数据</span></span><br><span class="line">        List&lt;Long&gt; ids = idStrList.stream()</span><br><span class="line">            .map(Long::valueOf).collect(Collectors.toList());</span><br><span class="line">        <span class="keyword">return</span> orderMapper.selectBatchIds(ids);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="优化方案五：禁止深分页"><a href="#优化方案五：禁止深分页" class="headerlink" title="优化方案五：禁止深分页"></a>优化方案五：禁止深分页</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">最简单有效的方案：禁止深分页</span><br><span class="line"></span><br><span class="line">1. 限制最大页码</span><br><span class="line">   if (pageNum &gt; 1000) &#123;</span><br><span class="line">       throw new BusinessException(&quot;页码不能超过1000&quot;);</span><br><span class="line">   &#125;</span><br><span class="line"></span><br><span class="line">2. 限制查询时间范围</span><br><span class="line">   -- 只能查最近3个月的数据</span><br><span class="line">   WHERE create_time &gt;= DATE_SUB(NOW(), INTERVAL 3 MONTH)</span><br><span class="line"></span><br><span class="line">3. 引导用户使用筛选条件</span><br><span class="line">   -- 不要从第1页翻到第5000页</span><br><span class="line">   -- 而是通过时间、状态等条件缩小范围</span><br><span class="line"></span><br><span class="line">4. 导出场景使用流式查询</span><br><span class="line">   -- 不要用分页导出，用游标逐批读取</span><br></pre></td></tr></table></figure>
+
+<h2 id="流式查询：大数据量导出"><a href="#流式查询：大数据量导出" class="headerlink" title="流式查询：大数据量导出"></a>流式查询：大数据量导出</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderExportService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlSessionFactory sqlSessionFactory;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 流式查询导出，避免OOM</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">export</span><span class="params">(HttpServletResponse response)</span> <span class="keyword">throws</span> IOException &#123;</span><br><span class="line">        response.setContentType(<span class="string">&quot;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&quot;</span>);</span><br><span class="line">        response.setHeader(<span class="string">&quot;Content-Disposition&quot;</span>, <span class="string">&quot;attachment;filename=orders.xlsx&quot;</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">try</span> (<span class="type">SqlSession</span> <span class="variable">sqlSession</span> <span class="operator">=</span> sqlSessionFactory.openSession();</span><br><span class="line">             <span class="type">ExcelWriter</span> <span class="variable">writer</span> <span class="operator">=</span> EasyExcel.write(response.getOutputStream()).build()) &#123;</span><br><span class="line"></span><br><span class="line">            <span class="type">WriteSheet</span> <span class="variable">sheet</span> <span class="operator">=</span> EasyExcel.writerSheet(<span class="string">&quot;订单&quot;</span>).build();</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 流式查询：每次从数据库读取1000条</span></span><br><span class="line">            <span class="keyword">try</span> (Cursor&lt;Order&gt; cursor = sqlSession.selectCursor(</span><br><span class="line">                    <span class="string">&quot;com.example.mapper.OrderMapper.selectByStream&quot;</span>)) &#123;</span><br><span class="line"></span><br><span class="line">                List&lt;Order&gt; batch = <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(<span class="number">1000</span>);</span><br><span class="line">                <span class="keyword">for</span> (Order order : cursor) &#123;</span><br><span class="line">                    batch.add(order);</span><br><span class="line">                    <span class="keyword">if</span> (batch.size() &gt;= <span class="number">1000</span>) &#123;</span><br><span class="line">                        writer.write(batch, sheet);</span><br><span class="line">                        batch.clear();</span><br><span class="line">                    &#125;</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="keyword">if</span> (!batch.isEmpty()) &#123;</span><br><span class="line">                    writer.write(batch, sheet);</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">&lt;!-- Mapper XML：流式查询 --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">select</span> <span class="attr">id</span>=<span class="string">&quot;selectByStream&quot;</span> <span class="attr">resultType</span>=<span class="string">&quot;com.example.entity.Order&quot;</span> <span class="attr">fetchSize</span>=<span class="string">&quot;1000&quot;</span>&gt;</span></span><br><span class="line">    SELECT * FROM `order` WHERE status = 1 ORDER BY id</span><br><span class="line"><span class="tag">&lt;/<span class="name">select</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="分页优化方案对比"><a href="#分页优化方案对比" class="headerlink" title="分页优化方案对比"></a>分页优化方案对比</h2><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>适用场景</th>
+<th>性能</th>
+<th>支持跳页</th>
+<th>实现复杂度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>延迟关联</td>
+<td>通用场景</td>
+<td>高</td>
+<td>是</td>
+<td>低</td>
+</tr>
+<tr>
+<td>游标分页</td>
+<td>APP&#x2F;无限滚动</td>
+<td>极高</td>
+<td>否</td>
+<td>低</td>
+</tr>
+<tr>
+<td>Between范围</td>
+<td>自增主键排序</td>
+<td>极高</td>
+<td>否</td>
+<td>低</td>
+</tr>
+<tr>
+<td>缓存结果集</td>
+<td>数据量小&#x2F;查询固定</td>
+<td>高</td>
+<td>是</td>
+<td>中</td>
+</tr>
+<tr>
+<td>禁止深分页</td>
+<td>后台管理</td>
+<td>-</td>
+<td>-</td>
+<td>低</td>
+</tr>
+<tr>
+<td>流式查询</td>
+<td>数据导出</td>
+<td>高</td>
+<td>-</td>
+<td>中</td>
+</tr>
+</tbody></table>
+<h2 id="分页查询最佳实践"><a href="#分页查询最佳实践" class="headerlink" title="分页查询最佳实践"></a>分页查询最佳实践</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">1. 优先使用延迟关联</span><br><span class="line">   通用性强，改造成本低</span><br><span class="line"></span><br><span class="line">2. APP端使用游标分页</span><br><span class="line">   无限滚动场景，性能最好</span><br><span class="line"></span><br><span class="line">3. 导出使用流式查询</span><br><span class="line">   避免OOM，逐批处理</span><br><span class="line"></span><br><span class="line">4. 限制最大页码</span><br><span class="line">   超过1000页的查询没有实际意义</span><br><span class="line"></span><br><span class="line">5. 必须有排序字段</span><br><span class="line">   不加ORDER BY的分页结果不确定</span><br><span class="line"></span><br><span class="line">6. 排序字段必须有索引</span><br><span class="line">   否则会产生filesort</span><br><span class="line"></span><br><span class="line">7. 避免SELECT *</span><br><span class="line">   只查需要的字段，减少数据传输</span><br></pre></td></tr></table></figure>
+
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>深分页的本质问题：<strong>offset越大，无效扫描越多</strong>。延迟关联用覆盖索引减少回表，游标分页用位置标记替代offset，流式查询逐批处理避免OOM。选择方案时，后台管理推荐延迟关联+限制页码，APP端推荐游标分页，数据导出推荐流式查询。记住：最好的优化不是让深分页变快，而是避免深分页。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/06/11/mysql-shi-wu-ge-chi-ji-bie-yu-mvcc-shi-xian-cong-yuan-li-dao-shi-zhan/">MySQL事务隔离级别与MVCC实现——从原理到实战</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/06/18/nacos-fu-wu-zhu-ce-fa-xian-yuan-li-xin-tiao-yu-jian-kang-jian-cha/">Nacos服务注册发现原理——心跳与健康检查</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%B7%B1%E5%88%86%E9%A1%B5%E4%B8%BA%E4%BB%80%E4%B9%88%E6%85%A2"><span class="toc-number">2.</span> <span class="toc-text">深分页为什么慢</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B%E5%88%86%E6%9E%90"><span class="toc-number">2.1.</span> <span class="toc-text">执行过程分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88%E4%B8%80%EF%BC%9A%E5%BB%B6%E8%BF%9F%E5%85%B3%E8%81%94%EF%BC%88%E6%8E%A8%E8%8D%90%EF%BC%89"><span class="toc-number">3.</span> <span class="toc-text">优化方案一：延迟关联（推荐）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90"><span class="toc-number">3.1.</span> <span class="toc-text">原理分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%80%A7%E8%83%BD%E5%AF%B9%E6%AF%94"><span class="toc-number">3.2.</span> <span class="toc-text">性能对比</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88%E4%BA%8C%EF%BC%9A%E6%B8%B8%E6%A0%87%E5%88%86%E9%A1%B5%EF%BC%88%E9%80%82%E5%90%88APP-%E6%97%A0%E9%99%90%E6%BB%9A%E5%8A%A8%EF%BC%89"><span class="toc-number">4.</span> <span class="toc-text">优化方案二：游标分页（适合APP&#x2F;无限滚动）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#MyBatis-Plus%E5%AE%9E%E7%8E%B0"><span class="toc-number">4.1.</span> <span class="toc-text">MyBatis Plus实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%B8%B8%E6%A0%87%E5%88%86%E9%A1%B5%E7%9A%84%E5%B1%80%E9%99%90"><span class="toc-number">4.2.</span> <span class="toc-text">游标分页的局限</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88%E4%B8%89%EF%BC%9ABetween%E2%80%A6And%E8%8C%83%E5%9B%B4%E6%9F%A5%E8%AF%A2"><span class="toc-number">5.</span> <span class="toc-text">优化方案三：Between…And范围查询</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88%E5%9B%9B%EF%BC%9A%E7%BC%93%E5%AD%98%E6%80%BB%E7%BB%93%E6%9E%9C%E9%9B%86"><span class="toc-number">6.</span> <span class="toc-text">优化方案四：缓存总结果集</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88%E4%BA%94%EF%BC%9A%E7%A6%81%E6%AD%A2%E6%B7%B1%E5%88%86%E9%A1%B5"><span class="toc-number">7.</span> <span class="toc-text">优化方案五：禁止深分页</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%B5%81%E5%BC%8F%E6%9F%A5%E8%AF%A2%EF%BC%9A%E5%A4%A7%E6%95%B0%E6%8D%AE%E9%87%8F%E5%AF%BC%E5%87%BA"><span class="toc-number">8.</span> <span class="toc-text">流式查询：大数据量导出</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%88%86%E9%A1%B5%E4%BC%98%E5%8C%96%E6%96%B9%E6%A1%88%E5%AF%B9%E6%AF%94"><span class="toc-number">9.</span> <span class="toc-text">分页优化方案对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%88%86%E9%A1%B5%E6%9F%A5%E8%AF%A2%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">10.</span> <span class="toc-text">分页查询最佳实践</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">11.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/MySQL/" class="tag" aria-label="标签: #MySQL">#MySQL</a>
+            
+                <a href="/tags/%E6%80%A7%E8%83%BD/" class="tag" aria-label="标签: #性能">#性能</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(265)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL/" aria-label="分类: MySQL">
+                        MySQL
+                        <span>(2)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<script>
+    // 打字效果
+    document.addEventListener('DOMContentLoaded', function() {
+        const typedText = document.querySelector('.typed-text');
+        if (typedText) {
+            const text = 'grq';
+            let index = 0;
+            let direction = 1;
+            
+            function type() {
+                if (direction === 1) {
+                    typedText.textContent = text.substring(0, index + 1);
+                    index++;
+                    if (index >= text.length) {
+                        direction = -1;
+                        setTimeout(type, 2000);
+                        return;
+                    }
+                } else {
+                    typedText.textContent = text.substring(0, index - 1);
+                    index--;
+                    if (index <= 0) {
+                        direction = 1;
+                        setTimeout(type, 500);
+                        return;
+                    }
+                }
+                setTimeout(type, 150);
+            }
+            
+            type();
+        }
+    });
+</script>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function overrideHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+    
+    document.addEventListener('DOMContentLoaded', overrideHbeStyles);
+    setTimeout(overrideHbeStyles, 100);
+    setTimeout(overrideHbeStyles, 500);
+    setTimeout(overrideHbeStyles, 1000);
+    setInterval(overrideHbeStyles, 3000);
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

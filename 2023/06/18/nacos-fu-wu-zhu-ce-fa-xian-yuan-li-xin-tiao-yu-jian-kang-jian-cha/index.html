@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>Nacos服务注册发现原理——心跳与健康检查 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="Nacos服务注册发现原理——心跳与健康检查">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/06/18/nacos-fu-wu-zhu-ce-fa-xian-yuan-li-xin-tiao-yu-jian-kang-jian-cha/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言项目从单体架构转向微服务，第一个要解决的就是服务注册发现。选了Nacos作为注册中心和配置中心，但只停留在”引入依赖就能用”的层面。2023年深入Nacos原理后，终于理解了心跳机制、健康检查、配置刷新的底层逻辑。Nacos核心架构12345678910111213141516┌─────────────">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+            </a>
+            <a href="mailto:gaoruiqiang@email.com" class="social-link" title="邮箱">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                </svg>
+            </a>
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">Nacos服务注册发现原理——心跳与健康检查</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-06-18T08:30:42.000Z">2023-06-18</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>项目从单体架构转向微服务，第一个要解决的就是服务注册发现。选了Nacos作为注册中心和配置中心，但只停留在”引入依赖就能用”的层面。2023年深入Nacos原理后，终于理解了心跳机制、健康检查、配置刷新的底层逻辑。</p>
+<h2 id="Nacos核心架构"><a href="#Nacos核心架构" class="headerlink" title="Nacos核心架构"></a>Nacos核心架构</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────┐     ┌──────────────┐</span><br><span class="line">│   Provider   │     │   Consumer   │</span><br><span class="line">│  (服务提供者) │     │  (服务消费者) │</span><br><span class="line">└──────┬───────┘     └──────┬───────┘</span><br><span class="line">       │ 注册/心跳          │ 订阅/发现</span><br><span class="line">       ↓                   ↓</span><br><span class="line">┌──────────────────────────────────┐</span><br><span class="line">│           Nacos Server           │</span><br><span class="line">│  ┌──────────┐  ┌──────────┐     │</span><br><span class="line">│  │ 注册中心  │  │ 配置中心  │     │</span><br><span class="line">│  └──────────┘  └──────────┘     │</span><br><span class="line">│  ┌──────────────────────────┐   │</span><br><span class="line">│  │  服务列表 + 健康状态      │   │</span><br><span class="line">│  │  配置数据 + 版本管理      │   │</span><br><span class="line">│  └──────────────────────────┘   │</span><br><span class="line">└──────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h2 id="服务注册原理"><a href="#服务注册原理" class="headerlink" title="服务注册原理"></a>服务注册原理</h2><h3 id="临时实例-vs-持久实例"><a href="#临时实例-vs-持久实例" class="headerlink" title="临时实例 vs 持久实例"></a>临时实例 vs 持久实例</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">临时实例（ephemeral）：客户端心跳保活，不心跳则剔除</span><br><span class="line">持久实例（persistent）：服务端主动探测，永远不剔除</span><br><span class="line"></span><br><span class="line">默认是临时实例</span><br><span class="line">spring.cloud.nacos.discovery.ephemeral=true</span><br></pre></td></tr></table></figure>
+
+<h3 id="注册流程"><a href="#注册流程" class="headerlink" title="注册流程"></a>注册流程</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 1. 服务启动时自动注册</span></span><br><span class="line"><span class="comment">// NacosAutoRegistration → NacosServiceRegistry.register()</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">register</span><span class="params">(Registration registration)</span> &#123;</span><br><span class="line">    <span class="type">NamingService</span> <span class="variable">namingService</span> <span class="operator">=</span> namingService();</span><br><span class="line">    <span class="type">String</span> <span class="variable">serviceId</span> <span class="operator">=</span> registration.getServiceId();</span><br><span class="line">    <span class="type">Instance</span> <span class="variable">instance</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Instance</span>();</span><br><span class="line">    instance.setIp(ip);</span><br><span class="line">    instance.setPort(port);</span><br><span class="line">    instance.setWeight(weight);</span><br><span class="line">    instance.setClusterName(clusterName);</span><br><span class="line">    instance.setEphemeral(ephemeral);  <span class="comment">// 临时实例</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 注册元数据</span></span><br><span class="line">    Map&lt;String, String&gt; metadata = registration.getMetadata();</span><br><span class="line">    instance.setMetadata(metadata);</span><br><span class="line"></span><br><span class="line">    namingService.registerInstance(serviceId, group, instance);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 2. registerInstance核心逻辑</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">registerInstance</span><span class="params">(String serviceName, String groupName, Instance instance)</span> &#123;</span><br><span class="line">    <span class="comment">// 临时实例：使用gRPC长连接注册</span></span><br><span class="line">    <span class="keyword">if</span> (instance.isEphemeral()) &#123;</span><br><span class="line">        <span class="comment">// 注册到Nacos Server</span></span><br><span class="line">        serverProxy.registerService(serviceName, groupName, instance);</span><br><span class="line">        <span class="comment">// 启动心跳任务</span></span><br><span class="line">        beatReactor.addBeatInfo(serviceName, instance);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">// 持久实例：使用HTTP注册</span></span><br><span class="line">        serverProxy.registerServiceForPersistent(serviceName, groupName, instance);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="心跳机制"><a href="#心跳机制" class="headerlink" title="心跳机制"></a>心跳机制</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 临时实例通过心跳保活</span></span><br><span class="line"><span class="comment">// BeatReactor.BeatTask.run()</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">run</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="comment">// 发送心跳</span></span><br><span class="line">    <span class="type">JSONObject</span> <span class="variable">result</span> <span class="operator">=</span> serverProxy.sendBeat(beatInfo);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 检查心跳结果</span></span><br><span class="line">    <span class="type">long</span> <span class="variable">interval</span> <span class="operator">=</span> result.getIntValue(<span class="string">&quot;clientBeatInterval&quot;</span>);</span><br><span class="line">    <span class="keyword">if</span> (interval &gt; <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="comment">// 更新心跳间隔</span></span><br><span class="line">        beatInfo.setPeriod(interval);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 安排下一次心跳</span></span><br><span class="line">    executorService.schedule(<span class="keyword">new</span> <span class="title class_">BeatTask</span>(beatInfo), beatInfo.getPeriod(), TimeUnit.MILLISECONDS);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 默认心跳间隔：5秒</span></span><br><span class="line"><span class="comment">// Nacos Server 15秒未收到心跳 → 标记不健康</span></span><br><span class="line"><span class="comment">// Nacos Server 30秒未收到心跳 → 剔除实例</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="gRPC长连接（Nacos-2-0-）"><a href="#gRPC长连接（Nacos-2-0-）" class="headerlink" title="gRPC长连接（Nacos 2.0+）"></a>gRPC长连接（Nacos 2.0+）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Nacos 2.0+使用gRPC长连接替代心跳</span></span><br><span class="line"><span class="comment">// 优点：</span></span><br><span class="line"><span class="comment">// 1. 连接断开立即感知，不需要等15秒</span></span><br><span class="line"><span class="comment">// 2. 减少心跳请求，降低Server压力</span></span><br><span class="line"><span class="comment">// 3. 支持双向流，配置推送更实时</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 连接建立：</span></span><br><span class="line"><span class="comment">// Client → gRPC Connect → Server</span></span><br><span class="line"><span class="comment">// Server → ConnectionEvent → Client</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 连接保活：</span></span><br><span class="line"><span class="comment">// Client → Ping → Server (每20秒)</span></span><br><span class="line"><span class="comment">// Server → Pong → Client</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 连接断开：</span></span><br><span class="line"><span class="comment">// Server检测到连接断开 → 标记不健康 → 20秒后剔除</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="服务发现原理"><a href="#服务发现原理" class="headerlink" title="服务发现原理"></a>服务发现原理</h2><h3 id="订阅机制"><a href="#订阅机制" class="headerlink" title="订阅机制"></a>订阅机制</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 消费者订阅服务列表</span></span><br><span class="line"><span class="comment">// NacosDiscoveryClient.getInstances()</span></span><br><span class="line"><span class="keyword">public</span> List&lt;ServiceInstance&gt; <span class="title function_">getInstances</span><span class="params">(String serviceId)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 从本地缓存获取</span></span><br><span class="line">    Map&lt;String, ServiceInstance&gt; instances = serviceInstances.get(serviceId);</span><br><span class="line">    <span class="keyword">if</span> (instances == <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="keyword">synchronized</span> (<span class="built_in">this</span>) &#123;</span><br><span class="line">            instances = serviceInstances.get(serviceId);</span><br><span class="line">            <span class="keyword">if</span> (instances == <span class="literal">null</span>) &#123;</span><br><span class="line">                <span class="comment">// 2. 首次从Nacos Server拉取</span></span><br><span class="line">                instances = loadInstancesFromNacos(serviceId);</span><br><span class="line">                serviceInstances.put(serviceId, instances);</span><br><span class="line"></span><br><span class="line">                <span class="comment">// 3. 注册订阅监听器</span></span><br><span class="line">                subscribeEventListener(serviceId);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(instances.values());</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 订阅监听：当服务列表变化时，Nacos Server主动推送</span></span><br><span class="line"><span class="comment">// 推送机制（Nacos 2.0+）：gRPC双向流</span></span><br><span class="line"><span class="comment">// 推送机制（Nacos 1.x）：UDP推送 + HTTP长轮询</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="本地缓存"><a href="#本地缓存" class="headerlink" title="本地缓存"></a>本地缓存</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 消费者本地缓存服务列表，避免每次都请求Nacos Server</span></span><br><span class="line"><span class="comment">// 缓存文件：$&#123;user.home&#125;/nacos/naming/$&#123;namespace&#125;/$&#123;group&#125;/$&#123;serviceName&#125;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 优点：</span></span><br><span class="line"><span class="comment">// 1. 减少Nacos Server压力</span></span><br><span class="line"><span class="comment">// 2. Nacos Server不可用时，仍能从缓存获取服务列表</span></span><br><span class="line"><span class="comment">// 3. 启动时优先从本地缓存加载</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 配置</span></span><br><span class="line">spring.cloud.nacos.discovery.naming-load-cache-at-start=<span class="literal">true</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="配置中心原理"><a href="#配置中心原理" class="headerlink" title="配置中心原理"></a>配置中心原理</h2><h3 id="配置获取"><a href="#配置获取" class="headerlink" title="配置获取"></a>配置获取</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// NacosConfigService.getConfig()</span></span><br><span class="line"><span class="keyword">public</span> String <span class="title function_">getConfig</span><span class="params">(String dataId, String group, <span class="type">long</span> timeoutMs)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 先从本地缓存/文件获取</span></span><br><span class="line">    <span class="type">String</span> <span class="variable">content</span> <span class="operator">=</span> getLocalConfig(dataId, group);</span><br><span class="line">    <span class="keyword">if</span> (content != <span class="literal">null</span>) <span class="keyword">return</span> content;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 2. 从Nacos Server获取</span></span><br><span class="line">    content = getConfigFromServer(dataId, group, timeoutMs);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 3. 保存到本地缓存</span></span><br><span class="line">    saveLocalConfig(dataId, group, content);</span><br><span class="line">    <span class="keyword">return</span> content;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="配置监听与动态刷新"><a href="#配置监听与动态刷新" class="headerlink" title="配置监听与动态刷新"></a>配置监听与动态刷新</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Nacos 2.0+：gRPC长连接监听配置变更</span></span><br><span class="line"><span class="comment">// Nacos 1.x：HTTP长轮询（Long Polling）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 长轮询原理：</span></span><br><span class="line"><span class="comment">// Client → 请求配置变更（带md5，超时30秒）</span></span><br><span class="line"><span class="comment">// Server → 配置未变 → 挂起29秒 → 返回304</span></span><br><span class="line"><span class="comment">// Server → 配置已变 → 立即返回新配置</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// SpringBoot动态刷新</span></span><br><span class="line"><span class="meta">@RefreshScope</span>  <span class="comment">// 标记需要动态刷新的Bean</span></span><br><span class="line"><span class="meta">@RestController</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ConfigController</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;app.config.max-size:100&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> maxSize;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@GetMapping(&quot;/config&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">getConfig</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> maxSize;  <span class="comment">// Nacos配置变更后自动刷新</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// @ConfigurationProperties自动刷新</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@ConfigurationProperties(prefix = &quot;app.config&quot;)</span></span><br><span class="line"><span class="meta">@RefreshScope</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AppConfig</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> maxSize;</span><br><span class="line">    <span class="keyword">private</span> String name;</span><br><span class="line">    <span class="comment">// getter/setter</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="配置最佳实践"><a href="#配置最佳实践" class="headerlink" title="配置最佳实践"></a>配置最佳实践</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 命名规范</span></span><br><span class="line"><span class="comment"># dataId = $&#123;prefix&#125;-$&#123;profile&#125;.$&#123;file-extension&#125;</span></span><br><span class="line"><span class="comment"># 例：order-service-dev.yaml</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 配置优先级（高到低）</span></span><br><span class="line"><span class="comment"># 1. order-service-dev.yaml  （环境专属）</span></span><br><span class="line"><span class="comment"># 2. order-service.yaml      （共享配置）</span></span><br><span class="line"><span class="comment"># 3. application-dev.yaml    （全局环境配置）</span></span><br><span class="line"><span class="comment"># 4. application.yaml        （全局配置）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Nacos配置</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">cloud:</span></span><br><span class="line">    <span class="attr">nacos:</span></span><br><span class="line">      <span class="attr">config:</span></span><br><span class="line">        <span class="attr">server-addr:</span> <span class="string">localhost:8848</span></span><br><span class="line">        <span class="attr">namespace:</span> <span class="string">dev</span></span><br><span class="line">        <span class="attr">group:</span> <span class="string">DEFAULT_GROUP</span></span><br><span class="line">        <span class="attr">file-extension:</span> <span class="string">yaml</span></span><br><span class="line">        <span class="attr">shared-configs:</span>           <span class="comment"># 共享配置</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">data-id:</span> <span class="string">common.yaml</span></span><br><span class="line">            <span class="attr">group:</span> <span class="string">DEFAULT_GROUP</span></span><br><span class="line">            <span class="attr">refresh:</span> <span class="literal">true</span></span><br><span class="line">        <span class="attr">extension-configs:</span>        <span class="comment"># 扩展配置</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">data-id:</span> <span class="string">redis.yaml</span></span><br><span class="line">            <span class="attr">group:</span> <span class="string">DEFAULT_GROUP</span></span><br><span class="line">            <span class="attr">refresh:</span> <span class="literal">true</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="SpringCloud整合Nacos实战"><a href="#SpringCloud整合Nacos实战" class="headerlink" title="SpringCloud整合Nacos实战"></a>SpringCloud整合Nacos实战</h2><h3 id="依赖"><a href="#依赖" class="headerlink" title="依赖"></a>依赖</h3><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="tag">&lt;<span class="name">dependency</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>com.alibaba.cloud<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>spring-cloud-starter-alibaba-nacos-discovery<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">dependency</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">dependency</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>com.alibaba.cloud<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>spring-cloud-starter-alibaba-nacos-config<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">dependency</span>&gt;</span></span><br><span class="line"><span class="comment">&lt;!-- SpringCloud 2020+需要额外引入bootstrap --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">dependency</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>org.springframework.cloud<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>spring-cloud-starter-bootstrap<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">dependency</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="配置"><a href="#配置" class="headerlink" title="配置"></a>配置</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># bootstrap.yaml（Nacos配置必须在bootstrap中）</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">application:</span></span><br><span class="line">    <span class="attr">name:</span> <span class="string">order-service</span></span><br><span class="line">  <span class="attr">cloud:</span></span><br><span class="line">    <span class="attr">nacos:</span></span><br><span class="line">      <span class="attr">discovery:</span></span><br><span class="line">        <span class="attr">server-addr:</span> <span class="string">localhost:8848</span></span><br><span class="line">        <span class="attr">namespace:</span> <span class="string">dev</span></span><br><span class="line">        <span class="attr">group:</span> <span class="string">DEFAULT_GROUP</span></span><br><span class="line">        <span class="attr">cluster-name:</span> <span class="string">BJ</span>          <span class="comment"># 集群名（同机房优先）</span></span><br><span class="line">        <span class="attr">weight:</span> <span class="number">1</span>                 <span class="comment"># 权重</span></span><br><span class="line">        <span class="attr">ephemeral:</span> <span class="literal">true</span>           <span class="comment"># 临时实例</span></span><br><span class="line">      <span class="attr">config:</span></span><br><span class="line">        <span class="attr">server-addr:</span> <span class="string">localhost:8848</span></span><br><span class="line">        <span class="attr">namespace:</span> <span class="string">dev</span></span><br><span class="line">        <span class="attr">group:</span> <span class="string">DEFAULT_GROUP</span></span><br><span class="line">        <span class="attr">file-extension:</span> <span class="string">yaml</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="服务调用"><a href="#服务调用" class="headerlink" title="服务调用"></a>服务调用</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 方式1：RestTemplate + @LoadBalanced</span></span><br><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RestConfig</span> &#123;</span><br><span class="line">    <span class="meta">@Bean</span></span><br><span class="line">    <span class="meta">@LoadBalanced</span>  <span class="comment">// 负载均衡</span></span><br><span class="line">    <span class="keyword">public</span> RestTemplate <span class="title function_">restTemplate</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">RestTemplate</span>();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RestTemplate restTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> User <span class="title function_">getUser</span><span class="params">(Long userId)</span> &#123;</span><br><span class="line">        <span class="comment">// 使用服务名替代IP:Port</span></span><br><span class="line">        <span class="keyword">return</span> restTemplate.getForObject(<span class="string">&quot;http://user-service/user/&quot;</span> + userId, User.class);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方式2：OpenFeign（推荐）</span></span><br><span class="line"><span class="meta">@FeignClient(name = &quot;user-service&quot;, fallback = UserClientFallback.class)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">UserClient</span> &#123;</span><br><span class="line">    <span class="meta">@GetMapping(&quot;/user/&#123;id&#125;&quot;)</span></span><br><span class="line">    User <span class="title function_">getById</span><span class="params">(<span class="meta">@PathVariable(&quot;id&quot;)</span> Long id)</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">UserClientFallback</span> <span class="keyword">implements</span> <span class="title class_">UserClient</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> User <span class="title function_">getById</span><span class="params">(Long id)</span> &#123;</span><br><span class="line">        log.warn(<span class="string">&quot;用户服务降级: id=&#123;&#125;&quot;</span>, id);</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">User</span>(id, <span class="string">&quot;服务不可用&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="负载均衡策略"><a href="#负载均衡策略" class="headerlink" title="负载均衡策略"></a>负载均衡策略</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Ribbon负载均衡策略（SpringCloud 2020+用Spring Cloud LoadBalancer）</span></span><br><span class="line"><span class="attr">user-service:</span></span><br><span class="line">  <span class="attr">ribbon:</span></span><br><span class="line">    <span class="attr">NFLoadBalancerRuleClassName:</span> <span class="string">com.alibaba.cloud.nacos.ribbon.NacosRule</span></span><br><span class="line">    <span class="comment"># NacosRule：同集群优先 + 权重随机</span></span><br><span class="line">    <span class="comment"># RoundRobinRule：轮询</span></span><br><span class="line">    <span class="comment"># RandomRule：随机</span></span><br><span class="line">    <span class="comment"># WeightedResponseTimeRule：响应时间权重</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="Nacos集群部署"><a href="#Nacos集群部署" class="headerlink" title="Nacos集群部署"></a>Nacos集群部署</h2><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># cluster.conf（3个节点）</span></span><br><span class="line"><span class="number">192.168</span><span class="number">.1</span><span class="number">.1</span><span class="string">:8848</span></span><br><span class="line"><span class="number">192.168</span><span class="number">.1</span><span class="number">.2</span><span class="string">:8848</span></span><br><span class="line"><span class="number">192.168</span><span class="number">.1</span><span class="number">.3</span><span class="string">:8848</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># application.properties</span></span><br><span class="line"><span class="string">nacos.inetutils.ip-address=192.168.1.1</span></span><br><span class="line"><span class="string">spring.datasource.platform=mysql</span></span><br><span class="line"><span class="string">db.num=1</span></span><br><span class="line"><span class="string">db.url.0=jdbc:mysql://localhost:3306/nacos</span> <span class="string">和</span> <span class="string">characterEncoding=utf8</span></span><br><span class="line"><span class="string">db.user.0=nacos</span></span><br><span class="line"><span class="string">db.password.0=nacos</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Nginx负载均衡</span></span><br><span class="line"><span class="string">upstream</span> <span class="string">nacos</span> &#123;</span><br><span class="line">    <span class="string">server</span> <span class="number">192.168</span><span class="number">.1</span><span class="number">.1</span><span class="string">:8848;</span></span><br><span class="line">    <span class="string">server</span> <span class="number">192.168</span><span class="number">.1</span><span class="number">.2</span><span class="string">:8848;</span></span><br><span class="line">    <span class="string">server</span> <span class="number">192.168</span><span class="number">.1</span><span class="number">.3</span><span class="string">:8848;</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-Nacos和Eureka的区别？"><a href="#1-Nacos和Eureka的区别？" class="headerlink" title="1. Nacos和Eureka的区别？"></a>1. Nacos和Eureka的区别？</h3><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Nacos</th>
+<th>Eureka</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>配置中心</td>
+<td>支持</td>
+<td>不支持</td>
+</tr>
+<tr>
+<td>健康检查</td>
+<td>心跳+主动探测</td>
+<td>心跳</td>
+</tr>
+<tr>
+<td>实例类型</td>
+<td>临时+持久</td>
+<td>只有临时</td>
+</tr>
+<tr>
+<td>一致性</td>
+<td>CP+AP</td>
+<td>AP</td>
+</tr>
+<tr>
+<td>雪崩保护</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>维护状态</td>
+<td>活跃</td>
+<td>停止维护</td>
+</tr>
+</tbody></table>
+<h3 id="2-Nacos如何保证配置实时性？"><a href="#2-Nacos如何保证配置实时性？" class="headerlink" title="2. Nacos如何保证配置实时性？"></a>2. Nacos如何保证配置实时性？</h3><p>Nacos 2.0+使用gRPC长连接，配置变更后Server主动推送给Client。Nacos 1.x使用HTTP长轮询，Client定时请求Server检测配置变更。</p>
+<h3 id="3-临时实例和持久实例的区别？"><a href="#3-临时实例和持久实例的区别？" class="headerlink" title="3. 临时实例和持久实例的区别？"></a>3. 临时实例和持久实例的区别？</h3><p>临时实例由客户端心跳保活，不心跳则剔除；持久实例由Server主动探测（TCP&#x2F;HTTP），不会自动剔除。微服务实例用临时，数据库等基础设施用持久。</p>
+<h2 id="最佳实践"><a href="#最佳实践" class="headerlink" title="最佳实践"></a>最佳实践</h2><ol>
+<li><strong>微服务用临时实例</strong>：自动上下线</li>
+<li><strong>配置放Nacos</strong>：动态刷新，不用重启</li>
+<li><strong>同集群优先调用</strong>：减少跨机房延迟</li>
+<li><strong>集群至少3节点</strong>：保证高可用</li>
+<li><strong>本地缓存开启</strong>：Nacos不可用时降级</li>
+</ol>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>Nacos是微服务的基础设施。2023年深入原理后，核心认知是：<strong>临时实例靠心跳&#x2F;gRPC保活，持久实例靠Server探测；配置变更通过gRPC推送实时生效；同集群优先+权重随机实现负载均衡</strong>。理解了这些，微服务架构的服务治理就有了根基。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/06/11/mysql-fen-ye-you-hua-shi-zhan-shen-fen-ye-de-xing-neng-xian-jing-yu-jie-jue-fang-an/">MySQL分页优化实战——深分页的性能陷阱与解决方案</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/06/18/jie-kou-xing-neng-you-hua-shi-zhan-cong-2-miao-dao-50-hao-miao-de-shui-bian/">接口性能优化实战——从2秒到50毫秒的蜕变</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Nacos%E6%A0%B8%E5%BF%83%E6%9E%B6%E6%9E%84"><span class="toc-number">2.</span> <span class="toc-text">Nacos核心架构</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%8D%E5%8A%A1%E6%B3%A8%E5%86%8C%E5%8E%9F%E7%90%86"><span class="toc-number">3.</span> <span class="toc-text">服务注册原理</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%B4%E6%97%B6%E5%AE%9E%E4%BE%8B-vs-%E6%8C%81%E4%B9%85%E5%AE%9E%E4%BE%8B"><span class="toc-number">3.1.</span> <span class="toc-text">临时实例 vs 持久实例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%B3%A8%E5%86%8C%E6%B5%81%E7%A8%8B"><span class="toc-number">3.2.</span> <span class="toc-text">注册流程</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BF%83%E8%B7%B3%E6%9C%BA%E5%88%B6"><span class="toc-number">3.3.</span> <span class="toc-text">心跳机制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#gRPC%E9%95%BF%E8%BF%9E%E6%8E%A5%EF%BC%88Nacos-2-0-%EF%BC%89"><span class="toc-number">3.4.</span> <span class="toc-text">gRPC长连接（Nacos 2.0+）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0%E5%8E%9F%E7%90%86"><span class="toc-number">4.</span> <span class="toc-text">服务发现原理</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AE%A2%E9%98%85%E6%9C%BA%E5%88%B6"><span class="toc-number">4.1.</span> <span class="toc-text">订阅机制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9C%AC%E5%9C%B0%E7%BC%93%E5%AD%98"><span class="toc-number">4.2.</span> <span class="toc-text">本地缓存</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%85%8D%E7%BD%AE%E4%B8%AD%E5%BF%83%E5%8E%9F%E7%90%86"><span class="toc-number">5.</span> <span class="toc-text">配置中心原理</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%85%8D%E7%BD%AE%E8%8E%B7%E5%8F%96"><span class="toc-number">5.1.</span> <span class="toc-text">配置获取</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%85%8D%E7%BD%AE%E7%9B%91%E5%90%AC%E4%B8%8E%E5%8A%A8%E6%80%81%E5%88%B7%E6%96%B0"><span class="toc-number">5.2.</span> <span class="toc-text">配置监听与动态刷新</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%85%8D%E7%BD%AE%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">5.3.</span> <span class="toc-text">配置最佳实践</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#SpringCloud%E6%95%B4%E5%90%88Nacos%E5%AE%9E%E6%88%98"><span class="toc-number">6.</span> <span class="toc-text">SpringCloud整合Nacos实战</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BE%9D%E8%B5%96"><span class="toc-number">6.1.</span> <span class="toc-text">依赖</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%85%8D%E7%BD%AE"><span class="toc-number">6.2.</span> <span class="toc-text">配置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9C%8D%E5%8A%A1%E8%B0%83%E7%94%A8"><span class="toc-number">6.3.</span> <span class="toc-text">服务调用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B4%9F%E8%BD%BD%E5%9D%87%E8%A1%A1%E7%AD%96%E7%95%A5"><span class="toc-number">6.4.</span> <span class="toc-text">负载均衡策略</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Nacos%E9%9B%86%E7%BE%A4%E9%83%A8%E7%BD%B2"><span class="toc-number">7.</span> <span class="toc-text">Nacos集群部署</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91%E9%97%AE%E9%A2%98"><span class="toc-number">8.</span> <span class="toc-text">面试高频问题</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-Nacos%E5%92%8CEureka%E7%9A%84%E5%8C%BA%E5%88%AB%EF%BC%9F"><span class="toc-number">8.1.</span> <span class="toc-text">1. Nacos和Eureka的区别？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-Nacos%E5%A6%82%E4%BD%95%E4%BF%9D%E8%AF%81%E9%85%8D%E7%BD%AE%E5%AE%9E%E6%97%B6%E6%80%A7%EF%BC%9F"><span class="toc-number">8.2.</span> <span class="toc-text">2. Nacos如何保证配置实时性？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E4%B8%B4%E6%97%B6%E5%AE%9E%E4%BE%8B%E5%92%8C%E6%8C%81%E4%B9%85%E5%AE%9E%E4%BE%8B%E7%9A%84%E5%8C%BA%E5%88%AB%EF%BC%9F"><span class="toc-number">8.3.</span> <span class="toc-text">3. 临时实例和持久实例的区别？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">9.</span> <span class="toc-text">最佳实践</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">10.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/" class="tag" aria-label="标签: #分布式">#分布式</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(265)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/%E5%BE%AE%E6%9C%8D%E5%8A%A1/" aria-label="分类: 微服务">
+                        微服务
+                        <span>(5)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<script>
+    // 打字效果
+    document.addEventListener('DOMContentLoaded', function() {
+        const typedText = document.querySelector('.typed-text');
+        if (typedText) {
+            const text = 'grq';
+            let index = 0;
+            let direction = 1;
+            
+            function type() {
+                if (direction === 1) {
+                    typedText.textContent = text.substring(0, index + 1);
+                    index++;
+                    if (index >= text.length) {
+                        direction = -1;
+                        setTimeout(type, 2000);
+                        return;
+                    }
+                } else {
+                    typedText.textContent = text.substring(0, index - 1);
+                    index--;
+                    if (index <= 0) {
+                        direction = 1;
+                        setTimeout(type, 500);
+                        return;
+                    }
+                }
+                setTimeout(type, 150);
+            }
+            
+            type();
+        }
+    });
+</script>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function overrideHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+    
+    document.addEventListener('DOMContentLoaded', overrideHbeStyles);
+    setTimeout(overrideHbeStyles, 100);
+    setTimeout(overrideHbeStyles, 500);
+    setTimeout(overrideHbeStyles, 1000);
+    setInterval(overrideHbeStyles, 3000);
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

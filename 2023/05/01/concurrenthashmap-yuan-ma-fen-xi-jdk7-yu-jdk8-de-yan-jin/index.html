@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>ConcurrentHashMap源码分析——JDK7与JDK8的演进 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="ConcurrentHashMap源码分析——JDK7与JDK8的演进">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/05/01/concurrenthashmap-yuan-ma-fen-xi-jdk7-yu-jdk8-de-yan-jin/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言面试必问ConcurrentHashMap，但一直只停留在”分段锁”和”CAS+synchronized”的层面。2023年深入源码后，才真正理解了JDK7到JDK8的演进逻辑，以及ConcurrentHashMap如何做到高并发安全。为什么不用HashMap和Hashtable1234HashMap：线">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+            </a>
+            <a href="mailto:gaoruiqiang@email.com" class="social-link" title="邮箱">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                </svg>
+            </a>
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">ConcurrentHashMap源码分析——JDK7与JDK8的演进</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-05-01T06:40:47.000Z">2023-05-01</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B/">并发编程</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>面试必问ConcurrentHashMap，但一直只停留在”分段锁”和”CAS+synchronized”的层面。2023年深入源码后，才真正理解了JDK7到JDK8的演进逻辑，以及ConcurrentHashMap如何做到高并发安全。</p>
+<h2 id="为什么不用HashMap和Hashtable"><a href="#为什么不用HashMap和Hashtable" class="headerlink" title="为什么不用HashMap和Hashtable"></a>为什么不用HashMap和Hashtable</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">HashMap：线程不安全，并发put可能导致死循环(JDK7)或数据丢失</span><br><span class="line">Hashtable：线程安全但全表锁，并发性能极差</span><br><span class="line"></span><br><span class="line">ConcurrentHashMap：线程安全 + 高并发性能</span><br></pre></td></tr></table></figure>
+
+<h2 id="JDK7：分段锁（Segment）"><a href="#JDK7：分段锁（Segment）" class="headerlink" title="JDK7：分段锁（Segment）"></a>JDK7：分段锁（Segment）</h2><h3 id="数据结构"><a href="#数据结构" class="headerlink" title="数据结构"></a>数据结构</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">ConcurrentHashMap</span><br><span class="line">├── Segment[0]  → HashEntry[] → 链表</span><br><span class="line">├── Segment[1]  → HashEntry[] → 链表</span><br><span class="line">├── Segment[2]  → HashEntry[] → 链表</span><br><span class="line">├── ...</span><br><span class="line">└── Segment[15] → HashEntry[] → 链表</span><br><span class="line"></span><br><span class="line">每个Segment是一把ReentrantLock</span><br><span class="line">不同Segment之间互不影响</span><br><span class="line">并发度 = Segment数量（默认16）</span><br></pre></td></tr></table></figure>
+
+<h3 id="核心源码"><a href="#核心源码" class="headerlink" title="核心源码"></a>核心源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Segment继承ReentrantLock</span></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">class</span> <span class="title class_">Segment</span>&lt;K,V&gt; <span class="keyword">extends</span> <span class="title class_">ReentrantLock</span> <span class="keyword">implements</span> <span class="title class_">Serializable</span> &#123;</span><br><span class="line">    <span class="keyword">transient</span> <span class="keyword">volatile</span> HashEntry&lt;K,V&gt;[] table;</span><br><span class="line">    <span class="keyword">transient</span> <span class="type">int</span> count;</span><br><span class="line">    <span class="keyword">transient</span> <span class="type">int</span> modCount;</span><br><span class="line">    <span class="keyword">transient</span> <span class="type">int</span> threshold;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">float</span> loadFactor;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// HashEntry</span></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">class</span> <span class="title class_">HashEntry</span>&lt;K,V&gt; &#123;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">int</span> hash;</span><br><span class="line">    <span class="keyword">final</span> K key;</span><br><span class="line">    <span class="keyword">volatile</span> V value;       <span class="comment">// volatile保证可见性</span></span><br><span class="line">    <span class="keyword">volatile</span> HashEntry&lt;K,V&gt; next;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// put操作</span></span><br><span class="line"><span class="keyword">public</span> V <span class="title function_">put</span><span class="params">(K key, V value)</span> &#123;</span><br><span class="line">    Segment&lt;K,V&gt; s;</span><br><span class="line">    <span class="comment">// 1. 定位Segment</span></span><br><span class="line">    <span class="type">int</span> <span class="variable">j</span> <span class="operator">=</span> (hash &gt;&gt;&gt; segmentShift) &amp; segmentMask;</span><br><span class="line">    <span class="comment">// 2. 对Segment加锁</span></span><br><span class="line">    <span class="keyword">if</span> ((s = ensureSegment(j)) != <span class="literal">null</span>)</span><br><span class="line">        <span class="keyword">return</span> s.put(key, hash, value, <span class="literal">false</span>);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// Segment.put</span></span><br><span class="line"><span class="keyword">final</span> V <span class="title function_">put</span><span class="params">(K key, <span class="type">int</span> hash, V value, <span class="type">boolean</span> onlyIfAbsent)</span> &#123;</span><br><span class="line">    <span class="comment">// 尝试获取锁</span></span><br><span class="line">    HashEntry&lt;K,V&gt; node = tryLock() <span class="literal">null</span> : scanAndLockForPut(key, hash, value);</span><br><span class="line">    <span class="comment">// 获取锁后操作（与HashMap类似）</span></span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        HashEntry&lt;K,V&gt;[] tab = table;</span><br><span class="line">        <span class="type">int</span> <span class="variable">index</span> <span class="operator">=</span> (tab.length - <span class="number">1</span>) &amp; hash;</span><br><span class="line">        <span class="comment">// ... 插入或更新</span></span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        unlock();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="JDK7的问题"><a href="#JDK7的问题" class="headerlink" title="JDK7的问题"></a>JDK7的问题</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">1. 并发度固定：Segment数量创建后不能改变</span><br><span class="line">2. Segment太多浪费内存：默认16个Segment</span><br><span class="line">3. 查询需要两次hash：先定位Segment再定位HashEntry</span><br><span class="line">4. 链表过长时查询效率低：O(n)</span><br></pre></td></tr></table></figure>
+
+<h2 id="JDK8：CAS-synchronized-红黑树"><a href="#JDK8：CAS-synchronized-红黑树" class="headerlink" title="JDK8：CAS + synchronized + 红黑树"></a>JDK8：CAS + synchronized + 红黑树</h2><h3 id="数据结构-1"><a href="#数据结构-1" class="headerlink" title="数据结构"></a>数据结构</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">ConcurrentHashMap</span><br><span class="line">└── Node[] table</span><br><span class="line">    ├── Node → Node → Node → ... → TreeNode (链表长度≥8转红黑树)</span><br><span class="line">    ├── TreeNode (红黑树)</span><br><span class="line">    └── null</span><br><span class="line"></span><br><span class="line">与JDK8 HashMap结构类似，但线程安全</span><br><span class="line">不再使用Segment，锁粒度更细（锁单个桶）</span><br></pre></td></tr></table></figure>
+
+<h3 id="核心字段"><a href="#核心字段" class="headerlink" title="核心字段"></a>核心字段</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ConcurrentHashMap</span>&lt;K,V&gt; &#123;</span><br><span class="line">    <span class="keyword">transient</span> <span class="keyword">volatile</span> Node&lt;K,V&gt;[] table;           <span class="comment">// 数据数组</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">transient</span> <span class="keyword">volatile</span> Node&lt;K,V&gt;[] nextTable; <span class="comment">// 扩容时的新数组</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">transient</span> <span class="keyword">volatile</span> <span class="type">long</span> baseCount;       <span class="comment">// 基础计数</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">transient</span> <span class="keyword">volatile</span> <span class="type">int</span> sizeCtl;          <span class="comment">// 控制标志</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// sizeCtl含义：</span></span><br><span class="line">    <span class="comment">// -1：正在初始化</span></span><br><span class="line">    <span class="comment">// -(1+活跃扩容线程数)：正在扩容</span></span><br><span class="line">    <span class="comment">// 0：未初始化</span></span><br><span class="line">    <span class="comment">// &gt;0：下次扩容的阈值</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="put源码分析"><a href="#put源码分析" class="headerlink" title="put源码分析"></a>put源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> V <span class="title function_">put</span><span class="params">(K key, V value)</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> putVal(key, value, <span class="literal">false</span>);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">final</span> V <span class="title function_">putVal</span><span class="params">(K key, V value, <span class="type">boolean</span> onlyIfAbsent)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (key == <span class="literal">null</span> || value == <span class="literal">null</span>) <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">NullPointerException</span>();</span><br><span class="line">    <span class="type">int</span> <span class="variable">hash</span> <span class="operator">=</span> spread(key.hashCode());</span><br><span class="line">    <span class="type">int</span> <span class="variable">binCount</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">    <span class="keyword">for</span> (Node&lt;K,V&gt;[] tab = table;;) &#123;</span><br><span class="line">        Node&lt;K,V&gt; f; <span class="type">int</span> n, i, fh;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 1. 表未初始化 → 初始化</span></span><br><span class="line">        <span class="keyword">if</span> (tab == <span class="literal">null</span> || (n = tab.length) == <span class="number">0</span>)</span><br><span class="line">            tab = initTable();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 桶为空 → CAS插入</span></span><br><span class="line">        <span class="keyword">else</span> <span class="keyword">if</span> ((f = tabAt(tab, i = (n - <span class="number">1</span>) &amp; hash)) == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">if</span> (casTabAt(tab, i, <span class="literal">null</span>, <span class="keyword">new</span> <span class="title class_">Node</span>&lt;K,V&gt;(hash, key, value, <span class="literal">null</span>)))</span><br><span class="line">                <span class="keyword">break</span>;  <span class="comment">// CAS成功，插入完成</span></span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 正在扩容 → 协助扩容</span></span><br><span class="line">        <span class="keyword">else</span> <span class="keyword">if</span> ((fh = f.hash) == MOVED)</span><br><span class="line">            tab = helpTransfer(tab, f);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 4. 桶不为空 → 加锁插入</span></span><br><span class="line">        <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="keyword">synchronized</span> (f) &#123;  <span class="comment">// 锁住桶的头节点</span></span><br><span class="line">                <span class="keyword">if</span> (tabAt(tab, i) == f) &#123;  <span class="comment">// 双重检查</span></span><br><span class="line">                    <span class="keyword">if</span> (fh &gt;= <span class="number">0</span>) &#123;</span><br><span class="line">                        binCount = <span class="number">1</span>;</span><br><span class="line">                        <span class="comment">// 遍历链表，查找或插入</span></span><br><span class="line">                        <span class="keyword">for</span> (Node&lt;K,V&gt; e = f;; ++binCount) &#123;</span><br><span class="line">                            K ek;</span><br><span class="line">                            <span class="keyword">if</span> (e.hash == hash &amp;&amp; </span><br><span class="line">                                ((ek = e.key) == key || (ek != <span class="literal">null</span> &amp;&amp; key.equals(ek)))) &#123;</span><br><span class="line">                                <span class="comment">// key存在，更新value</span></span><br><span class="line">                                <span class="type">V</span> <span class="variable">ev</span> <span class="operator">=</span> e.val;</span><br><span class="line">                                <span class="keyword">if</span> (!onlyIfAbsent || ev == <span class="literal">null</span>)</span><br><span class="line">                                    e.val = value;</span><br><span class="line">                                <span class="keyword">break</span>;</span><br><span class="line">                            &#125;</span><br><span class="line">                            Node&lt;K,V&gt; pred = e;</span><br><span class="line">                            <span class="keyword">if</span> ((e = e.next) == <span class="literal">null</span>) &#123;</span><br><span class="line">                                <span class="comment">// 尾部插入新节点</span></span><br><span class="line">                                pred.next = <span class="keyword">new</span> <span class="title class_">Node</span>&lt;K,V&gt;(hash, key, value, <span class="literal">null</span>);</span><br><span class="line">                                <span class="keyword">break</span>;</span><br><span class="line">                            &#125;</span><br><span class="line">                        &#125;</span><br><span class="line">                    &#125;</span><br><span class="line">                    <span class="comment">// 红黑树处理</span></span><br><span class="line">                    <span class="keyword">else</span> <span class="keyword">if</span> (f <span class="keyword">instanceof</span> TreeBin) &#123;</span><br><span class="line">                        Node&lt;K,V&gt; p;</span><br><span class="line">                        binCount = <span class="number">2</span>;</span><br><span class="line">                        <span class="keyword">if</span> ((p = ((TreeBin&lt;K,V&gt;)f).putTreeVal(hash, key, value)) != <span class="literal">null</span>) &#123;</span><br><span class="line">                            <span class="type">V</span> <span class="variable">ev</span> <span class="operator">=</span> p.val;</span><br><span class="line">                            <span class="keyword">if</span> (!onlyIfAbsent || ev == <span class="literal">null</span>)</span><br><span class="line">                                p.val = value;</span><br><span class="line">                        &#125;</span><br><span class="line">                    &#125;</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="comment">// 5. 检查是否需要转红黑树</span></span><br><span class="line">            <span class="keyword">if</span> (binCount != <span class="number">0</span>) &#123;</span><br><span class="line">                <span class="keyword">if</span> (binCount &gt;= TREEIFY_THRESHOLD)</span><br><span class="line">                    treeifyBin(tab, i);</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 6. 统计数量，检查是否需要扩容</span></span><br><span class="line">    addCount(<span class="number">1L</span>, binCount);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="get源码分析"><a href="#get源码分析" class="headerlink" title="get源码分析"></a>get源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> V <span class="title function_">get</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">    Node&lt;K,V&gt;[] tab; Node&lt;K,V&gt; e, p; <span class="type">int</span> n, eh; K ek;</span><br><span class="line">    <span class="type">int</span> <span class="variable">h</span> <span class="operator">=</span> spread(key.hashCode());</span><br><span class="line">    <span class="comment">// 表不为空 &amp;&amp; 桶不为空</span></span><br><span class="line">    <span class="keyword">if</span> ((tab = table) != <span class="literal">null</span> &amp;&amp; (n = tab.length) &gt; <span class="number">0</span> &amp;&amp;</span><br><span class="line">        (e = tabAt(tab, (n - <span class="number">1</span>) &amp; h)) != <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="comment">// 检查头节点</span></span><br><span class="line">        <span class="keyword">if</span> ((eh = e.hash) == h) &#123;</span><br><span class="line">            <span class="keyword">if</span> ((ek = e.key) == key || (ek != <span class="literal">null</span> &amp;&amp; key.equals(ek)))</span><br><span class="line">                <span class="keyword">return</span> e.val;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// hash &lt; 0：正在扩容或红黑树</span></span><br><span class="line">        <span class="keyword">else</span> <span class="keyword">if</span> (eh &lt; <span class="number">0</span>)</span><br><span class="line">            <span class="keyword">return</span> (p = e.find(h, key)) != <span class="literal">null</span> p.val : <span class="literal">null</span>;</span><br><span class="line">        <span class="comment">// 遍历链表</span></span><br><span class="line">        <span class="keyword">while</span> ((e = e.next) != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">if</span> (e.hash == h &amp;&amp;</span><br><span class="line">                ((ek = e.key) == key || (ek != <span class="literal">null</span> &amp;&amp; key.equals(ek))))</span><br><span class="line">                <span class="keyword">return</span> e.val;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 关键：get操作全程无锁！</span></span><br><span class="line"><span class="comment">// 通过volatile保证可见性：</span></span><br><span class="line"><span class="comment">// - table是volatile的</span></span><br><span class="line"><span class="comment">// - Node的val是volatile的</span></span><br><span class="line"><span class="comment">// - Node的next是volatile的</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="扩容机制"><a href="#扩容机制" class="headerlink" title="扩容机制"></a>扩容机制</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// JDK8的扩容支持多线程并发扩容</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 每个线程负责迁移一部分桶（默认16个）</span></span><br><span class="line"><span class="comment">// 通过transferIndex分配迁移任务</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 扩容触发条件：</span></span><br><span class="line"><span class="comment">// 1. 元素数量超过阈值(sizeCtl)</span></span><br><span class="line"><span class="comment">// 2. 链表长度超过8但数组长度&lt;64 → 优先扩容而非树化</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 迁移过程：</span></span><br><span class="line"><span class="comment">// 1. 在桶头放置ForwardingNode（hash=MOVED=-1）</span></span><br><span class="line"><span class="comment">// 2. 其他线程看到ForwardingNode → 协助扩容</span></span><br><span class="line"><span class="comment">// 3. 迁移完成后指向新数组</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="size统计"><a href="#size统计" class="headerlink" title="size统计"></a>size统计</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// JDK7：遍历所有Segment累加count</span></span><br><span class="line"><span class="comment">// JDK8：baseCount + CounterCell[] 分散计数</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 类似LongAdder的思想：</span></span><br><span class="line"><span class="comment">// 无竞争 → CAS更新baseCount</span></span><br><span class="line"><span class="comment">// CAS失败 → 分散到CounterCell[]</span></span><br><span class="line"><span class="comment">// 最终size = baseCount + 所有CounterCell的值</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">int</span> <span class="title function_">size</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">long</span> <span class="variable">n</span> <span class="operator">=</span> sumCount();</span><br><span class="line">    <span class="keyword">return</span> ((n &lt; <span class="number">0L</span>) <span class="number">0</span> : (n &gt; (<span class="type">long</span>)Integer.MAX_VALUE) Integer.MAX_VALUE : (<span class="type">int</span>)n);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">final</span> <span class="type">long</span> <span class="title function_">sumCount</span><span class="params">()</span> &#123;</span><br><span class="line">    CounterCell[] as = counterCells;</span><br><span class="line">    <span class="type">long</span> <span class="variable">sum</span> <span class="operator">=</span> baseCount;</span><br><span class="line">    <span class="keyword">if</span> (as != <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="keyword">for</span> (CounterCell a : as) &#123;</span><br><span class="line">            <span class="keyword">if</span> (a != <span class="literal">null</span>)</span><br><span class="line">                sum += a.value;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> sum;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="JDK7-vs-JDK8对比"><a href="#JDK7-vs-JDK8对比" class="headerlink" title="JDK7 vs JDK8对比"></a>JDK7 vs JDK8对比</h2><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>JDK7</th>
+<th>JDK8</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>锁机制</td>
+<td>Segment分段锁</td>
+<td>CAS + synchronized</td>
+</tr>
+<tr>
+<td>锁粒度</td>
+<td>Segment级别</td>
+<td>桶级别（更细）</td>
+</tr>
+<tr>
+<td>数据结构</td>
+<td>Segment[] + HashEntry[] + 链表</td>
+<td>Node[] + 链表 + 红黑树</td>
+</tr>
+<tr>
+<td>并发度</td>
+<td>固定16</td>
+<td>等于数组长度</td>
+</tr>
+<tr>
+<td>查询复杂度</td>
+<td>O(n)链表</td>
+<td>O(logN)红黑树</td>
+</tr>
+<tr>
+<td>查询hash次数</td>
+<td>2次</td>
+<td>1次</td>
+</tr>
+<tr>
+<td>扩容</td>
+<td>单线程</td>
+<td>多线程并发扩容</td>
+</tr>
+<tr>
+<td>计数</td>
+<td>遍历Segment</td>
+<td>baseCount + CounterCell</td>
+</tr>
+</tbody></table>
+<h2 id="实战：ConcurrentHashMap使用场景"><a href="#实战：ConcurrentHashMap使用场景" class="headerlink" title="实战：ConcurrentHashMap使用场景"></a>实战：ConcurrentHashMap使用场景</h2><h3 id="1-本地缓存"><a href="#1-本地缓存" class="headerlink" title="1. 本地缓存"></a>1. 本地缓存</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LocalCacheManager</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> ConcurrentHashMap&lt;String, CacheEntry&gt; cache = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">class</span> <span class="title class_">CacheEntry</span> &#123;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> Object value;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">long</span> expireTime;</span><br><span class="line"></span><br><span class="line">        CacheEntry(Object value, <span class="type">long</span> ttlMs) &#123;</span><br><span class="line">            <span class="built_in">this</span>.value = value;</span><br><span class="line">            <span class="built_in">this</span>.expireTime = System.currentTimeMillis() + ttlMs;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="type">boolean</span> <span class="title function_">isExpired</span><span class="params">()</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> System.currentTimeMillis() &gt; expireTime;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">put</span><span class="params">(String key, Object value, <span class="type">long</span> ttlMs)</span> &#123;</span><br><span class="line">        cache.put(key, <span class="keyword">new</span> <span class="title class_">CacheEntry</span>(value, ttlMs));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">get</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="type">CacheEntry</span> <span class="variable">entry</span> <span class="operator">=</span> cache.get(key);</span><br><span class="line">        <span class="keyword">if</span> (entry == <span class="literal">null</span> || entry.isExpired()) &#123;</span><br><span class="line">            cache.remove(key);</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> entry.value;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-线程安全的计数器"><a href="#2-线程安全的计数器" class="headerlink" title="2. 线程安全的计数器"></a>2. 线程安全的计数器</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RequestCounter</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> ConcurrentHashMap&lt;String, LongAdder&gt; counters = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">increment</span><span class="params">(String api)</span> &#123;</span><br><span class="line">        counters.computeIfAbsent(api, k -&gt; <span class="keyword">new</span> <span class="title class_">LongAdder</span>()).increment();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> Map&lt;String, Long&gt; <span class="title function_">getCounts</span><span class="params">()</span> &#123;</span><br><span class="line">        Map&lt;String, Long&gt; result = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line">        counters.forEach((k, v) -&gt; result.put(k, v.sum()));</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-一次性初始化"><a href="#3-一次性初始化" class="headerlink" title="3. 一次性初始化"></a>3. 一次性初始化</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ConfigManager</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> ConcurrentHashMap&lt;String, String&gt; config = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// computeIfAbsent原子操作，避免重复初始化</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">getConfig</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> config.computeIfAbsent(key, k -&gt; loadFromDb(k));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="常见误区"><a href="#常见误区" class="headerlink" title="常见误区"></a>常见误区</h2><h3 id="1-ConcurrentHashMap不是所有操作都线程安全"><a href="#1-ConcurrentHashMap不是所有操作都线程安全" class="headerlink" title="1. ConcurrentHashMap不是所有操作都线程安全"></a>1. ConcurrentHashMap不是所有操作都线程安全</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">ConcurrentHashMap&lt;String, Integer&gt; map = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line"><span class="comment">// ❌ 复合操作不安全</span></span><br><span class="line"><span class="keyword">if</span> (!map.containsKey(<span class="string">&quot;key&quot;</span>)) &#123;</span><br><span class="line">    map.put(<span class="string">&quot;key&quot;</span>, <span class="number">1</span>);  <span class="comment">// 中间可能被其他线程插入</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 使用原子方法</span></span><br><span class="line">map.putIfAbsent(<span class="string">&quot;key&quot;</span>, <span class="number">1</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 使用computeIfAbsent</span></span><br><span class="line">map.computeIfAbsent(<span class="string">&quot;key&quot;</span>, k -&gt; <span class="number">1</span>);</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-size-不是强一致的"><a href="#2-size-不是强一致的" class="headerlink" title="2. size()不是强一致的"></a>2. size()不是强一致的</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// size()是近似值，遍历过程中可能被修改</span></span><br><span class="line"><span class="comment">// 不适合需要精确计数的场景</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="3-key-value不能为null"><a href="#3-key-value不能为null" class="headerlink" title="3. key&#x2F;value不能为null"></a>3. key&#x2F;value不能为null</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">ConcurrentHashMap&lt;String, String&gt; map = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line">map.put(<span class="string">&quot;key&quot;</span>, <span class="literal">null</span>);   <span class="comment">// ❌ NPE</span></span><br><span class="line">map.put(<span class="literal">null</span>, <span class="string">&quot;value&quot;</span>); <span class="comment">// ❌ NPE</span></span><br><span class="line"><span class="comment">// 原因：并发场景下null有歧义（是值不存在还是值为null？）</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-JDK8为什么用synchronized替代ReentrantLock？"><a href="#1-JDK8为什么用synchronized替代ReentrantLock？" class="headerlink" title="1. JDK8为什么用synchronized替代ReentrantLock？"></a>1. JDK8为什么用synchronized替代ReentrantLock？</h3><p>synchronized在JDK6后有锁升级优化（偏向锁→轻量级锁→重量级锁），低竞争场景下性能更好；synchronized不需要手动释放锁，减少忘记unlock的风险；synchronized的内存占用更少。</p>
+<h3 id="2-ConcurrentHashMap的get为什么不需要加锁？"><a href="#2-ConcurrentHashMap的get为什么不需要加锁？" class="headerlink" title="2. ConcurrentHashMap的get为什么不需要加锁？"></a>2. ConcurrentHashMap的get为什么不需要加锁？</h3><p>Node的val和next都是volatile的，保证可见性；get操作只读不写，通过volatile语义保证读到最新值。</p>
+<h3 id="3-ConcurrentHashMap如何保证并发扩容安全？"><a href="#3-ConcurrentHashMap如何保证并发扩容安全？" class="headerlink" title="3. ConcurrentHashMap如何保证并发扩容安全？"></a>3. ConcurrentHashMap如何保证并发扩容安全？</h3><p>通过ForwardingNode标记正在迁移的桶，其他线程看到标记后协助扩容。每个线程负责一部分桶，通过transferIndex分配任务。</p>
+<h2 id="最佳实践"><a href="#最佳实践" class="headerlink" title="最佳实践"></a>最佳实践</h2><ol>
+<li><strong>优先使用原子方法</strong>：putIfAbsent、computeIfAbsent、merge</li>
+<li><strong>避免复合操作</strong>：check-then-act不是原子的</li>
+<li><strong>key&#x2F;value不能为null</strong>：用Optional或默认值替代</li>
+<li><strong>size()是近似值</strong>：不要依赖精确计数</li>
+<li><strong>合理设置初始容量</strong>：减少扩容开销</li>
+</ol>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>ConcurrentHashMap是Java并发编程的巅峰之作。2023年深入源码后，核心认知是：<strong>JDK8用CAS+synchronized替代分段锁，锁粒度更细、并发度更高；get无锁通过volatile保证可见性；多线程并发扩容提升效率</strong>。理解了这些，才能在高并发场景下正确使用ConcurrentHashMap。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/04/30/redis-pipeline-yu-lua-jiao-ben-pi-liang-cao-zuo-yu-yuan-zi-xing/">Redis Pipeline与Lua脚本——批量操作与原子性</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/05/05/countdownlatch-yu-cyclicbarrier-duo-xian-cheng-xie-zuo-li-qi/">CountDownLatch与CyclicBarrier——多线程协作利器</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%89%8D%E8%A8%80"><span class="toc-number">1.</span> <span class="toc-text">前言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8HashMap%E5%92%8CHashtable"><span class="toc-number">2.</span> <span class="toc-text">为什么不用HashMap和Hashtable</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#JDK7%EF%BC%9A%E5%88%86%E6%AE%B5%E9%94%81%EF%BC%88Segment%EF%BC%89"><span class="toc-number">3.</span> <span class="toc-text">JDK7：分段锁（Segment）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84"><span class="toc-number">3.1.</span> <span class="toc-text">数据结构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E6%BA%90%E7%A0%81"><span class="toc-number">3.2.</span> <span class="toc-text">核心源码</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#JDK7%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">3.3.</span> <span class="toc-text">JDK7的问题</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#JDK8%EF%BC%9ACAS-synchronized-%E7%BA%A2%E9%BB%91%E6%A0%91"><span class="toc-number">4.</span> <span class="toc-text">JDK8：CAS + synchronized + 红黑树</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84-1"><span class="toc-number">4.1.</span> <span class="toc-text">数据结构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%AD%97%E6%AE%B5"><span class="toc-number">4.2.</span> <span class="toc-text">核心字段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#put%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90"><span class="toc-number">4.3.</span> <span class="toc-text">put源码分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#get%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90"><span class="toc-number">4.4.</span> <span class="toc-text">get源码分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%89%A9%E5%AE%B9%E6%9C%BA%E5%88%B6"><span class="toc-number">4.5.</span> <span class="toc-text">扩容机制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#size%E7%BB%9F%E8%AE%A1"><span class="toc-number">4.6.</span> <span class="toc-text">size统计</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#JDK7-vs-JDK8%E5%AF%B9%E6%AF%94"><span class="toc-number">5.</span> <span class="toc-text">JDK7 vs JDK8对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%AE%9E%E6%88%98%EF%BC%9AConcurrentHashMap%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">6.</span> <span class="toc-text">实战：ConcurrentHashMap使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E6%9C%AC%E5%9C%B0%E7%BC%93%E5%AD%98"><span class="toc-number">6.1.</span> <span class="toc-text">1. 本地缓存</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8%E7%9A%84%E8%AE%A1%E6%95%B0%E5%99%A8"><span class="toc-number">6.2.</span> <span class="toc-text">2. 线程安全的计数器</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E4%B8%80%E6%AC%A1%E6%80%A7%E5%88%9D%E5%A7%8B%E5%8C%96"><span class="toc-number">6.3.</span> <span class="toc-text">3. 一次性初始化</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B8%B8%E8%A7%81%E8%AF%AF%E5%8C%BA"><span class="toc-number">7.</span> <span class="toc-text">常见误区</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-ConcurrentHashMap%E4%B8%8D%E6%98%AF%E6%89%80%E6%9C%89%E6%93%8D%E4%BD%9C%E9%83%BD%E7%BA%BF%E7%A8%8B%E5%AE%89%E5%85%A8"><span class="toc-number">7.1.</span> <span class="toc-text">1. ConcurrentHashMap不是所有操作都线程安全</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-size-%E4%B8%8D%E6%98%AF%E5%BC%BA%E4%B8%80%E8%87%B4%E7%9A%84"><span class="toc-number">7.2.</span> <span class="toc-text">2. size()不是强一致的</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-key-value%E4%B8%8D%E8%83%BD%E4%B8%BAnull"><span class="toc-number">7.3.</span> <span class="toc-text">3. key&#x2F;value不能为null</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91%E9%97%AE%E9%A2%98"><span class="toc-number">8.</span> <span class="toc-text">面试高频问题</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-JDK8%E4%B8%BA%E4%BB%80%E4%B9%88%E7%94%A8synchronized%E6%9B%BF%E4%BB%A3ReentrantLock%EF%BC%9F"><span class="toc-number">8.1.</span> <span class="toc-text">1. JDK8为什么用synchronized替代ReentrantLock？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-ConcurrentHashMap%E7%9A%84get%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E9%9C%80%E8%A6%81%E5%8A%A0%E9%94%81%EF%BC%9F"><span class="toc-number">8.2.</span> <span class="toc-text">2. ConcurrentHashMap的get为什么不需要加锁？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-ConcurrentHashMap%E5%A6%82%E4%BD%95%E4%BF%9D%E8%AF%81%E5%B9%B6%E5%8F%91%E6%89%A9%E5%AE%B9%E5%AE%89%E5%85%A8%EF%BC%9F"><span class="toc-number">8.3.</span> <span class="toc-text">3. ConcurrentHashMap如何保证并发扩容安全？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">9.</span> <span class="toc-text">最佳实践</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">10.</span> <span class="toc-text">总结</span></a></li></ol>
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E5%B9%B6%E5%8F%91/" class="tag" aria-label="标签: #并发">#并发</a>
+            
+                <a href="/tags/%E6%BA%90%E7%A0%81/" class="tag" aria-label="标签: #源码">#源码</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(265)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B/" aria-label="分类: 并发编程">
+                        并发编程
+                        <span>(12)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<script>
+    // 打字效果
+    document.addEventListener('DOMContentLoaded', function() {
+        const typedText = document.querySelector('.typed-text');
+        if (typedText) {
+            const text = 'grq';
+            let index = 0;
+            let direction = 1;
+            
+            function type() {
+                if (direction === 1) {
+                    typedText.textContent = text.substring(0, index + 1);
+                    index++;
+                    if (index >= text.length) {
+                        direction = -1;
+                        setTimeout(type, 2000);
+                        return;
+                    }
+                } else {
+                    typedText.textContent = text.substring(0, index - 1);
+                    index--;
+                    if (index <= 0) {
+                        direction = 1;
+                        setTimeout(type, 500);
+                        return;
+                    }
+                }
+                setTimeout(type, 150);
+            }
+            
+            type();
+        }
+    });
+</script>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function overrideHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+    
+    document.addEventListener('DOMContentLoaded', overrideHbeStyles);
+    setTimeout(overrideHbeStyles, 100);
+    setTimeout(overrideHbeStyles, 500);
+    setTimeout(overrideHbeStyles, 1000);
+    setInterval(overrideHbeStyles, 3000);
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>
