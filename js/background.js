@@ -8,7 +8,7 @@ document.body.appendChild(container);
 
 // 如果是文章详情页，设置图片背景
 if (isPostPage) {
-    container.style.backgroundImage = 'url(/images/hua.png)';
+    container.style.backgroundImage = 'url(/images/shu.png)';
     container.style.backgroundSize = 'cover';
     container.style.backgroundPosition = 'center';
     container.style.backgroundRepeat = 'no-repeat';
