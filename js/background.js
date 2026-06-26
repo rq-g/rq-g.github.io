@@ -8,7 +8,7 @@ document.body.appendChild(container);
 
 // 如果是文章详情页，设置图片背景
 if (isPostPage) {
-    container.style.backgroundImage = 'url(/images/shu.png)';
+    container.style.backgroundImage = 'url(/images/yk.png)';
     container.style.backgroundSize = 'cover';
     container.style.backgroundPosition = 'center';
     container.style.backgroundRepeat = 'no-repeat';
@@ -36,7 +36,7 @@ class Star {
     constructor() {
         this.reset();
     }
-    
+
     reset() {
         // 随机位置
         this.x = Math.random() * width;
@@ -46,7 +46,7 @@ class Star {
         // 基础亮度 - 更大亮度范围
         this.baseAlpha = Math.random() * 0.7 + 0.2;
         this.alpha = this.baseAlpha;
-        
+
         // 闪烁效果参数 - 大幅增强闪烁效果
         this.twinkleMode = Math.floor(Math.random() * 3); // 0: 慢闪, 1: 中闪, 2: 快闪
         // 根据模式设置速度
@@ -64,7 +64,7 @@ class Star {
                 this.twinkleDepth = Math.random() * 0.2 + 0.1; // 轻微闪烁
                 break;
         }
-        
+
         this.twinkleFactor = Math.random() * Math.PI * 2; // 随机起始相位
         // 生命周期 (15-25秒)
         this.lifespan = Math.random() * 10000 + 15000;
@@ -73,23 +73,23 @@ class Star {
         this.dying = false;
         // 随机星星颜色
         this.colorType = Math.random() > 0.8 ? Math.floor(Math.random() * 3) : -1;
-        
+
         // 添加额外的闪烁效果 - 偶尔的亮闪
         this.flashInterval = Math.random() * 5000 + 3000; // 每3-8秒闪烁一次
         this.lastFlash = Date.now() - Math.random() * this.flashInterval;
         this.flashing = false;
         this.flashDuration = 300; // 闪烁持续300毫秒
     }
-    
+
     update(timestamp) {
         const now = timestamp || Date.now();
         const age = now - this.birth;
-        
+
         // 生命周期管理
         if (age > this.lifespan && !this.dying) {
             this.dying = true;
         }
-        
+
         // 处理消失和出现的动画
         if (this.dying) {
             this.alpha -= 0.02; // 更快消失
@@ -102,14 +102,14 @@ class Star {
             // 出生后1秒内渐变出现
             this.alpha = Math.min(this.baseAlpha, age / 1000 * this.baseAlpha);
         }
-        
+
         // 检查是否应该触发亮闪效果
         if (!this.flashing && now - this.lastFlash > this.flashInterval) {
             this.flashing = true;
             this.flashStart = now;
             this.lastFlash = now;
         }
-        
+
         // 处理亮闪状态
         if (this.flashing) {
             const flashAge = now - this.flashStart;
@@ -128,11 +128,11 @@ class Star {
             this.alpha = Math.max(0.05, Math.min(0.95, this.baseAlpha + twinkle));
         }
     }
-    
+
     draw() {
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-        
+
         // 根据星星类型设置不同的颜色
         let color;
         switch(this.colorType) {
@@ -148,10 +148,10 @@ class Star {
             default: // 普通白色星星
                 color = `rgba(255, 255, 255, ${this.alpha})`;
         }
-        
+
         ctx.fillStyle = color;
         ctx.fill();
-        
+
         // 为较大的星星添加更明显的光晕效果 - 调整光晕尺寸
         if (this.size > 1.2) { // 降低光晕阈值以匹配更小的星星
             // 内光晕 - 减小光晕大小
@@ -159,7 +159,7 @@ class Star {
             ctx.arc(this.x, this.y, this.size * 1.8, 0, Math.PI * 2);
             ctx.fillStyle = color.replace(`, ${this.alpha})`, `, ${this.alpha * 0.18})`);
             ctx.fill();
-            
+
             // 外光晕 - 仅适用于较大星星和闪烁状态
             if (this.size > 1.5 || this.flashing) {
                 ctx.beginPath();
@@ -176,7 +176,7 @@ class Meteor {
     constructor() {
         this.reset();
     }
-    
+
     reset() {
         // 起始位置 - 从屏幕上方随机位置开始
         this.x = Math.random() * width;
@@ -200,21 +200,21 @@ class Meteor {
         this.exitStartIndex = 0; // 从哪个索引开始消失
         this.exitSpeed = 2; // 每帧消失的段数
     }
-    
+
     update() {
         // 移动流星
         this.x += this.vx;
         this.y += this.vy;
-        
+
         // 如果流星还在活动状态，记录当前位置
         if (!this.exiting) {
             this.positions.unshift({ x: this.x, y: this.y, alpha: this.alpha });
-            
+
             // 只保留尾巴最近的部分
             if (this.positions.length > this.tailLength) {
                 this.positions.pop();
             }
-            
+
             // 检查流星是否离开屏幕 - 只有头部离开才开始消失
             if (this.x > width || this.x < 0 || this.y > height || this.y < -50) {
                 this.exiting = true;
@@ -227,7 +227,7 @@ class Meteor {
                 // 从尾巴尖开始逐渐删除段
                 this.exitStartIndex += this.exitSpeed;
                 // 删除应该消失的部分
-                while (this.positions.length > 0 && 
+                while (this.positions.length > 0 &&
                        this.positions.length - this.exitStartIndex <= 0) {
                     this.positions.pop(); // 从尾部删除
                 }
@@ -237,13 +237,13 @@ class Meteor {
             }
         }
     }
-    
+
     draw() {
         // 如果已经开始退出且没有尾巴，不绘制
         if (this.exiting && this.positions.length === 0) {
             return;
         }
-        
+
         // 如果还没开始退出，绘制流星头部
         if (!this.exiting) {
             // 绘制流星头部
@@ -251,19 +251,19 @@ class Meteor {
             ctx.arc(this.x, this.y, this.size * 1.5, 0, Math.PI * 2);
             ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha})`;
             ctx.fill();
-            
+
             // 绘制流星外部光晕
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.size * 3, 0, Math.PI * 2);
             ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha * 0.3})`;
             ctx.fill();
         }
-        
+
         // 绘制流星尾巴
         for (let i = 1; i < this.positions.length; i++) {
             const prev = this.positions[i-1];
             const current = this.positions[i];
-            
+
             // 如果在退出状态，计算相对消失位置
             let segmentAlpha;
             if (this.exiting) {
@@ -285,7 +285,7 @@ class Meteor {
                 // 正常状态下的透明度计算
                 segmentAlpha = (1 - i / this.positions.length) * this.alpha * 0.8;
             }
-            
+
             // 绘制尾巴段
             ctx.beginPath();
             ctx.moveTo(prev.x, prev.y);
@@ -303,7 +303,7 @@ function resizeCanvas() {
     height = window.innerHeight;
     canvas.width = width;
     canvas.height = height;
-    
+
     // 调整现有星星位置
     if (stars.length > 0) {
         for (let star of stars) {
@@ -329,12 +329,12 @@ function initStars() {
 function createMeteorIfNeeded() {
     // 检查流星数量
     const activeMeteors = meteors.filter(meteor => meteor.active).length;
-    
+
     // 随机决定是否创建新流星 (增加概率到0.5%)
     if (activeMeteors < MAX_METEORS && Math.random() < 0.005) {
         meteors.push(new Meteor());
     }
-    
+
     // 移除不活跃的流星
     for (let i = meteors.length - 1; i >= 0; i--) {
         if (!meteors[i].active) {
@@ -347,22 +347,22 @@ function createMeteorIfNeeded() {
 function animate(timestamp) {
     // 清空画布
     ctx.clearRect(0, 0, width, height);
-    
+
     // 更新并绘制星星
     for (let star of stars) {
         star.update(timestamp);
         star.draw();
     }
-    
+
     // 可能创建新流星
     createMeteorIfNeeded();
-    
+
     // 更新并绘制流星
     for (let meteor of meteors) {
         meteor.update();
         meteor.draw();
     }
-    
+
     animationId = requestAnimationFrame(animate);
 }
 
