@@ -15,7 +15,15 @@ document.addEventListener('DOMContentLoaded', function() {
     let animationId = null;
     let scale = 1;
 
-    const SPHERE_RADIUS = 270;
+    // 根据屏幕宽度动态设置球体半径
+    function getSphereRadius() {
+        const width = window.innerWidth;
+        if (width <= 480) return 90;
+        if (width <= 768) return 115;
+        return 270;
+    }
+
+    let SPHERE_RADIUS = getSphereRadius();
     const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
     function initSphere() {
@@ -27,7 +35,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const y = SPHERE_RADIUS * Math.sin(phi) * Math.sin(theta);
             const z = SPHERE_RADIUS * Math.cos(phi);
 
-            tag.style.transform = `translate3d(${x}px, ${y}px, ${z}px)`;
+            // 使用 translate(-50%, -50%) 让标签以中心点为基准，再进行 3D 变换
+            tag.style.transform = `translate(-50%, -50%) translate3d(${x}px, ${y}px, ${z}px)`;
             tag.dataset.x = x;
             tag.dataset.y = y;
             tag.dataset.z = z;
@@ -62,7 +71,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const zIndex = Math.floor(finalZ + SPHERE_RADIUS);
 
             tag.style.opacity = opacity;
-            tag.style.transform = `translate3d(${newX}px, ${newY}px, ${finalZ}px) scale(${scaleFactor * scale})`;
+            tag.style.transform = `translate(-50%, -50%) translate3d(${newX}px, ${newY}px, ${finalZ}px) scale(${scaleFactor * scale})`;
             tag.style.zIndex = zIndex;
         });
     }
@@ -143,6 +152,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 setTimeout(resumeAutoRotate, 1000);
             }
         });
+    });
+
+    // 响应式支持：窗口大小改变时重新初始化
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+            const newRadius = getSphereRadius();
+            if (newRadius !== SPHERE_RADIUS) {
+                SPHERE_RADIUS = newRadius;
+                initSphere();
+            }
+        }, 250);
     });
 
     initSphere();
