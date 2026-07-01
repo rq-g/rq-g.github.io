@@ -208,16 +208,20 @@ document.addEventListener('DOMContentLoaded', function() {
                     for (let j = 0; j < tagElements.length; j++) {
                         tags.push(tagElements[j].textContent);
                     }
-                    // 如果没有tag标签，尝试从category中提取
-                    if (tags.length === 0 && categories.length > 0) {
-                        categories.forEach(cat => tags.push(cat));
+
+                    // 提取日期 - 兼容hexo-generator-searchdb的<date>标签
+                    let date = '';
+                    const dateEl = entry.getElementsByTagName('date')[0];
+                    if (dateEl) {
+                        date = dateEl.textContent || '';
                     }
 
                     data.push({
                         title,
                         content,
                         url,
-                        tags
+                        tags,
+                        date
                     });
                 } catch (err) {
                     console.error('处理文章条目错误:', err);
@@ -335,7 +339,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="result-meta">
                         <span class="result-date">
                             <img src="/images/calendar.svg" alt="calendar">
-                            ${new Date().toLocaleDateString()}
+                            ${post.date ? new Date(post.date).toLocaleDateString('zh-CN') : ''}
                         </span>
                     </div>
                     <div class="result-excerpt">${highlightedExcerpt}</div>

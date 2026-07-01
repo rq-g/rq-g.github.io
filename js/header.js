@@ -71,12 +71,11 @@ document.addEventListener('DOMContentLoaded', function() {
         window.addEventListener('scroll', function() {
             const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
 
-            // 向下滚动超过100px时隐藏导航
-            if (scrollTop > lastScrollTop && scrollTop > 100) {
+            if (scrollTop <= 50) {
+                header.classList.remove('scroll-down');
+            } else if (scrollTop > lastScrollTop && scrollTop > 100) {
                 header.classList.add('scroll-down');
-            }
-            // 向上滚动时显示导航
-            else if (scrollTop < lastScrollTop) {
+            } else if (scrollTop < lastScrollTop) {
                 header.classList.remove('scroll-down');
             }
 
