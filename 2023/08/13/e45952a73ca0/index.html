@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MySQL主从复制与读写分离——原理与实战 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="MySQL主从复制与读写分离——原理与实战">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/08/13/e45952a73ca0/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言单库读写压力越来越大，写操作影响读性能。2023年引入主从复制+读写分离后，写走主库、读走从库，读性能提升3倍，主库压力降低60%。主从复制原理三线程模型12345678910111213主库：BinlogDump线程：将Binlog发送给从库从库：IO线程：接收主库Binlog写入RelayLogSQL">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">MySQL主从复制与读写分离——原理与实战</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-08-13T13:45:24.000Z">2023-08-13</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL%E6%B7%B1%E5%BA%A6/">MySQL深度</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>单库读写压力越来越大，写操作影响读性能。2023年引入主从复制+读写分离后，写走主库、读走从库，读性能提升3倍，主库压力降低60%。</p>
+<h2 id="主从复制原理"><a href="#主从复制原理" class="headerlink" title="主从复制原理"></a>主从复制原理</h2><h3 id="三线程模型"><a href="#三线程模型" class="headerlink" title="三线程模型"></a>三线程模型</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">主库：</span><br><span class="line">  Binlog Dump线程：将Binlog发送给从库</span><br><span class="line"></span><br><span class="line">从库：</span><br><span class="line">  IO线程：接收主库Binlog写入Relay Log</span><br><span class="line">  SQL线程：执行Relay Log中的SQL</span><br><span class="line"></span><br><span class="line">流程：</span><br><span class="line">1. 主库执行事务 → 写入Binlog</span><br><span class="line">2. 从库IO线程连接主库 → 请求Binlog</span><br><span class="line">3. 主库Dump线程读取Binlog → 发送给从库</span><br><span class="line">4. 从库IO线程写入Relay Log</span><br><span class="line">5. 从库SQL线程读取Relay Log → 执行SQL → 数据一致</span><br></pre></td></tr></table></figure>
+
+<h3 id="复制模式"><a href="#复制模式" class="headerlink" title="复制模式"></a>复制模式</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">异步复制（默认）：</span><br><span class="line">  主库写入Binlog后立即返回 → 不等待从库确认</span><br><span class="line">  优点：性能好</span><br><span class="line">  缺点：主库崩溃可能丢数据</span><br><span class="line"></span><br><span class="line">半同步复制：</span><br><span class="line">  主库写入Binlog后等待至少一个从库确认 → 再返回</span><br><span class="line">  优点：数据更安全</span><br><span class="line">  缺点：性能略低</span><br><span class="line"></span><br><span class="line">全同步复制：</span><br><span class="line">  所有从库都确认 → 才返回</span><br><span class="line">  优点：数据不丢</span><br><span class="line">  缺点：性能最差（基本不用）</span><br><span class="line"></span><br><span class="line">生产推荐：半同步复制</span><br></pre></td></tr></table></figure>
+
+<h3 id="半同步复制配置"><a href="#半同步复制配置" class="headerlink" title="半同步复制配置"></a>半同步复制配置</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 主库安装插件</span></span><br><span class="line">INSTALL PLUGIN rpl_semi_sync_master SONAME <span class="string">&#x27;semisync_master.so&#x27;</span>;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> rpl_semi_sync_master_enabled <span class="operator">=</span> <span class="keyword">ON</span>;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> rpl_semi_sync_master_timeout <span class="operator">=</span> <span class="number">3000</span>;  <span class="comment">-- 3秒超时退化为异步</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 从库安装插件</span></span><br><span class="line">INSTALL PLUGIN rpl_semi_sync_slave SONAME <span class="string">&#x27;semisync_slave.so&#x27;</span>;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> rpl_semi_sync_slave_enabled <span class="operator">=</span> <span class="keyword">ON</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- my.cnf永久配置</span></span><br><span class="line">[mysqld]</span><br><span class="line">rpl_semi_sync_master_enabled <span class="operator">=</span> <span class="keyword">ON</span></span><br><span class="line">rpl_semi_sync_master_timeout <span class="operator">=</span> <span class="number">3000</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="GTID复制"><a href="#GTID复制" class="headerlink" title="GTID复制"></a>GTID复制</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- GTID（Global Transaction ID）：全局事务标识</span></span><br><span class="line"><span class="comment">-- 格式：server_uuid:transaction_id</span></span><br><span class="line"><span class="comment">-- 优点：自动定位复制位点，切换主库更简单</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 开启GTID</span></span><br><span class="line">[mysqld]</span><br><span class="line">gtid_mode <span class="operator">=</span> <span class="keyword">ON</span></span><br><span class="line">enforce_gtid_consistency <span class="operator">=</span> <span class="keyword">ON</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 从库配置</span></span><br><span class="line">CHANGE MASTER <span class="keyword">TO</span></span><br><span class="line">  MASTER_HOST<span class="operator">=</span><span class="string">&#x27;192.168.1.100&#x27;</span>,</span><br><span class="line">  MASTER_PORT<span class="operator">=</span><span class="number">3306</span>,</span><br><span class="line">  MASTER_USER<span class="operator">=</span><span class="string">&#x27;repl&#x27;</span>,</span><br><span class="line">  MASTER_PASSWORD<span class="operator">=</span><span class="string">&#x27;password&#x27;</span>,</span><br><span class="line">  MASTER_AUTO_POSITION<span class="operator">=</span><span class="number">1</span>;  <span class="comment">-- GTID自动定位</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">START</span> SLAVE;</span><br></pre></td></tr></table></figure>
+
+<h2 id="主从搭建"><a href="#主从搭建" class="headerlink" title="主从搭建"></a>主从搭建</h2><h3 id="主库配置"><a href="#主库配置" class="headerlink" title="主库配置"></a>主库配置</h3><figure class="highlight ini"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="section">[mysqld]</span></span><br><span class="line"><span class="attr">server-id</span> = <span class="number">1</span></span><br><span class="line"><span class="attr">log-bin</span> = mysql-bin</span><br><span class="line"><span class="attr">binlog-format</span> = ROW</span><br><span class="line"><span class="attr">gtid_mode</span> = <span class="literal">ON</span></span><br><span class="line"><span class="attr">enforce_gtid_consistency</span> = <span class="literal">ON</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 创建复制用户</span></span><br><span class="line">CREATE USER &#x27;repl&#x27;@&#x27;%&#x27; IDENTIFIED BY &#x27;password&#x27;<span class="comment">;</span></span><br><span class="line">GRANT REPLICATION SLAVE ON *.* TO &#x27;repl&#x27;@&#x27;%&#x27;<span class="comment">;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="从库配置"><a href="#从库配置" class="headerlink" title="从库配置"></a>从库配置</h3><figure class="highlight ini"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="section">[mysqld]</span></span><br><span class="line"><span class="attr">server-id</span> = <span class="number">2</span></span><br><span class="line"><span class="attr">relay-log</span> = relay-bin</span><br><span class="line"><span class="attr">read-only</span> = <span class="literal">ON</span>          -- 从库只读</span><br><span class="line"><span class="attr">super-read-only</span> = <span class="literal">ON</span>    -- super用户也只读</span><br><span class="line"><span class="attr">gtid_mode</span> = <span class="literal">ON</span></span><br><span class="line"><span class="attr">enforce_gtid_consistency</span> = <span class="literal">ON</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="主从延迟监控"><a href="#主从延迟监控" class="headerlink" title="主从延迟监控"></a>主从延迟监控</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 查看从库状态</span></span><br><span class="line"><span class="keyword">SHOW</span> SLAVE STATUS\G</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 关键指标</span></span><br><span class="line">Seconds_Behind_Master: <span class="number">0</span>    <span class="comment">-- 延迟秒数（0表示同步）</span></span><br><span class="line">Slave_IO_Running: Yes       <span class="comment">-- IO线程状态</span></span><br><span class="line">Slave_SQL_Running: Yes      <span class="comment">-- SQL线程状态</span></span><br><span class="line">Master_Log_File: mysql<span class="operator">-</span>bin<span class="number">.000003</span></span><br><span class="line">Read_Master_Log_Pos: <span class="number">1234</span></span><br><span class="line">Relay_Master_Log_File: mysql<span class="operator">-</span>bin<span class="number">.000003</span></span><br><span class="line">Exec_Master_Log_Pos: <span class="number">1234</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="主从延迟的原因"><a href="#主从延迟的原因" class="headerlink" title="主从延迟的原因"></a>主从延迟的原因</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">1. 从库硬件差 → 升级从库</span><br><span class="line">2. 主库大事务 → 拆分事务</span><br><span class="line">3. 从库单线程回放 → 开启并行复制</span><br><span class="line">4. 网络延迟 → 同机房部署</span><br><span class="line">5. 从库压力大（查询多）→ 增加从库</span><br></pre></td></tr></table></figure>
+
+<h3 id="并行复制"><a href="#并行复制" class="headerlink" title="并行复制"></a>并行复制</h3><figure class="highlight ini"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="section">[mysqld]</span></span><br><span class="line"><span class="comment"># MySQL 5.7+ 基于组提交的并行复制</span></span><br><span class="line"><span class="attr">slave-parallel-type</span> = LOGICAL_CLOCK</span><br><span class="line"><span class="attr">slave-parallel-workers</span> = <span class="number">8</span>       -- 并行线程数</span><br><span class="line"><span class="attr">slave-preserve-commit-order</span> = <span class="literal">ON</span>  -- 保持提交顺序</span><br></pre></td></tr></table></figure>
+
+<h2 id="读写分离"><a href="#读写分离" class="headerlink" title="读写分离"></a>读写分离</h2><h3 id="实现方案"><a href="#实现方案" class="headerlink" title="实现方案"></a>实现方案</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">方案1：代码层面</span><br><span class="line">  写操作调用主库DataSource</span><br><span class="line">  读操作调用从库DataSource</span><br><span class="line"></span><br><span class="line">方案2：中间件</span><br><span class="line">  ShardingSphere-Proxy</span><br><span class="line">  MyCat</span><br><span class="line"></span><br><span class="line">方案3：框架支持</span><br><span class="line">  ShardingSphere-JDBC（推荐）</span><br></pre></td></tr></table></figure>
+
+<h3 id="ShardingSphere读写分离"><a href="#ShardingSphere读写分离" class="headerlink" title="ShardingSphere读写分离"></a>ShardingSphere读写分离</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">shardingsphere:</span></span><br><span class="line">    <span class="attr">datasource:</span></span><br><span class="line">      <span class="attr">names:</span> <span class="string">master,slave0,slave1</span></span><br><span class="line">      <span class="attr">master:</span></span><br><span class="line">        <span class="attr">type:</span> <span class="string">com.zaxxer.hikari.HikariDataSource</span></span><br><span class="line">        <span class="attr">jdbc-url:</span> <span class="string">jdbc:mysql://192.168.1.100:3306/order_db</span></span><br><span class="line">        <span class="attr">username:</span> <span class="string">root</span></span><br><span class="line">        <span class="attr">password:</span> <span class="string">root</span></span><br><span class="line">      <span class="attr">slave0:</span></span><br><span class="line">        <span class="attr">type:</span> <span class="string">com.zaxxer.hikari.HikariDataSource</span></span><br><span class="line">        <span class="attr">jdbc-url:</span> <span class="string">jdbc:mysql://192.168.1.101:3306/order_db</span></span><br><span class="line">        <span class="attr">username:</span> <span class="string">root</span></span><br><span class="line">        <span class="attr">password:</span> <span class="string">root</span></span><br><span class="line">      <span class="attr">slave1:</span></span><br><span class="line">        <span class="attr">type:</span> <span class="string">com.zaxxer.hikari.HikariDataSource</span></span><br><span class="line">        <span class="attr">jdbc-url:</span> <span class="string">jdbc:mysql://192.168.1.102:3306/order_db</span></span><br><span class="line">        <span class="attr">username:</span> <span class="string">root</span></span><br><span class="line">        <span class="attr">password:</span> <span class="string">root</span></span><br><span class="line"></span><br><span class="line">    <span class="attr">rules:</span></span><br><span class="line">      <span class="attr">readwrite-splitting:</span></span><br><span class="line">        <span class="attr">data-sources:</span></span><br><span class="line">          <span class="attr">rw:</span></span><br><span class="line">            <span class="attr">write-data-source-name:</span> <span class="string">master</span></span><br><span class="line">            <span class="attr">read-data-source-names:</span> <span class="string">slave0,slave1</span></span><br><span class="line">            <span class="attr">load-balancer-name:</span> <span class="string">round-robin</span></span><br><span class="line">        <span class="attr">load-balancers:</span></span><br><span class="line">          <span class="attr">round-robin:</span></span><br><span class="line">            <span class="attr">type:</span> <span class="string">ROUND_ROBIN</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="强制走主库"><a href="#强制走主库" class="headerlink" title="强制走主库"></a>强制走主库</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 某些场景需要读主库（写后立即读）</span></span><br><span class="line"><span class="comment">// 使用HintManager强制路由到主库</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> OrderMapper orderMapper;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Transactional</span></span><br><span class="line">    <span class="keyword">public</span> Order <span class="title function_">createOrder</span><span class="params">(OrderDTO dto)</span> &#123;</span><br><span class="line">        <span class="type">Order</span> <span class="variable">order</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Order</span>();</span><br><span class="line">        <span class="comment">// ... 创建订单</span></span><br><span class="line">        orderMapper.insert(order);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 写后立即读 → 强制走主库</span></span><br><span class="line">        <span class="type">HintManager</span> <span class="variable">hintManager</span> <span class="operator">=</span> HintManager.getInstance();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            hintManager.setWriteRouteOnly();  <span class="comment">// 强制主库</span></span><br><span class="line">            <span class="keyword">return</span> orderMapper.selectById(order.getId());</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            hintManager.close();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="代码层面读写分离"><a href="#代码层面读写分离" class="headerlink" title="代码层面读写分离"></a>代码层面读写分离</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 动态数据源</span></span><br><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DynamicDataSourceConfig</span> &#123;</span><br><span class="line">    <span class="meta">@Bean</span></span><br><span class="line">    <span class="meta">@Primary</span></span><br><span class="line">    <span class="keyword">public</span> DataSource <span class="title function_">dynamicDataSource</span><span class="params">(</span></span><br><span class="line"><span class="params">            <span class="meta">@Qualifier(&quot;masterDataSource&quot;)</span> DataSource master,</span></span><br><span class="line"><span class="params">            <span class="meta">@Qualifier(&quot;slaveDataSource&quot;)</span> DataSource slave)</span> &#123;</span><br><span class="line"></span><br><span class="line">        Map&lt;Object, Object&gt; targetDataSources = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line">        targetDataSources.put(<span class="string">&quot;master&quot;</span>, master);</span><br><span class="line">        targetDataSources.put(<span class="string">&quot;slave&quot;</span>, slave);</span><br><span class="line"></span><br><span class="line">        <span class="type">DynamicDataSource</span> <span class="variable">dynamicDataSource</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">DynamicDataSource</span>();</span><br><span class="line">        dynamicDataSource.setDefaultTargetDataSource(master);</span><br><span class="line">        dynamicDataSource.setTargetDataSources(targetDataSources);</span><br><span class="line">        <span class="keyword">return</span> dynamicDataSource;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 通过AOP切换数据源</span></span><br><span class="line"><span class="meta">@Aspect</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DataSourceAspect</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Before(&quot;@annotation(org.springframework.transaction.annotation.Transactional)&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">setMaster</span><span class="params">()</span> &#123;</span><br><span class="line">        DynamicDataSource.setDataSource(<span class="string">&quot;master&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Before(&quot;execution(* com.example.service.*.get*(..)) || &quot; +</span></span><br><span class="line"><span class="meta">            &quot;execution(* com.example.service.*.list*(..)) || &quot; +</span></span><br><span class="line"><span class="meta">            &quot;execution(* com.example.service.*.query*(..))&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">setSlave</span><span class="params">()</span> &#123;</span><br><span class="line">        DynamicDataSource.setDataSource(<span class="string">&quot;slave&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@After(&quot;@annotation(org.springframework.transaction.annotation.Transactional) || &quot; +</span></span><br><span class="line"><span class="meta">            &quot;execution(* com.example.service.*.*(..))&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">clear</span><span class="params">()</span> &#123;</span><br><span class="line">        DynamicDataSource.clearDataSource();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="主从切换"><a href="#主从切换" class="headerlink" title="主从切换"></a>主从切换</h2><h3 id="手动切换"><a href="#手动切换" class="headerlink" title="手动切换"></a>手动切换</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 1. 从库停止复制</span></span><br><span class="line">STOP SLAVE;</span><br><span class="line">RESET SLAVE <span class="keyword">ALL</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 2. 从库提升为主库</span></span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> read_only <span class="operator">=</span> OFF;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> super_read_only <span class="operator">=</span> OFF;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 3. 其他从库指向新主库</span></span><br><span class="line">CHANGE MASTER <span class="keyword">TO</span></span><br><span class="line">  MASTER_HOST<span class="operator">=</span><span class="string">&#x27;new_master_ip&#x27;</span>,</span><br><span class="line">  MASTER_PORT<span class="operator">=</span><span class="number">3306</span>,</span><br><span class="line">  MASTER_USER<span class="operator">=</span><span class="string">&#x27;repl&#x27;</span>,</span><br><span class="line">  MASTER_PASSWORD<span class="operator">=</span><span class="string">&#x27;password&#x27;</span>,</span><br><span class="line">  MASTER_AUTO_POSITION<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line"><span class="keyword">START</span> SLAVE;</span><br></pre></td></tr></table></figure>
+
+<h3 id="MHA自动切换"><a href="#MHA自动切换" class="headerlink" title="MHA自动切换"></a>MHA自动切换</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">MHA（Master High Availability）：</span><br><span class="line">- 监控主库状态</span><br><span class="line">- 主库故障自动切换</span><br><span class="line">- 尽量减少数据丢失</span><br><span class="line"></span><br><span class="line">架构：</span><br><span class="line">MHA Manager → 监控主库</span><br><span class="line">MHA Node → 部署在每个MySQL节点</span><br><span class="line"></span><br><span class="line">切换流程：</span><br><span class="line">1. 检测主库故障</span><br><span class="line">2. 选取数据最新的从库作为新主库</span><br><span class="line">3. 其他从库指向新主库</span><br><span class="line">4. VIP漂移到新主库</span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-主从复制的原理？"><a href="#1-主从复制的原理？" class="headerlink" title="1. 主从复制的原理？"></a>1. 主从复制的原理？</h3><p>主库Binlog Dump线程发送Binlog → 从库IO线程写入Relay Log → SQL线程执行回放。三种模式：异步（默认）、半同步、全同步。</p>
+<h3 id="2-主从延迟怎么解决？"><a href="#2-主从延迟怎么解决？" class="headerlink" title="2. 主从延迟怎么解决？"></a>2. 主从延迟怎么解决？</h3><p>从库并行复制、拆分大事务、升级从库硬件、同机房部署、增加从库分散读压力。</p>
+<h3 id="3-读写分离后写后读不一致？"><a href="#3-读写分离后写后读不一致？" class="headerlink" title="3. 读写分离后写后读不一致？"></a>3. 读写分离后写后读不一致？</h3><p>强制走主库（HintManager.setWriteRouteOnly）、业务容忍短暂不一致、使用事务保证。</p>
+<p><strong>总结</strong></p>
+<p>主从复制+读写分离是MySQL高可用的基础方案。实战后，核心认知是：<strong>异步复制可能丢数据，半同步更安全；读写分离要注意写后读一致性；主从延迟通过并行复制和优化事务解决</strong>*写走主库、读走从库，这是数据库水平扩展的第一步。</p>
+<h2 id="进阶内容补充"><a href="#进阶内容补充" class="headerlink" title="进阶内容补充"></a>进阶内容补充</h2><h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="学习资源推荐"><a href="#学习资源推荐" class="headerlink" title="学习资源推荐"></a>学习资源推荐</h2><table>
+<thead>
+<tr>
+<th>资源</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL官方文档</td>
+<td>文档</td>
+<td>最权威的参考</td>
+</tr>
+<tr>
+<td>《高性能MySQL》</td>
+<td>书籍</td>
+<td>系统化学习</td>
+</tr>
+<tr>
+<td>《MySQL技术内幕:InnoDB存储引擎》</td>
+<td>书籍</td>
+<td>深入原理</td>
+</tr>
+<tr>
+<td>阿里云RDS最佳实践</td>
+<td>实战</td>
+<td>阿里云DBA经验</td>
+</tr>
+<tr>
+<td>美团技术博客</td>
+<td>实战</td>
+<td>互联网大厂实践</td>
+</tr>
+</tbody></table>
+<h3 id="学习路径"><a href="#学习路径" class="headerlink" title="学习路径"></a>学习路径</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">阶段1：基础概念理解（1-2周）</span><br><span class="line">  -- 重点：核心概念、基本操作</span><br><span class="line"></span><br><span class="line">阶段2：实战优化练习（2-3周）</span><br><span class="line">  -- 重点：结合慢查询日志，逐一优化</span><br><span class="line"></span><br><span class="line">阶段3：深入底层原理（持续）</span><br><span class="line">  -- 重点：源码分析、底层实现</span><br><span class="line"></span><br><span class="line">阶段4：架构设计提升（持续）</span><br><span class="line">  -- 重点：高可用、分库分表、读写分离</span><br></pre></td></tr></table></figure>
+
+<h2 id="主从复制原理深度解析"><a href="#主从复制原理深度解析" class="headerlink" title="主从复制原理深度解析"></a>主从复制原理深度解析</h2><h3 id="Binlog日志格式与复制"><a href="#Binlog日志格式与复制" class="headerlink" title="Binlog日志格式与复制"></a>Binlog日志格式与复制</h3><p><strong>三种Binlog格式对比：</strong></p>
+<ol>
+<li>STATEMENT（语句模式）</li>
+<li>ROW（行模式，推荐）</li>
+<li>MIXED（混合模式）</li>
+</ol>
+<h3 id="复制三线程模型详解"><a href="#复制三线程模型详解" class="headerlink" title="复制三线程模型详解"></a>复制三线程模型详解</h3><p><strong>主从复制三线程架构：</strong></p>
+<ol>
+<li>连接主库，请求Binlog</li>
+<li>接收Binlog事件</li>
+<li>写入Relay Log</li>
+<li>更新master.info（记录已接收的Binlog位置）</li>
+<li>读取Relay Log</li>
+<li>解析并执行SQL&#x2F;行变更</li>
+<li>更新relay-log.info（记录已执行的Relay Log位置）</li>
+</ol>
+<h3 id="半同步复制原理"><a href="#半同步复制原理" class="headerlink" title="半同步复制原理"></a>半同步复制原理</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">异步复制 vs 半同步复制 vs 全同步复制：</span><br><span class="line"></span><br><span class="line">异步复制（默认）:</span><br><span class="line">  主库写入 → 返回客户端 → 从库异步拉取</span><br><span class="line">  风险: 主库宕机可能丢失数据</span><br><span class="line"></span><br><span class="line">半同步复制:</span><br><span class="line">  主库写入 → 等待至少1个从库确认 → 返回客户端</span><br><span class="line">  保障: 至少1个从库收到Binlog</span><br><span class="line">  超时: rpl_semi_sync_master_timeout后降级为异步</span><br><span class="line"></span><br><span class="line">  主库                      从库</span><br><span class="line">  +----------+              +----------+</span><br><span class="line">  | COMMIT   |              |          |</span><br><span class="line">  | 写Binlog |              |          |</span><br><span class="line">  | →发送→   | ----------→ | 写Relay  |</span><br><span class="line">  | 等待ACK  |              | Log      |</span><br><span class="line">  | ←ACK←    | ←----------- | 返回ACK  |</span><br><span class="line">  | 返回客户端|              |          |</span><br><span class="line">  +----------+              +----------+</span><br><span class="line"></span><br><span class="line">全同步复制（不常用）:</span><br><span class="line">  主库写入 → 等待所有从库执行完毕 → 返回客户端</span><br><span class="line">  性能: 极差，基本不用</span><br></pre></td></tr></table></figure>
+
+<h3 id="GTID复制原理"><a href="#GTID复制原理" class="headerlink" title="GTID复制原理"></a>GTID复制原理</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br></pre></td><td class="code"><pre><span class="line">GTID = Global Transaction Identifier</span><br><span class="line">格式: server_uuid:transaction_id</span><br><span class="line">示例: 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-5</span><br><span class="line"></span><br><span class="line">GTID优势:</span><br><span class="line">  1. 自动定位复制位点，无需手动指定binlog文件和位置</span><br><span class="line">  2. 主从切换更简单</span><br><span class="line">  3. 易于校验主从数据一致性</span><br><span class="line">  4. 从库可以自动跳过已执行的事务</span><br><span class="line"></span><br><span class="line">GTID复制流程:</span><br><span class="line">  主库执行事务 → 生成GTID → 写入Binlog → 传输到从库</span><br><span class="line">  从库IO Thread → 接收GTID事务 → 检查是否已执行</span><br><span class="line">  → 未执行则回放 → 已执行则跳过</span><br><span class="line"></span><br><span class="line">GTID配置:</span><br><span class="line">  主库:</span><br><span class="line">    gtid_mode=ON</span><br><span class="line">    enforce_gtid_consistency=ON</span><br><span class="line">    log_bin=ON</span><br><span class="line">    server_id=1</span><br><span class="line"></span><br><span class="line">  从库:</span><br><span class="line">    gtid_mode=ON</span><br><span class="line">    enforce_gtid_consistency=ON</span><br><span class="line">    log_bin=ON</span><br><span class="line">    server_id=2</span><br><span class="line">    log_slave_updates=ON  -- 级联复制必须</span><br><span class="line"></span><br><span class="line">  CHANGE MASTER TO</span><br><span class="line">    MASTER_HOST=&#x27;master_host&#x27;,</span><br><span class="line">    MASTER_PORT=3306,</span><br><span class="line">    MASTER_USER=&#x27;repl&#x27;,</span><br><span class="line">    MASTER_PASSWORD=&#x27;xxx&#x27;,</span><br><span class="line">    MASTER_AUTO_POSITION=1;  -- 使用GTID自动定位</span><br></pre></td></tr></table></figure>
+
+<h2 id="主从延迟深度分析"><a href="#主从延迟深度分析" class="headerlink" title="主从延迟深度分析"></a>主从延迟深度分析</h2><h3 id="主从延迟的根因"><a href="#主从延迟的根因" class="headerlink" title="主从延迟的根因"></a>主从延迟的根因</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">主从延迟的6大根因：</span><br><span class="line"></span><br><span class="line">1. 从库单线程回放</span><br><span class="line">   主库: 多线程并发写入</span><br><span class="line">   从库: SQL Thread单线程串行回放</span><br><span class="line">   → 写入速度 &gt; 回放速度 → 延迟累积</span><br><span class="line"></span><br><span class="line">2. 大事务</span><br><span class="line">   单事务修改100万行 → 从库需串行回放100万行</span><br><span class="line">   回放期间后续事务全部等待</span><br><span class="line"></span><br><span class="line">3. 从库机器性能差</span><br><span class="line">   从库CPU/IO能力弱于主库</span><br><span class="line">   回放速度跟不上写入速度</span><br><span class="line"></span><br><span class="line">4. 网络延迟</span><br><span class="line">   主从跨机房/跨地域部署</span><br><span class="line">   IO Thread拉取Binlog延迟</span><br><span class="line"></span><br><span class="line">5. 从库压力大</span><br><span class="line">   从库承担大量读查询</span><br><span class="line">   读查询与回放争抢CPU/IO</span><br><span class="line"></span><br><span class="line">6. DDL操作</span><br><span class="line">   ALTER TABLE需要复制到从库执行</span><br><span class="line">   DDL期间从库无法回放其他事务</span><br></pre></td></tr></table></figure>
+
+<h3 id="主从延迟监控方案"><a href="#主从延迟监控方案" class="headerlink" title="主从延迟监控方案"></a>主从延迟监控方案</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 方式1: SHOW SLAVE STATUS</span></span><br><span class="line"><span class="keyword">SHOW</span> SLAVE STATUS\G</span><br><span class="line"><span class="comment">-- Seconds_Behind_Master: 延迟秒数</span></span><br><span class="line"><span class="comment">-- 注意: 这个值可能不准确（网络延迟时显示0）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 方式2: pt-heartbeat（推荐）</span></span><br><span class="line"><span class="comment">-- 主库定时写入时间戳 → 从库读取对比</span></span><br><span class="line">pt<span class="operator">-</span>heartbeat \</span><br><span class="line">  <span class="comment">--host=master \</span></span><br><span class="line">  <span class="comment">--user=monitor \</span></span><br><span class="line">  <span class="comment">--ask-pass \</span></span><br><span class="line">  <span class="comment">--database=mine_db \</span></span><br><span class="line">  <span class="comment">--interval=1 \</span></span><br><span class="line">  <span class="comment">--update \</span></span><br><span class="line">  <span class="comment">--daemonize</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 从库监控延迟</span></span><br><span class="line">pt<span class="operator">-</span>heartbeat \</span><br><span class="line">  <span class="comment">--host=slave \</span></span><br><span class="line">  <span class="comment">--user=monitor \</span></span><br><span class="line">  <span class="comment">--ask-pass \</span></span><br><span class="line">  <span class="comment">--database=mine_db \</span></span><br><span class="line">  <span class="comment">--monitor \</span></span><br><span class="line">  <span class="comment">--interval=1</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 方式3: 自建心跳表</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_heartbeat (</span><br><span class="line">    id <span class="type">INT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    ts DATETIME(<span class="number">3</span>) <span class="keyword">NOT NULL</span></span><br><span class="line">);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 主库每秒更新</span></span><br><span class="line"><span class="keyword">INSERT INTO</span> t_heartbeat <span class="keyword">VALUES</span>(<span class="number">1</span>, NOW(<span class="number">3</span>))</span><br><span class="line"><span class="keyword">ON</span> DUPLICATE KEY <span class="keyword">UPDATE</span> ts <span class="operator">=</span> NOW(<span class="number">3</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 从库查询延迟</span></span><br><span class="line"><span class="keyword">SELECT</span> TIMESTAMPDIFF(MICROSECOND, ts, NOW(<span class="number">3</span>))<span class="operator">/</span><span class="number">1000</span> <span class="keyword">AS</span> delay_ms</span><br><span class="line"><span class="keyword">FROM</span> t_heartbeat <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="主从延迟解决方案"><a href="#主从延迟解决方案" class="headerlink" title="主从延迟解决方案"></a>主从延迟解决方案</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 主从延迟处理策略</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ReplicationLagService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 策略1: 写后读强制走主库</span></span><br><span class="line"><span class="comment">     * 写入后一定时间内读操作走主库</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> DataSourceRouter dataSourceRouter;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> DeviceAlarm <span class="title function_">createAndRead</span><span class="params">(DeviceAlarm alarm)</span> &#123;</span><br><span class="line">        <span class="comment">// 写入（走主库）</span></span><br><span class="line">        alarmMapper.insert(alarm);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 写入后强制走主库读</span></span><br><span class="line">        dataSourceRouter.forceMaster();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> alarmMapper.selectById(alarm.getId());</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            dataSourceRouter.clearForceMaster();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 策略2: 延迟检测 + 降级</span></span><br><span class="line"><span class="comment">     * 检测从库延迟，超阈值走主库</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> List&lt;DeviceAlarm&gt; <span class="title function_">listAlarms</span><span class="params">(AlarmCondition condition)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">lag</span> <span class="operator">=</span> getReplicationLag();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (lag &gt; <span class="number">5000</span>) &#123;  <span class="comment">// 延迟超过5秒</span></span><br><span class="line">            log.warn(<span class="string">&quot;主从延迟&#123;&#125;ms，走主库&quot;</span>, lag);</span><br><span class="line">            dataSourceRouter.forceMaster();</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> alarmMapper.selectByCondition(condition);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            dataSourceRouter.clearForceMaster();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 策略3: 业务容忍短暂不一致</span></span><br><span class="line"><span class="comment">     * 非关键业务允许读从库（即使有延迟）</span></span><br><span class="line"><span class="comment">     * 关键业务强制走主库</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> <span class="title function_">getReplicationLag</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 查询心跳表获取延迟</span></span><br><span class="line">        <span class="comment">// 或从监控系统中获取</span></span><br><span class="line">        <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="读写分离深度实战"><a href="#读写分离深度实战" class="headerlink" title="读写分离深度实战"></a>读写分离深度实战</h2><h3 id="ShardingSphere读写分离配置详解"><a href="#ShardingSphere读写分离配置详解" class="headerlink" title="ShardingSphere读写分离配置详解"></a>ShardingSphere读写分离配置详解</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ShardingSphere-JDBC 读写分离配置</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">shardingsphere:</span></span><br><span class="line">    <span class="attr">datasource:</span></span><br><span class="line">      <span class="attr">names:</span> <span class="string">master,slave0,slave1</span></span><br><span class="line">      <span class="attr">master:</span></span><br><span class="line">        <span class="attr">type:</span> <span class="string">com.zaxxer.hikari.HikariDataSource</span></span><br><span class="line">        <span class="attr">driver-class-name:</span> <span class="string">com.mysql.cj.jdbc.Driver</span></span><br><span class="line">        <span class="attr">jdbc-url:</span> <span class="string">jdbc:mysql://master:3306/mine_db?useSSL=false&amp;serverTimezone=Asia/Shanghai</span></span><br><span class="line">        <span class="attr">username:</span> <span class="string">app_user</span></span><br><span class="line">        <span class="attr">password:</span> <span class="string">xxx</span></span><br><span class="line">        <span class="attr">hikari:</span></span><br><span class="line">          <span class="attr">maximum-pool-size:</span> <span class="number">50</span></span><br><span class="line">          <span class="attr">minimum-idle:</span> <span class="number">10</span></span><br><span class="line">      <span class="attr">slave0:</span></span><br><span class="line">        <span class="attr">type:</span> <span class="string">com.zaxxer.hikari.HikariDataSource</span></span><br><span class="line">        <span class="attr">driver-class-name:</span> <span class="string">com.mysql.cj.jdbc.Driver</span></span><br><span class="line">        <span class="attr">jdbc-url:</span> <span class="string">jdbc:mysql://slave0:3306/mine_db?useSSL=false&amp;serverTimezone=Asia/Shanghai</span></span><br><span class="line">        <span class="attr">username:</span> <span class="string">app_user</span></span><br><span class="line">        <span class="attr">password:</span> <span class="string">xxx</span></span><br><span class="line">        <span class="attr">hikari:</span></span><br><span class="line">          <span class="attr">maximum-pool-size:</span> <span class="number">50</span></span><br><span class="line">          <span class="attr">minimum-idle:</span> <span class="number">10</span></span><br><span class="line">      <span class="attr">slave1:</span></span><br><span class="line">        <span class="attr">type:</span> <span class="string">com.zaxxer.hikari.HikariDataSource</span></span><br><span class="line">        <span class="attr">driver-class-name:</span> <span class="string">com.mysql.cj.jdbc.Driver</span></span><br><span class="line">        <span class="attr">jdbc-url:</span> <span class="string">jdbc:mysql://slave1:3306/mine_db?useSSL=false&amp;serverTimezone=Asia/Shanghai</span></span><br><span class="line">        <span class="attr">username:</span> <span class="string">app_user</span></span><br><span class="line">        <span class="attr">password:</span> <span class="string">xxx</span></span><br><span class="line">        <span class="attr">hikari:</span></span><br><span class="line">          <span class="attr">maximum-pool-size:</span> <span class="number">50</span></span><br><span class="line">          <span class="attr">minimum-idle:</span> <span class="number">10</span></span><br><span class="line"></span><br><span class="line">    <span class="attr">rules:</span></span><br><span class="line">      <span class="attr">readwrite-splitting:</span></span><br><span class="line">        <span class="attr">data-sources:</span></span><br><span class="line">          <span class="attr">rw:</span></span><br><span class="line">            <span class="attr">write-data-source-name:</span> <span class="string">master</span></span><br><span class="line">            <span class="attr">read-data-source-names:</span> <span class="string">slave0,slave1</span></span><br><span class="line">            <span class="attr">load-balancer-name:</span> <span class="string">round-robin</span></span><br><span class="line">        <span class="attr">load-balancers:</span></span><br><span class="line">          <span class="attr">round-robin:</span></span><br><span class="line">            <span class="attr">type:</span> <span class="string">ROUND_ROBIN</span></span><br><span class="line"></span><br><span class="line">    <span class="attr">props:</span></span><br><span class="line">      <span class="attr">sql-show:</span> <span class="literal">false</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="强制走主库注解实现"><a href="#强制走主库注解实现" class="headerlink" title="强制走主库注解实现"></a>强制走主库注解实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 强制走主库注解</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Target(&#123;ElementType.METHOD, ElementType.TYPE&#125;)</span></span><br><span class="line"><span class="meta">@Retention(RetentionPolicy.RUNTIME)</span></span><br><span class="line"><span class="keyword">public</span> <span class="meta">@interface</span> ForceMaster &#123;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 强制走主库切面</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Aspect</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ForceMasterAspect</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> HintManager hintManager;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Before(&quot;@annotation(forceMaster)&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">before</span><span class="params">(ForceMaster forceMaster)</span> &#123;</span><br><span class="line">        HintManager.getInstance().setMasterRouteOnly();</span><br><span class="line">        log.debug(<span class="string">&quot;强制走主库&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@After(&quot;@annotation(forceMaster)&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">after</span><span class="params">(ForceMaster forceMaster)</span> &#123;</span><br><span class="line">        HintManager.getInstance().close();</span><br><span class="line">        log.debug(<span class="string">&quot;恢复读写分离&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 使用示例</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 普通查询 → 走从库</span></span><br><span class="line">    <span class="keyword">public</span> List&lt;DeviceAlarm&gt; <span class="title function_">listAlarms</span><span class="params">(String type)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> alarmMapper.selectByType(type);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 写后读 → 强制走主库</span></span><br><span class="line">    <span class="meta">@ForceMaster</span></span><br><span class="line">    <span class="keyword">public</span> DeviceAlarm <span class="title function_">createAndRead</span><span class="params">(DeviceAlarm alarm)</span> &#123;</span><br><span class="line">        alarmMapper.insert(alarm);</span><br><span class="line">        <span class="keyword">return</span> alarmMapper.selectById(alarm.getId());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 关键业务 → 强制走主库</span></span><br><span class="line">    <span class="meta">@ForceMaster</span></span><br><span class="line">    <span class="keyword">public</span> DeviceAlarm <span class="title function_">getAlarmDetail</span><span class="params">(Long id)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> alarmMapper.selectById(id);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="主从切换实战"><a href="#主从切换实战" class="headerlink" title="主从切换实战"></a>主从切换实战</h2><h3 id="MHA自动切换原理"><a href="#MHA自动切换原理" class="headerlink" title="MHA自动切换原理"></a>MHA自动切换原理</h3><p><strong>MHA (Master High Availability) 切换流程：</strong></p>
+<ul>
+<li><strong>1. 检测主库故障</strong><ul>
+<li>MHA Manager每秒ping主库</li>
+<li>连续3次失败 → 判定主库宕机</li>
+</ul>
+</li>
+<li><strong>2. 确认主库确实宕机</strong><ul>
+<li>尝试SSH连接主库</li>
+<li>通过其他从库验证</li>
+</ul>
+</li>
+<li><strong>3. 选择新主库</strong><ul>
+<li>选择延迟最小的从库</li>
+<li>选择配置了candidate_master的从库</li>
+<li>排除设置了no_master的从库</li>
+</ul>
+</li>
+<li><strong>4. 应用差异Relay Log</strong><ul>
+<li>从新主库读取Relay Log</li>
+<li>将未执行的Binlog应用到新主库</li>
+<li>确保新主库数据最新</li>
+</ul>
+</li>
+<li><strong>5. 通知其他从库切换</strong><ul>
+<li>CHANGE MASTER TO 新主库</li>
+<li>START SLAVE</li>
+</ul>
+</li>
+<li><strong>6. 更新VIP（可选）</strong><ul>
+<li>将读写VIP漂移到新主库</li>
+</ul>
+</li>
+<li><strong>7. 完成切换</strong><ul>
+<li>整个过程约10-30秒</li>
+</ul>
+</li>
+<li><strong>MHA架构：</strong></li>
+<li>MHA Manager</li>
+<li><strong>监控|    |切换</strong><ul>
+<li>v         v</li>
+</ul>
+</li>
+<li>| Master |  | Slave1 | ← 新主库</li>
+<li><strong>复制</strong><br>  - v</li>
+<li>Slave2</li>
+</ul>
+<h3 id="MySQL-8-0-MGR-Group-Replication"><a href="#MySQL-8-0-MGR-Group-Replication" class="headerlink" title="MySQL 8.0 MGR (Group Replication)"></a>MySQL 8.0 MGR (Group Replication)</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line">MGR (MySQL Group Replication) 原理：</span><br><span class="line"></span><br><span class="line">  基于Paxos协议的多主复制组</span><br><span class="line">  自动选主、自动切换、强一致性</span><br><span class="line"></span><br><span class="line">  单主模式（推荐）：</span><br><span class="line">    1. 只有主库可写</span><br><span class="line">    2. 主库宕机自动选新主</span><br><span class="line">    3. 切换时间约10秒</span><br><span class="line"></span><br><span class="line">  多主模式：</span><br><span class="line">    1. 所有节点可写</span><br><span class="line">    2. 冲突检测和处理</span><br><span class="line">    3. 性能受限，不推荐</span><br><span class="line"></span><br><span class="line">  MGR架构：</span><br><span class="line">  +---------+    +---------+    +---------+</span><br><span class="line">  | Node 1  |    | Node 2  |    | Node 3  |</span><br><span class="line">  | (主库)  |    | (从库)  |    | (从库)  |</span><br><span class="line">  +---------+    +---------+    +---------+</span><br><span class="line">       |              |              |</span><br><span class="line">       +--- Paxos ---+--- 协议 -----+</span><br><span class="line">           (组通信，多数派确认)</span><br><span class="line"></span><br><span class="line">  MGR配置要点：</span><br><span class="line">    group_replication_group_name: 组名(UUID)</span><br><span class="line">    group_replication_start_on_boot: ON</span><br><span class="line">    group_replication_local_address: 本机地址</span><br><span class="line">    group_replication_group_seeds: 所有节点地址</span><br><span class="line">    group_replication_single_primary_mode: ON(单主)</span><br><span class="line">    group_replication_enforce_update_everywhere_checks: OFF</span><br></pre></td></tr></table></figure>
+
+<h3 id="手动切换步骤"><a href="#手动切换步骤" class="headerlink" title="手动切换步骤"></a>手动切换步骤</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 手动主从切换步骤</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤1: 确认从库数据已同步</span></span><br><span class="line"><span class="keyword">SHOW</span> SLAVE STATUS\G</span><br><span class="line"><span class="comment">-- Seconds_Behind_Master = 0</span></span><br><span class="line"><span class="comment">-- Relay_Master_Log_File 和 Read_Master_Log_Pos 一致</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤2: 阻止旧主库写入</span></span><br><span class="line"><span class="comment">-- 方式1: 设置只读</span></span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> read_only <span class="operator">=</span> <span class="keyword">ON</span>;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> super_read_only <span class="operator">=</span> <span class="keyword">ON</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 方式2: FLUSH TABLES</span></span><br><span class="line">FLUSH TABLES <span class="keyword">WITH</span> READ LOCK;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤3: 确认从库追平</span></span><br><span class="line"><span class="keyword">SHOW</span> SLAVE STATUS\G</span><br><span class="line"><span class="comment">-- Seconds_Behind_Master = 0</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤4: 在从库上执行切换</span></span><br><span class="line">STOP SLAVE;</span><br><span class="line">RESET SLAVE <span class="keyword">ALL</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤5: 新主库开启写入</span></span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> read_only <span class="operator">=</span> OFF;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> super_read_only <span class="operator">=</span> OFF;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤6: 旧主库改为从库</span></span><br><span class="line">CHANGE MASTER <span class="keyword">TO</span></span><br><span class="line">    MASTER_HOST<span class="operator">=</span><span class="string">&#x27;new_master_host&#x27;</span>,</span><br><span class="line">    MASTER_PORT<span class="operator">=</span><span class="number">3306</span>,</span><br><span class="line">    MASTER_USER<span class="operator">=</span><span class="string">&#x27;repl&#x27;</span>,</span><br><span class="line">    MASTER_PASSWORD<span class="operator">=</span><span class="string">&#x27;xxx&#x27;</span>,</span><br><span class="line">    MASTER_AUTO_POSITION<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line"><span class="keyword">START</span> SLAVE;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤7: 验证</span></span><br><span class="line"><span class="keyword">SHOW</span> SLAVE STATUS\G</span><br></pre></td></tr></table></figure>
+
+
+<h2 id="主从复制面试速记表"><a href="#主从复制面试速记表" class="headerlink" title="主从复制面试速记表"></a>主从复制面试速记表</h2><table>
+<thead>
+<tr>
+<th>问题</th>
+<th>关键答案</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>主从复制原理</td>
+<td>Binlog→IO Thread→Relay Log→SQL Thread</td>
+</tr>
+<tr>
+<td>三种复制模式</td>
+<td>异步&#x2F;半同步&#x2F;全同步</td>
+</tr>
+<tr>
+<td>GTID是什么</td>
+<td>全局事务标识，自动定位复制位点</td>
+</tr>
+<tr>
+<td>主从延迟原因</td>
+<td>单线程回放&#x2F;大事务&#x2F;从库性能差&#x2F;网络</td>
+</tr>
+<tr>
+<td>延迟怎么解决</td>
+<td>并行复制&#x2F;半同步&#x2F;强走主库</td>
+</tr>
+<tr>
+<td>写后读不一致</td>
+<td>@ForceMaster强制走主库</td>
+</tr>
+<tr>
+<td>MHA是什么</td>
+<td>主库高可用自动切换工具</td>
+</tr>
+<tr>
+<td>MGR是什么</td>
+<td>MySQL组复制，基于Paxos</td>
+</tr>
+<tr>
+<td>Binlog格式</td>
+<td>STATEMENT&#x2F;ROW&#x2F;MIXED，推荐ROW</td>
+</tr>
+<tr>
+<td>并行复制原理</td>
+<td>基于组提交，同组事务并行回放</td>
+</tr>
+<tr>
+<td>数据一致性校验</td>
+<td>pt-table-checksum + pt-table-sync</td>
+</tr>
+<tr>
+<td>半同步超时</td>
+<td>默认10秒，超时降级为异步</td>
+</tr>
+</tbody></table>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>主从复制与读写分离是MySQL高可用架构的基石，实际项目的实践总结：</p>
+<ol>
+<li><strong>Binlog格式选ROW</strong> — 确保主从数据一致，避免函数不确定性</li>
+<li><strong>启用GTID复制</strong> — 自动定位位点，主从切换更简单</li>
+<li><strong>开启并行复制</strong> — MySQL 5.7+基于组提交，大幅降低延迟</li>
+<li><strong>半同步保安全</strong> — 至少一个从库确认，防止数据丢失</li>
+<li><strong>写后读走主库</strong> — @ForceMaster注解，避免读不到刚写的数据</li>
+<li><strong>延迟监控不可少</strong> — pt-heartbeat实时监控，超阈值告警</li>
+<li><strong>MHA&#x2F;MGR保高可用</strong> — 主库宕机自动切换，业务不中断</li>
+<li><strong>定期校验数据</strong> — pt-table-checksum确保主从一致性</li>
+</ol>
+<h2 id="延伸阅读"><a href="#延伸阅读" class="headerlink" title="延伸阅读"></a>延伸阅读</h2><table>
+<thead>
+<tr>
+<th>主题</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL InnoDB Cluster</td>
+<td>MySQL官方高可用方案</td>
+</tr>
+<tr>
+<td>MySQL Router</td>
+<td>官方读写分离路由中间件</td>
+</tr>
+<tr>
+<td>Orchestrator</td>
+<td>MySQL高可用拓扑管理工具</td>
+</tr>
+<tr>
+<td>MySQL 8.0 Clone Plugin</td>
+<td>在线克隆从库</td>
+</tr>
+<tr>
+<td>分布式数据库</td>
+<td>TiDB&#x2F;OceanBase无需主从复制</td>
+</tr>
+</tbody></table>
+<h3 id="主从复制进阶"><a href="#主从复制进阶" class="headerlink" title="主从复制进阶"></a>主从复制进阶</h3>
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/08/06/fa6c794aaf91/">OpenFeign与负载均衡——微服务调用最佳实践</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/09/10/49cd4d13e15e/">MySQL大表优化——字段拆分与冷热分离</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/MySQL/" class="tag" aria-label="标签: #MySQL">#MySQL</a>
+            
+                <a href="/tags/Redis/" class="tag" aria-label="标签: #Redis">#Redis</a>
+            
+                <a href="/tags/%E6%9E%B6%E6%9E%84/" class="tag" aria-label="标签: #架构">#架构</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL%E6%B7%B1%E5%BA%A6/" aria-label="分类: MySQL深度">
+                        MySQL深度
+                        <span>(10)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

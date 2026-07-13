@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>Redisson源码分析——看门狗与红锁的实现原理 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="Redisson源码分析——看门狗与红锁的实现原理">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2025/05/15/20252f9aac0b/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言在实际场景中，我们大量使用了Redisson分布式锁来保障多节点部署下的数据一致性——从矿车调度互斥、设备状态变更，到告警事件去重、井下人员定位数据写入，分布式锁几乎无处不在。2024年初步引入时只停留在API层面，2025年决定深入源码，系统理解其实现原理：看门狗如何自动续期、可重入锁如何用Hash结构">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">Redisson源码分析——看门狗与红锁的实现原理</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2025-05-15T09:06:29.000Z">2025-05-15</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2025/">2025</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2025/%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/">源码分析</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>在实际场景中，我们大量使用了Redisson分布式锁来保障多节点部署下的数据一致性——从矿车调度互斥、设备状态变更，到告警事件去重、井下人员定位数据写入，分布式锁几乎无处不在。2024年初步引入时只停留在API层面，2025年决定深入源码，系统理解其实现原理：看门狗如何自动续期、可重入锁如何用Hash结构实现、红锁如何解决主从切换丢锁问题、公平锁如何排队、读写锁如何并发控制……只有真正读懂源码，才能在生产中正确使用和高效排错。</p>
+<hr>
+<h2 id="Redisson-架构总览"><a href="#Redisson-架构总览" class="headerlink" title="Redisson 架构总览"></a>Redisson 架构总览</h2><p>Redisson 是一个基于 Redis 的 Java 驻内存数据网格（In-Memory Data Grid），其核心设计理念是将 Redis 的数据结构映射为 Java 的并发数据结构，让使用者以熟悉的 JUC（java.util.concurrent）接口来操作分布式对象。</p>
+<h3 id="核心架构层次"><a href="#核心架构层次" class="headerlink" title="核心架构层次"></a>核心架构层次</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────┐</span><br><span class="line">│              用户 API 层                          │</span><br><span class="line">│  RLock / RMap / RQueue / RBloomFilter / ...     │</span><br><span class="line">├─────────────────────────────────────────────────┤</span><br><span class="line">│            分布式对象实现层                        │</span><br><span class="line">│  RedissonLock / RedissonMap / RedissonQueue ...  │</span><br><span class="line">├─────────────────────────────────────────────────┤</span><br><span class="line">│           Lua 脚本 + Redis 命令层                 │</span><br><span class="line">│  原子操作保证 / eval / evalsha                   │</span><br><span class="line">├─────────────────────────────────────────────────┤</span><br><span class="line">│            连接与通信层                           │</span><br><span class="line">│  Netty 连接池 / 命令执行器 / Promise             │</span><br><span class="line">├─────────────────────────────────────────────────┤</span><br><span class="line">│            Redis 实例层                           │</span><br><span class="line">│  单节点 / 哨兵 / 集群 / 主从                     │</span><br><span class="line">└─────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="关键设计决策"><a href="#关键设计决策" class="headerlink" title="关键设计决策"></a>关键设计决策</h3><table>
+<thead>
+<tr>
+<th>设计决策</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Lua 脚本保证原子性</strong></td>
+<td>所有复合操作（加锁+设置过期、解锁+通知）都通过 Lua 脚本在 Redis 服务端原子执行，避免竞态条件</td>
+</tr>
+<tr>
+<td><strong>Netty 异步通信</strong></td>
+<td>底层采用 Netty 的 NIO 模型，所有 Redis 命令通过异步 Promise&#x2F;Future 机制执行，提高吞吐</td>
+</tr>
+<tr>
+<td><strong>Pub&#x2F;Sub 消息通知</strong></td>
+<td>使用 Redis 的 Pub&#x2F;Sub 机制实现锁释放通知，避免轮询</td>
+</tr>
+<tr>
+<td><strong>Hash 结构存储锁</strong></td>
+<td>用 Hash 的 field 存储客户端线程标识，value 存储重入次数，天然支持可重入</td>
+</tr>
+<tr>
+<td><strong>Timeout + TimerTask 续期</strong></td>
+<td>基于 Netty 的 HashedWheelTimer 实现看门狗定时续期，避免业务未完成锁过期</td>
+</tr>
+</tbody></table>
+<h3 id="核心类关系"><a href="#核心类关系" class="headerlink" title="核心类关系"></a>核心类关系</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">RLock (接口)</span><br><span class="line">  └── RedissonLock (基础可重入锁)</span><br><span class="line">        ├── RedissonFairLock (公平锁)</span><br><span class="line">        ├── RedissonReadWriteLock.RReadLock (读锁)</span><br><span class="line">        └── RedissonReadWriteLock.RWriteLock (写锁)</span><br><span class="line">RedissonRedLock (红锁，组合多个 RLock)</span><br><span class="line">RedissonSemaphore (信号量)</span><br><span class="line">RedissonCountDownLatch (倒计时门闩)</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="分布式锁-Lua-脚本源码分析"><a href="#分布式锁-Lua-脚本源码分析" class="headerlink" title="分布式锁 Lua 脚本源码分析"></a>分布式锁 Lua 脚本源码分析</h2><p>Redisson 分布式锁的核心逻辑全部封装在 Lua 脚本中，在 Redis 服务端原子执行。这是整个框架最关键的设计——因为 Redis 是单线程执行 Lua 的，所以脚本中的多个命令天然不会被其他客户端打断。</p>
+<h3 id="tryLock-内部加锁逻辑"><a href="#tryLock-内部加锁逻辑" class="headerlink" title="tryLock 内部加锁逻辑"></a>tryLock 内部加锁逻辑</h3><p>当调用 <code>lock()</code> 或 <code>tryLock()</code> 时，最终会执行一段 Lua 脚本来完成加锁。以下是 Redisson 3.x 版本中加锁脚本的核心逻辑（来自 <code>RedissonLock.tryLockInnerAsync</code>）：</p>
+<figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 加锁 Lua 脚本（源码简化版）</span></span><br><span class="line"><span class="comment">-- KEYS[1] = 锁名称，如 &quot;redisson_lock:lock:order:1001&quot;</span></span><br><span class="line"><span class="comment">-- ARGV[1] = 过期时间（leaseTime），单位毫秒，默认30000</span></span><br><span class="line"><span class="comment">-- ARGV[2] = 线程标识，格式为 &quot;clientId:threadId&quot;，如 &quot;9e87f3-1:101&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第一步：判断锁是否存在</span></span><br><span class="line"><span class="keyword">if</span> (redis.call(<span class="string">&#x27;exists&#x27;</span>, KEYS[<span class="number">1</span>]) == <span class="number">0</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="comment">-- 锁不存在，当前线程获取锁</span></span><br><span class="line">    redis.call(<span class="string">&#x27;hset&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>], <span class="number">1</span>);</span><br><span class="line">    <span class="comment">-- 设置过期时间</span></span><br><span class="line">    redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span>;  <span class="comment">-- 返回nil表示加锁成功</span></span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第二步：判断是否是同一线程重入</span></span><br><span class="line"><span class="keyword">if</span> (redis.call(<span class="string">&#x27;hexists&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>]) == <span class="number">1</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="comment">-- 同一线程重入，计数器+1</span></span><br><span class="line">    redis.call(<span class="string">&#x27;hincrby&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>], <span class="number">1</span>);</span><br><span class="line">    <span class="comment">-- 重置过期时间</span></span><br><span class="line">    redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span>;  <span class="comment">-- 返回nil表示重入成功</span></span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第三步：锁被其他线程持有，返回剩余TTL</span></span><br><span class="line"><span class="keyword">return</span> redis.call(<span class="string">&#x27;pttl&#x27;</span>, KEYS[<span class="number">1</span>]);</span><br></pre></td></tr></table></figure>
+
+<h3 id="加锁脚本的-Redis-数据结构"><a href="#加锁脚本的-Redis-数据结构" class="headerlink" title="加锁脚本的 Redis 数据结构"></a>加锁脚本的 Redis 数据结构</h3><p>加锁成功后，Redis 中的数据结构如下：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">数据类型：Hash</span><br><span class="line">Key:    redisson_lock:&#123;锁名称&#125;</span><br><span class="line">Field:  clientId:threadId  (如 &quot;9e87f3-1:101&quot;)</span><br><span class="line">Value:  重入次数           (如 1, 2, 3...)</span><br><span class="line"></span><br><span class="line">示例：</span><br><span class="line">HGETALL redisson_lock:lock:order:1001</span><br><span class="line">  &quot;9e87f3-1:101&quot; =&gt; &quot;2&quot;    // 客户端9e87f3-1的线程101持有锁，重入2次</span><br><span class="line"></span><br><span class="line">TTL redisson_lock:lock:order:1001</span><br><span class="line">  30000                       // 剩余过期时间30秒</span><br></pre></td></tr></table></figure>
+
+<p>为什么用 Hash 而不是 String？因为 Hash 的 field 可以天然区分不同线程的持有者，value 可以记录重入次数，一个 Key 就能同时表达「谁持有了锁」和「重入了多少次」两个信息。</p>
+<h3 id="tryLock-解锁逻辑"><a href="#tryLock-解锁逻辑" class="headerlink" title="tryLock 解锁逻辑"></a>tryLock 解锁逻辑</h3><p>解锁同样通过 Lua 脚本原子完成（来自 <code>RedissonLock.unlockInnerAsync</code>）：</p>
+<figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 解锁 Lua 脚本（源码简化版）</span></span><br><span class="line"><span class="comment">-- KEYS[1] = 锁名称</span></span><br><span class="line"><span class="comment">-- KEYS[2] = 通道名称，如 &quot;redisson_lock_channel:&#123;锁名称&#125;&quot;</span></span><br><span class="line"><span class="comment">-- ARGV[1] = 消息类型（解锁通知）</span></span><br><span class="line"><span class="comment">-- ARGV[2] = 过期时间</span></span><br><span class="line"><span class="comment">-- ARGV[3] = 线程标识</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第一步：判断是否是当前线程持有锁</span></span><br><span class="line"><span class="keyword">if</span> (redis.call(<span class="string">&#x27;hexists&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">3</span>]) == <span class="number">0</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span>;  <span class="comment">-- 不是当前线程持有，无法解锁</span></span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第二步：重入次数-1</span></span><br><span class="line"><span class="keyword">local</span> counter = redis.call(<span class="string">&#x27;hincrby&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">3</span>], <span class="number">-1</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第三步：判断是否还有重入</span></span><br><span class="line"><span class="keyword">if</span> (counter &gt; <span class="number">0</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="comment">-- 还有重入，只重置过期时间，不释放锁</span></span><br><span class="line">    redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"><span class="keyword">else</span></span><br><span class="line">    <span class="comment">-- 没有重入了，删除锁并发布通知</span></span><br><span class="line">    redis.call(<span class="string">&#x27;del&#x27;</span>, KEYS[<span class="number">1</span>]);</span><br><span class="line">    redis.call(<span class="string">&#x27;publish&#x27;</span>, KEYS[<span class="number">2</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line"><span class="keyword">end</span>;</span><br></pre></td></tr></table></figure>
+
+<p>解锁脚本的关键点：</p>
+<ol>
+<li><strong>先判断持有者</strong>：只有锁的持有者才能解锁，防止误删其他线程的锁</li>
+<li><strong>计数器递减</strong>：重入次数 -1，而不是直接删除</li>
+<li><strong>完全释放才通知</strong>：只有重入次数降到 0 才删除 Key 并通过 Pub&#x2F;Sub 通知等待线程</li>
+</ol>
+<h3 id="tryLockJava-层调用链"><a href="#tryLockJava-层调用链" class="headerlink" title="tryLockJava 层调用链"></a>tryLockJava 层调用链</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">RedissonLock.lock()</span><br><span class="line">  └── RedissonLock.lock(-1, null, false)     // leaseTime=-1 触发看门狗</span><br><span class="line">        └── RedissonLock.tryAcquire(-1, null, threadId)</span><br><span class="line">              └── RedissonLock.tryAcquireAsync(leaseTime, unit, threadId)</span><br><span class="line">                    └── RedissonLock.tryLockInnerAsync(leaseTime, unit, threadId, ...)</span><br><span class="line">                          └── evalShaAsync(Lua脚本, KEYS, ARGVS)  // 发送到Redis执行</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="看门狗续期机制源码分析"><a href="#看门狗续期机制源码分析" class="headerlink" title="看门狗续期机制源码分析"></a>看门狗续期机制源码分析</h2><p>看门狗（Watchdog）是 Redisson 最精妙的设计之一。它解决了一个经典矛盾：<strong>锁的过期时间太短，业务还没执行完锁就过期了；过期时间太长，持锁客户端宕机后其他客户端要等很久才能获取锁。</strong></p>
+<h3 id="看门狗触发条件"><a href="#看门狗触发条件" class="headerlink" title="看门狗触发条件"></a>看门狗触发条件</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// RedissonLock.lock() 源码简化</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">lock</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// leaseTime = -1，表示不指定租约时间，触发看门狗</span></span><br><span class="line">        lock(-<span class="number">1</span>, <span class="literal">null</span>, <span class="literal">false</span>);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</span><br><span class="line">        Thread.currentThread().interrupt();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 如果指定了 leaseTime，看门狗不会启动</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryLock</span><span class="params">(<span class="type">long</span> waitTime, <span class="type">long</span> leaseTime, TimeUnit unit)</span> &#123;</span><br><span class="line">    <span class="comment">// ...</span></span><br><span class="line">    <span class="comment">// 当 leaseTime != -1 时，使用用户指定的过期时间，不启动看门狗</span></span><br><span class="line">    <span class="comment">// 当 leaseTime == -1 时，使用默认的 30 秒，并启动看门狗</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>核心规则</strong>：调用 <code>lock()</code> 或 <code>tryLock()</code> 不传 <code>leaseTime</code> 参数时，看门狗生效；显式传入 <code>leaseTime</code> 时，看门狗不生效，锁在指定时间后自动过期。</p>
+<h3 id="看门狗续期源码详解"><a href="#看门狗续期源码详解" class="headerlink" title="看门狗续期源码详解"></a>看门狗续期源码详解</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ===== 看门狗核心源码（Redisson 3.x 版本简化） =====</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 1. 加锁成功后，调度续期任务</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">scheduleExpirationRenewal</span><span class="params">(<span class="type">long</span> threadId)</span> &#123;</span><br><span class="line">    <span class="comment">// 将续期任务放入Map中管理，防止重复调度</span></span><br><span class="line">    <span class="type">ExpirationEntry</span> <span class="variable">entry</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ExpirationEntry</span>();</span><br><span class="line">    <span class="type">ExpirationEntry</span> <span class="variable">oldEntry</span> <span class="operator">=</span> EXPIRATION_RENEWAL_MAP.putIfAbsent(getEntryName(), entry);</span><br><span class="line">    <span class="keyword">if</span> (oldEntry != <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="comment">// 已经有续期任务在运行，只增加线程ID</span></span><br><span class="line">        oldEntry.addThreadId(threadId);</span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line">    entry.addThreadId(threadId);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 首次调度续期任务</span></span><br><span class="line">    renewExpiration();</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 2. 续期任务的核心实现</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">renewExpiration</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">ExpirationEntry</span> <span class="variable">entry</span> <span class="operator">=</span> EXPIRATION_RENEWAL_MAP.get(getEntryName());</span><br><span class="line">    <span class="keyword">if</span> (entry == <span class="literal">null</span>) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 创建一个Timeout任务，延迟 internalLockLeaseTime/3 后执行</span></span><br><span class="line">    <span class="comment">// internalLockLeaseTime 默认 30000 毫秒（30秒）</span></span><br><span class="line">    <span class="comment">// 所以续期间隔 = 30000/3 = 10000 毫秒（10秒）</span></span><br><span class="line">    <span class="type">Timeout</span> <span class="variable">task</span> <span class="operator">=</span> serviceManager.newTimeout(<span class="keyword">new</span> <span class="title class_">TimerTask</span>() &#123;</span><br><span class="line">        <span class="meta">@Override</span></span><br><span class="line">        <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">run</span><span class="params">(Timeout timeout)</span> &#123;</span><br><span class="line">            <span class="type">ExpirationEntry</span> <span class="variable">ent</span> <span class="operator">=</span> EXPIRATION_RENEWAL_MAP.get(getEntryName());</span><br><span class="line">            <span class="keyword">if</span> (ent == <span class="literal">null</span>) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">            <span class="type">Long</span> <span class="variable">threadId</span> <span class="operator">=</span> ent.getFirstThreadId();</span><br><span class="line">            <span class="keyword">if</span> (threadId == <span class="literal">null</span>) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 异步续期：重置锁的过期时间为30秒</span></span><br><span class="line">            CompletionStage&lt;Boolean&gt; future = renewExpirationAsync(threadId);</span><br><span class="line">            future.whenComplete((res, ex) -&gt; &#123;</span><br><span class="line">                <span class="keyword">if</span> (ex != <span class="literal">null</span>) &#123;</span><br><span class="line">                    <span class="comment">// 续期异常，取消续期</span></span><br><span class="line">                    log.error(<span class="string">&quot;Failed to renew lock expiration&quot;</span>, ex);</span><br><span class="line">                    EXPIRATION_RENEWAL_MAP.remove(getEntryName());</span><br><span class="line">                    <span class="keyword">return</span>;</span><br><span class="line">                &#125;</span><br><span class="line"></span><br><span class="line">                <span class="keyword">if</span> (res) &#123;</span><br><span class="line">                    <span class="comment">// 续期成功，递归调度下一次续期</span></span><br><span class="line">                    <span class="comment">// 这是看门狗能持续续期的关键——递归调用自己</span></span><br><span class="line">                    renewExpiration();</span><br><span class="line">                &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                    <span class="comment">// 续期失败（锁已不存在或已不属于当前线程）</span></span><br><span class="line">                    <span class="comment">// 取消续期</span></span><br><span class="line">                    EXPIRATION_RENEWAL_MAP.remove(getEntryName());</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;, internalLockLeaseTime / <span class="number">3</span>, TimeUnit.MILLISECONDS);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 将Timeout任务保存到Entry中，方便后续取消</span></span><br><span class="line">    entry.setTimeout(task);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 3. 续期的Redis命令实现</span></span><br><span class="line"><span class="keyword">protected</span> CompletionStage&lt;Boolean&gt; <span class="title function_">renewExpirationAsync</span><span class="params">(<span class="type">long</span> threadId)</span> &#123;</span><br><span class="line">    <span class="comment">// 通过Lua脚本原子性地完成续期</span></span><br><span class="line">    <span class="keyword">return</span> evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,</span><br><span class="line">        <span class="comment">// Lua脚本：判断锁是否还属于当前线程，是则续期</span></span><br><span class="line">        <span class="string">&quot;if (redis.call(&#x27;hexists&#x27;, KEYS[1], ARGV[2]) == 1) then &quot;</span> +</span><br><span class="line">        <span class="string">&quot;    redis.call(&#x27;pexpire&#x27;, KEYS[1], ARGV[1]); &quot;</span> +  <span class="comment">// 重置过期时间</span></span><br><span class="line">        <span class="string">&quot;    return 1; &quot;</span> +</span><br><span class="line">        <span class="string">&quot;end; &quot;</span> +</span><br><span class="line">        <span class="string">&quot;return 0;&quot;</span>,</span><br><span class="line">        Collections.singletonList(getName()),</span><br><span class="line">        internalLockLeaseTime, getLockName(threadId));</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="看门狗的-Timeout-与-TimerTask-机制"><a href="#看门狗的-Timeout-与-TimerTask-机制" class="headerlink" title="看门狗的 Timeout 与 TimerTask 机制"></a>看门狗的 Timeout 与 TimerTask 机制</h3><p>Redisson 的看门狗基于 Netty 的 <code>HashedWheelTimer</code> 实现，而非 JDK 的 <code>Timer</code> 或 <code>ScheduledThreadPoolExecutor</code>。这是因为：</p>
+<table>
+<thead>
+<tr>
+<th>特性</th>
+<th>HashedWheelTimer</th>
+<th>ScheduledThreadPoolExecutor</th>
+<th>JDK Timer</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>时间精度</td>
+<td>约1毫秒（tickDuration可配）</td>
+<td>毫秒级</td>
+<td>毫秒级</td>
+</tr>
+<tr>
+<td>任务数量支持</td>
+<td>百万级（时间轮算法）</td>
+<td>千级（堆排序）</td>
+<td>千级（堆排序）</td>
+</tr>
+<tr>
+<td>取消效率</td>
+<td>O(1)</td>
+<td>O(log n)</td>
+<td>O(log n)</td>
+</tr>
+<tr>
+<td>适用场景</td>
+<td>大量延迟任务、超时检测</td>
+<td>少量定时任务</td>
+<td>已过时</td>
+</tr>
+<tr>
+<td>线程模型</td>
+<td>单Worker线程</td>
+<td>多线程池</td>
+<td>单线程</td>
+</tr>
+</tbody></table>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// serviceManager.newTimeout() 的内部实现</span></span><br><span class="line"><span class="comment">// RedissonServiceManager 中：</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> HashedWheelTimer timer;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> Timeout <span class="title function_">newTimeout</span><span class="params">(TimerTask task, <span class="type">long</span> delay, TimeUnit unit)</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> timer.newTimeout(task, delay, unit);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (IllegalStateException e) &#123;</span><br><span class="line">        <span class="comment">// Timer已关闭</span></span><br><span class="line">        <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>HashedWheelTimer</code> 的工作原理是时间轮算法：将一个轮盘分为若干个格子（默认512个），每个格子代表一个 tick（默认100ms）。任务根据延迟时间放入对应格子，Worker 线程每 tick 检查一次格子中的任务并执行到期任务。这比堆排序的调度器在大规模延迟任务场景下性能更优。</p>
+<h3 id="看门狗续期时序图"><a href="#看门狗续期时序图" class="headerlink" title="看门狗续期时序图"></a>看门狗续期时序图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">时间线（秒）    0        10       20       30       40       50</span><br><span class="line">               │        │        │        │        │        │</span><br><span class="line">加锁成功        ├─TTL=30s─┤        │        │        │        │</span><br><span class="line">                        │        │        │        │        │</span><br><span class="line">续期1                    ├─续期─┤        │        │        │</span><br><span class="line">                        TTL=30s  │        │        │        │</span><br><span class="line">                                 │        │        │        │</span><br><span class="line">续期2                                      ├─续期─┤        │</span><br><span class="line">                                          TTL=30s  │        │</span><br><span class="line">                                                   │        │</span><br><span class="line">业务完成，unlock()                                          │</span><br><span class="line">看门狗停止                                                   │</span><br><span class="line"></span><br><span class="line">如果客户端宕机（第15秒）：</span><br><span class="line">               0        10       15       30</span><br><span class="line">               ├─TTL=30s─┤────X──┤        │</span><br><span class="line">               续期1成功    宕机     │        │</span><br><span class="line">                          停止续期  │        │</span><br><span class="line">                                   锁自动过期释放</span><br></pre></td></tr></table></figure>
+
+<h3 id="看门狗停止条件"><a href="#看门狗停止条件" class="headerlink" title="看门狗停止条件"></a>看门狗停止条件</h3><p>看门狗在以下情况会自动停止：</p>
+<ol>
+<li><strong>业务执行完毕，调用 <code>unlock()</code></strong>：<code>unlock()</code> 方法中会调用 <code>cancelExpirationRenewal()</code> 取消续期任务</li>
+<li><strong>客户端宕机</strong>：进程崩溃后没有线程再调度续期任务，锁在 30 秒后自动过期</li>
+<li><strong>续期失败</strong>：锁已被删除或不再属于当前线程（如被强制释放），Lua 脚本返回 0，递归调用不再执行</li>
+<li><strong>显式取消</strong>：调用 <code>RedissonLock.cancelExpirationRenewal()</code> 方法</li>
+</ol>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// unlock() 中取消看门狗</span></span><br><span class="line"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title function_">cancelExpirationRenewal</span><span class="params">(Long threadId)</span> &#123;</span><br><span class="line">    <span class="type">ExpirationEntry</span> <span class="variable">entry</span> <span class="operator">=</span> EXPIRATION_RENEWAL_MAP.get(getEntryName());</span><br><span class="line">    <span class="keyword">if</span> (entry == <span class="literal">null</span>) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">    entry.removeThreadId(threadId);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (entry.hasNoThreads()) &#123;</span><br><span class="line">        <span class="comment">// 没有线程持有锁了，取消Timeout任务</span></span><br><span class="line">        <span class="type">Timeout</span> <span class="variable">task</span> <span class="operator">=</span> entry.getTimeout();</span><br><span class="line">        <span class="keyword">if</span> (task != <span class="literal">null</span>) &#123;</span><br><span class="line">            task.cancel();</span><br><span class="line">        &#125;</span><br><span class="line">        EXPIRATION_RENEWAL_MAP.remove(getEntryName());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="可重入锁实现"><a href="#可重入锁实现" class="headerlink" title="可重入锁实现"></a>可重入锁实现</h2><p>可重入锁是 Redisson 分布式锁的基础实现。所谓”可重入”，是指同一个线程可以多次获取同一把锁而不会死锁，每次加锁计数器 +1，每次解锁计数器 -1，计数器归零才真正释放锁。</p>
+<h3 id="Hash-结构与线程标识"><a href="#Hash-结构与线程标识" class="headerlink" title="Hash 结构与线程标识"></a>Hash 结构与线程标识</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Redis 中的数据结构：</span><br><span class="line"></span><br><span class="line">Key:   redisson_lock:lock:order:1001</span><br><span class="line">       ┌──────────────────────┬───────────┐</span><br><span class="line">       │       Field          │   Value   │</span><br><span class="line">       ├──────────────────────┼───────────┤</span><br><span class="line">       │  9e87f3-1:101        │     3     │  ← 客户端9e87f3-1的线程101，重入3次</span><br><span class="line">       └──────────────────────┴───────────┘</span><br><span class="line">TTL:   30秒</span><br></pre></td></tr></table></figure>
+
+<p>线程标识的格式为 <code>clientId:threadId</code>：</p>
+<ul>
+<li><strong>clientId</strong>：Redisson 客户端连接的唯一标识，由 <code>ConnectionManager</code> 生成，格式为 <code>UUID</code>（如 <code>9e87f3c1-2b5d-4a1e-b8f6-3c2d1e0f9a87</code>）</li>
+<li><strong>threadId</strong>：Java 线程ID（如 <code>101</code>）</li>
+</ul>
+<p>组合后形如 <code>9e87f3c1-2b5d-4a1e-b8f6-3c2d1e0f9a87:101</code>，这个标识确保了：</p>
+<ul>
+<li>不同 JVM 进程的线程不会冲突（clientId 不同）</li>
+<li>同一 JVM 中不同线程不会冲突（threadId 不同）</li>
+</ul>
+<h3 id="重入加锁完整流程"><a href="#重入加锁完整流程" class="headerlink" title="重入加锁完整流程"></a>重入加锁完整流程</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 同一线程三次加锁的Redis数据变化</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 第一次 lock()</span></span><br><span class="line">HSET redisson_lock:lock:order:<span class="number">1001</span> <span class="string">&quot;9e87f3-1:101&quot;</span> <span class="number">1</span></span><br><span class="line">PEXPIRE redisson_lock:lock:order:<span class="number">1001</span> <span class="number">30000</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 第二次 lock()（重入）</span></span><br><span class="line">HINCRBY redisson_lock:lock:order:<span class="number">1001</span> <span class="string">&quot;9e87f3-1:101&quot;</span> <span class="number">1</span>   <span class="comment">// value: 1 → 2</span></span><br><span class="line">PEXPIRE redisson_lock:lock:order:<span class="number">1001</span> <span class="number">30000</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 第三次 lock()（重入）</span></span><br><span class="line">HINCRBY redisson_lock:lock:order:<span class="number">1001</span> <span class="string">&quot;9e87f3-1:101&quot;</span> <span class="number">1</span>   <span class="comment">// value: 2 → 3</span></span><br><span class="line">PEXPIRE redisson_lock:lock:order:<span class="number">1001</span> <span class="number">30000</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 第一次 unlock()</span></span><br><span class="line">HINCRBY redisson_lock:lock:order:<span class="number">1001</span> <span class="string">&quot;9e87f3-1:101&quot;</span> -<span class="number">1</span>  <span class="comment">// value: 3 → 2</span></span><br><span class="line">PEXPIRE redisson_lock:lock:order:<span class="number">1001</span> <span class="number">30000</span>               <span class="comment">// 还有重入，不删除</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 第二次 unlock()</span></span><br><span class="line">HINCRBY redisson_lock:lock:order:<span class="number">1001</span> <span class="string">&quot;9e87f3-1:101&quot;</span> -<span class="number">1</span>  <span class="comment">// value: 2 → 1</span></span><br><span class="line">PEXPIRE redisson_lock:lock:order:<span class="number">1001</span> <span class="number">30000</span>               <span class="comment">// 还有重入，不删除</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 第三次 unlock()</span></span><br><span class="line">DEL redisson_lock:lock:order:<span class="number">1001</span>                         <span class="comment">// 完全释放</span></span><br><span class="line">PUBLISH redisson_lock_channel:&#123;lock:order:<span class="number">1001</span>&#125; <span class="number">0</span>          <span class="comment">// 通知等待线程</span></span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="红锁（RedLock）详细分析"><a href="#红锁（RedLock）详细分析" class="headerlink" title="红锁（RedLock）详细分析"></a>红锁（RedLock）详细分析</h2><h3 id="主从切换丢锁问题"><a href="#主从切换丢锁问题" class="headerlink" title="主从切换丢锁问题"></a>主从切换丢锁问题</h3><p>在 Redis 主从架构下，分布式锁存在一个严重隐患：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">时间线    主节点(Master)           从节点(Slave)           客户端A         客户端B</span><br><span class="line">  t1     SET lock 1 (A持有)                             加锁成功</span><br><span class="line">  t2     ── 宕机 ──&gt;                  锁数据未同步！</span><br><span class="line">  t3                              被提升为新主节点</span><br><span class="line">  t4                                                    加锁失败(等待)   加锁成功！</span><br><span class="line">  t5                                                                       加锁成功！</span><br><span class="line">  </span><br><span class="line">  结果：客户端A和客户端B同时持有锁！违反互斥性！</span><br></pre></td></tr></table></figure>
+
+<p>具体步骤：</p>
+<ol>
+<li>客户端 A 在主节点加锁成功</li>
+<li>主节点宕机，锁数据尚未同步到从节点</li>
+<li>从节点被哨兵提升为新主节点</li>
+<li>客户端 B 向新主节点请求加锁，成功</li>
+<li>此时客户端 A 和 B 同时认为自己持有锁</li>
+</ol>
+<h3 id="RedLock-算法详解"><a href="#RedLock-算法详解" class="headerlink" title="RedLock 算法详解"></a>RedLock 算法详解</h3><p>RedLock 由 Redis 作者 antirez 提出，核心思想是：<strong>向 N 个独立 Redis 实例加锁，超过半数成功才算获取锁。</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// RedLock 使用示例</span></span><br><span class="line"><span class="type">Config</span> <span class="variable">config1</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Config</span>();</span><br><span class="line">config1.useSingleServer().setAddress(<span class="string">&quot;redis://redis1:6379&quot;</span>);</span><br><span class="line"><span class="type">RedissonClient</span> <span class="variable">redisson1</span> <span class="operator">=</span> Redisson.create(config1);</span><br><span class="line"></span><br><span class="line"><span class="type">Config</span> <span class="variable">config2</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Config</span>();</span><br><span class="line">config2.useSingleServer().setAddress(<span class="string">&quot;redis://redis2:6379&quot;</span>);</span><br><span class="line"><span class="type">RedissonClient</span> <span class="variable">redisson2</span> <span class="operator">=</span> Redisson.create(config2);</span><br><span class="line"></span><br><span class="line"><span class="type">Config</span> <span class="variable">config3</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Config</span>();</span><br><span class="line">config3.useSingleServer().setAddress(<span class="string">&quot;redis://redis3:6379&quot;</span>);</span><br><span class="line"><span class="type">RedissonClient</span> <span class="variable">redisson3</span> <span class="operator">=</span> Redisson.create(config3);</span><br><span class="line"></span><br><span class="line"><span class="type">RLock</span> <span class="variable">lock1</span> <span class="operator">=</span> redisson1.getLock(<span class="string">&quot;lock:order:1001&quot;</span>);</span><br><span class="line"><span class="type">RLock</span> <span class="variable">lock2</span> <span class="operator">=</span> redisson2.getLock(<span class="string">&quot;lock:order:1001&quot;</span>);</span><br><span class="line"><span class="type">RLock</span> <span class="variable">lock3</span> <span class="operator">=</span> redisson3.getLock(<span class="string">&quot;lock:order:1001&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="type">RedissonRedLock</span> <span class="variable">redLock</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">RedissonRedLock</span>(lock1, lock2, lock3);</span><br><span class="line"></span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    <span class="comment">// 向3个Redis实例加锁，至少2个成功才算获取锁</span></span><br><span class="line">    redLock.lock();</span><br><span class="line">    <span class="comment">// 业务逻辑</span></span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    redLock.unlock();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="RedLock-源码分析"><a href="#RedLock-源码分析" class="headerlink" title="RedLock 源码分析"></a>RedLock 源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// RedissonRedLock.tryLock() 源码简化</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryLock</span><span class="params">(<span class="type">long</span> waitTime, <span class="type">long</span> leaseTime, TimeUnit unit)</span> <span class="keyword">throws</span> InterruptedException &#123;</span><br><span class="line">    <span class="type">long</span> <span class="variable">newLeaseTime</span> <span class="operator">=</span> -<span class="number">1</span>;</span><br><span class="line">    <span class="keyword">if</span> (leaseTime != -<span class="number">1</span>) &#123;</span><br><span class="line">        <span class="comment">// 如果指定了leaseTime，则等待时间取leaseTime的一半</span></span><br><span class="line">        <span class="comment">// 确保在加锁期间不会过期</span></span><br><span class="line">        newLeaseTime = unit.toMillis(waitTime);</span><br><span class="line">        <span class="keyword">if</span> (newLeaseTime &gt; <span class="number">0</span> &amp;&amp; leaseTime &gt; <span class="number">0</span> &amp;&amp; newLeaseTime &gt; leaseTime) &#123;</span><br><span class="line">            newLeaseTime = leaseTime;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="type">long</span> <span class="variable">start</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line">    <span class="type">int</span> <span class="variable">successCount</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">    <span class="type">int</span> <span class="variable">failedCount</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 遍历所有Redis实例，依次加锁</span></span><br><span class="line">    <span class="keyword">for</span> (RLock lock : locks) &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">if</span> (newLeaseTime &gt; <span class="number">0</span>) &#123;</span><br><span class="line">                <span class="keyword">if</span> (lock.tryLock(waitTime, newLeaseTime, TimeUnit.MILLISECONDS)) &#123;</span><br><span class="line">                    successCount++;</span><br><span class="line">                &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                    failedCount++;</span><br><span class="line">                &#125;</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                <span class="keyword">if</span> (lock.tryLock(waitTime, TimeUnit.MILLISECONDS)) &#123;</span><br><span class="line">                    successCount++;</span><br><span class="line">                &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                    failedCount++;</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            failedCount++;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 判断是否超过半数加锁成功</span></span><br><span class="line">    <span class="type">int</span> <span class="variable">half</span> <span class="operator">=</span> locks.size() / <span class="number">2</span> + <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">if</span> (successCount &gt;= half) &#123;</span><br><span class="line">        <span class="comment">// 检查加锁是否在有效时间内完成</span></span><br><span class="line">        <span class="type">long</span> <span class="variable">elapsed</span> <span class="operator">=</span> System.currentTimeMillis() - start;</span><br><span class="line">        <span class="type">long</span> <span class="variable">remainTime</span> <span class="operator">=</span> unit.toMillis(waitTime) - elapsed;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (remainTime &gt; <span class="number">0</span>) &#123;</span><br><span class="line">            <span class="comment">// 加锁成功</span></span><br><span class="line">            <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 加锁失败，释放已获取的所有锁</span></span><br><span class="line">    unlock(locks);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="RedLock-算法的五个步骤"><a href="#RedLock-算法的五个步骤" class="headerlink" title="RedLock 算法的五个步骤"></a>RedLock 算法的五个步骤</h3><ol>
+<li><strong>获取当前时间</strong>：记录开始加锁的时间戳</li>
+<li><strong>依次向 N 个实例加锁</strong>：使用相同的 key 和随机值，设置较短的超时时间</li>
+<li><strong>计算成功数</strong>：只有超过 N&#x2F;2 + 1 个实例加锁成功才继续</li>
+<li><strong>验证有效时间</strong>：总耗时必须远小于锁的有效时间，否则加锁无效</li>
+<li><strong>失败回滚</strong>：如果加锁失败，向所有已加锁成功的实例发送解锁请求</li>
+</ol>
+<h3 id="RedLock-的争议"><a href="#RedLock-的争议" class="headerlink" title="RedLock 的争议"></a>RedLock 的争议</h3><p>RedLock 自提出以来就饱受争议，最著名的反对者是分布式系统专家 Martin Kleppmann。</p>
+<p><strong>Martin Kleppmann 的反对意见：</strong></p>
+<ol>
+<li><strong>时钟漂移问题</strong>：RedLock 依赖系统时钟来判断锁的有效性，而分布式系统中各节点时钟可能不同步。如果某个 Redis 实例的时钟向前跳跃，可能导致锁提前过期</li>
+<li><strong>进程暂停（GC）问题</strong>：持有锁的客户端可能因为 GC 暂停（尤其是 Full GC），导致锁过期后被其他客户端获取</li>
+<li><strong>网络分区问题</strong>：在复杂的网络分区场景下，RedLock 仍然可能违反互斥性</li>
+<li><strong>不必要的复杂性</strong>：Martin 认为 fencing token（递增令牌）方案更简单可靠</li>
+</ol>
+<p><strong>antirez 的反驳：</strong></p>
+<ol>
+<li>Redis 实例通常运行在专用机器上，时钟漂移可控</li>
+<li>GC 暂停可以通过合理配置 JVM 来避免</li>
+<li>RedLock 的多次加锁大大降低了同时违反互斥的概率</li>
+<li>fencing token 方案需要修改所有资源端的代码</li>
+</ol>
+<p><strong>实际建议：</strong></p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>推荐方案</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>大多数业务场景</td>
+<td>单节点 Redis + 看门狗，配合业务层幂等</td>
+</tr>
+<tr>
+<td>对互斥性要求极高</td>
+<td>RedLock 或 ZooKeeper 分布式锁</td>
+</tr>
+<tr>
+<td>已有 ZooKeeper 基础设施</td>
+<td>Curator InterProcessMutex</td>
+</tr>
+<tr>
+<td>可以接受偶发不一致</td>
+<td>单节点 Redis + 补偿机制</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="公平锁实现（RedissonFairLock）"><a href="#公平锁实现（RedissonFairLock）" class="headerlink" title="公平锁实现（RedissonFairLock）"></a>公平锁实现（RedissonFairLock）</h2><h3 id="为什么需要公平锁"><a href="#为什么需要公平锁" class="headerlink" title="为什么需要公平锁"></a>为什么需要公平锁</h3><p>默认的 <code>RedissonLock</code> 是非公平锁——当锁释放时，所有等待的线程会被同时唤醒，通过竞争来获取锁。这可能导致某些线程长期”饥饿”——始终获取不到锁。</p>
+<p>公平锁保证<strong>先到先得</strong>：按照请求锁的顺序依次获取，先等待的线程先获取锁。</p>
+<h3 id="公平锁的数据结构"><a href="#公平锁的数据结构" class="headerlink" title="公平锁的数据结构"></a>公平锁的数据结构</h3><p>公平锁在 Redis 中使用了多个 Key 来实现排队功能：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">1. redisson_lock:&#123;锁名称&#125;           -- 锁本体（Hash），与普通锁相同</span><br><span class="line">2. redisson_lock_timeout:&#123;锁名称&#125;   -- 等待超时队列（ZSet）</span><br><span class="line">3. redisson_lock_queue:&#123;锁名称&#125;     -- 等待队列（List）</span><br><span class="line"></span><br><span class="line">等待超时队列（ZSet）结构：</span><br><span class="line">  member: clientId:threadId</span><br><span class="line">  score: 等待超时时间戳（毫秒）</span><br><span class="line">  用于判断等待是否超时</span><br><span class="line"></span><br><span class="line">等待队列（List）结构：</span><br><span class="line">  按FIFO顺序排列 clientId:threadId</span><br><span class="line">  用于实现公平排队</span><br></pre></td></tr></table></figure>
+
+<h3 id="公平锁加锁-Lua-脚本"><a href="#公平锁加锁-Lua-脚本" class="headerlink" title="公平锁加锁 Lua 脚本"></a>公平锁加锁 Lua 脚本</h3><figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 公平锁加锁 Lua 脚本（源码大幅简化版）</span></span><br><span class="line"><span class="comment">-- KEYS[1] = 锁名称</span></span><br><span class="line"><span class="comment">-- KEYS[2] = 等待队列名称</span></span><br><span class="line"><span class="comment">-- KEYS[3] = 等待超时队列名称</span></span><br><span class="line"><span class="comment">-- ARGV[1] = 过期时间</span></span><br><span class="line"><span class="comment">-- ARGV[2] = 线程标识</span></span><br><span class="line"><span class="comment">-- ARGV[3] = 当前时间戳</span></span><br><span class="line"><span class="comment">-- ARGV[4] = 等待超时时间</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 第一步：检查队列中是否有等待者</span></span><br><span class="line"><span class="keyword">local</span> queue = redis.call(<span class="string">&#x27;lrange&#x27;</span>, KEYS[<span class="number">2</span>], <span class="number">0</span>, <span class="number">-1</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 如果队列为空且锁不存在，直接加锁</span></span><br><span class="line"><span class="keyword">if</span> (#queue == <span class="number">0</span> <span class="keyword">and</span> redis.call(<span class="string">&#x27;exists&#x27;</span>, KEYS[<span class="number">1</span>]) == <span class="number">0</span>) <span class="keyword">then</span></span><br><span class="line">    redis.call(<span class="string">&#x27;hset&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>], <span class="number">1</span>);</span><br><span class="line">    redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span>;</span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 如果锁被当前线程持有，重入</span></span><br><span class="line"><span class="keyword">if</span> (redis.call(<span class="string">&#x27;hexists&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>]) == <span class="number">1</span>) <span class="keyword">then</span></span><br><span class="line">    redis.call(<span class="string">&#x27;hincrby&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>], <span class="number">1</span>);</span><br><span class="line">    redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span>;</span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 如果队列为空且锁被其他线程持有，或者队列中已有等待者</span></span><br><span class="line"><span class="comment">-- 将当前线程加入等待队列尾部</span></span><br><span class="line"><span class="keyword">if</span> (#queue == <span class="number">0</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="comment">-- 队列为空但锁被持有，将当前线程加入队列</span></span><br><span class="line">    redis.call(<span class="string">&#x27;rpush&#x27;</span>, KEYS[<span class="number">2</span>], ARGV[<span class="number">2</span>]);</span><br><span class="line"><span class="keyword">else</span></span><br><span class="line">    <span class="comment">-- 队列中已有等待者，检查自己是否已在队列中</span></span><br><span class="line">    <span class="keyword">for</span> i, v <span class="keyword">in</span> <span class="built_in">ipairs</span>(queue) <span class="keyword">do</span></span><br><span class="line">        <span class="keyword">if</span> v == ARGV[<span class="number">2</span>] <span class="keyword">then</span></span><br><span class="line">            <span class="comment">-- 已在队列中，不重复加入</span></span><br><span class="line">            <span class="keyword">goto</span> timeout_check;</span><br><span class="line">        <span class="keyword">end</span></span><br><span class="line">    <span class="keyword">end</span></span><br><span class="line">    <span class="comment">-- 不在队列中，加入队尾</span></span><br><span class="line">    redis.call(<span class="string">&#x27;rpush&#x27;</span>, KEYS[<span class="number">2</span>], ARGV[<span class="number">2</span>]);</span><br><span class="line"><span class="keyword">end</span></span><br><span class="line"></span><br><span class="line">::timeout_check::</span><br><span class="line"><span class="comment">-- 加入超时队列</span></span><br><span class="line"><span class="keyword">local</span> timeout = ARGV[<span class="number">3</span>] + ARGV[<span class="number">4</span>];</span><br><span class="line">redis.call(<span class="string">&#x27;zadd&#x27;</span>, KEYS[<span class="number">3</span>], timeout, ARGV[<span class="number">2</span>]);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 返回当前线程在队列中的等待时间</span></span><br><span class="line"><span class="keyword">return</span> redis.call(<span class="string">&#x27;pttl&#x27;</span>, KEYS[<span class="number">1</span>]);</span><br></pre></td></tr></table></figure>
+
+<h3 id="公平锁使用方式"><a href="#公平锁使用方式" class="headerlink" title="公平锁使用方式"></a>公平锁使用方式</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 获取公平锁</span></span><br><span class="line"><span class="type">RLock</span> <span class="variable">fairLock</span> <span class="operator">=</span> redisson.getFairLock(<span class="string">&quot;lock:order:1001&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    fairLock.lock();</span><br><span class="line">    <span class="comment">// 业务逻辑</span></span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    fairLock.unlock();</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 带超时的公平锁</span></span><br><span class="line"><span class="type">boolean</span> <span class="variable">acquired</span> <span class="operator">=</span> fairLock.tryLock(<span class="number">10</span>, <span class="number">30</span>, TimeUnit.SECONDS);</span><br><span class="line"><span class="keyword">if</span> (acquired) &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// 业务逻辑</span></span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        fairLock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="公平锁-vs-非公平锁"><a href="#公平锁-vs-非公平锁" class="headerlink" title="公平锁 vs 非公平锁"></a>公平锁 vs 非公平锁</h3><table>
+<thead>
+<tr>
+<th>特性</th>
+<th>非公平锁（RedissonLock）</th>
+<th>公平锁（RedissonFairLock）</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>获取顺序</td>
+<td>竞争获取，不保证顺序</td>
+<td>FIFO 排队，先到先得</td>
+</tr>
+<tr>
+<td>吞吐量</td>
+<td>较高（无队列开销）</td>
+<td>较低（需维护等待队列）</td>
+</tr>
+<tr>
+<td>饥饿问题</td>
+<td>可能出现线程饥饿</td>
+<td>不会出现饥饿</td>
+</tr>
+<tr>
+<td>Redis 开销</td>
+<td>1 个 Key</td>
+<td>3 个 Key（锁+队列+超时）</td>
+</tr>
+<tr>
+<td>适用场景</td>
+<td>大多数业务</td>
+<td>需要严格顺序的场景</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="读写锁实现（RedissonReadWriteLock）"><a href="#读写锁实现（RedissonReadWriteLock）" class="headerlink" title="读写锁实现（RedissonReadWriteLock）"></a>读写锁实现（RedissonReadWriteLock）</h2><h3 id="读写锁的语义"><a href="#读写锁的语义" class="headerlink" title="读写锁的语义"></a>读写锁的语义</h3><p>读写锁允许多个读线程同时持有锁，但写线程必须独占。适用于<strong>读多写少</strong>的场景，能显著提高并发度。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">规则：</span><br><span class="line">- 读锁与读锁：兼容（可并发）</span><br><span class="line">- 读锁与写锁：互斥</span><br><span class="line">- 写锁与写锁：互斥</span><br></pre></td></tr></table></figure>
+
+<h3 id="读写锁的数据结构"><a href="#读写锁的数据结构" class="headerlink" title="读写锁的数据结构"></a>读写锁的数据结构</h3><p>Redisson 读写锁在 Redis 中使用两个 Key：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">1. redisson_lock:&#123;锁名称&#125;           -- 写锁（Hash）</span><br><span class="line">2. redisson_lock:&#123;锁名称&#125;:read      -- 读锁（Hash），后缀 &quot;:read&quot;</span><br><span class="line"></span><br><span class="line">写锁 Hash：</span><br><span class="line">  field: clientId:threadId  value: 重入次数</span><br><span class="line"></span><br><span class="line">读锁 Hash：</span><br><span class="line">  field: clientId:threadId  value: 重入次数</span><br><span class="line">  多个读线程可以同时存在，每个读线程一个 field</span><br></pre></td></tr></table></figure>
+
+<p>此外，写锁的 Hash 中会有一个特殊的 field <code>mode</code>，值为 <code>write</code>，表示当前是写锁模式。</p>
+<h3 id="读写锁使用方式"><a href="#读写锁使用方式" class="headerlink" title="读写锁使用方式"></a>读写锁使用方式</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">RReadWriteLock</span> <span class="variable">rwLock</span> <span class="operator">=</span> redisson.getReadWriteLock(<span class="string">&quot;lock:order:1001&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 读锁</span></span><br><span class="line"><span class="type">RLock</span> <span class="variable">readLock</span> <span class="operator">=</span> rwLock.readLock();</span><br><span class="line">readLock.lock();</span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    <span class="comment">// 读取数据，多个线程可同时读取</span></span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    readLock.unlock();</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 写锁</span></span><br><span class="line"><span class="type">RLock</span> <span class="variable">writeLock</span> <span class="operator">=</span> rwLock.writeLock();</span><br><span class="line">writeLock.lock();</span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    <span class="comment">// 修改数据，独占访问</span></span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    writeLock.unlock();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="写锁加锁-Lua-脚本核心逻辑"><a href="#写锁加锁-Lua-脚本核心逻辑" class="headerlink" title="写锁加锁 Lua 脚本核心逻辑"></a>写锁加锁 Lua 脚本核心逻辑</h3><figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 写锁加锁脚本简化版</span></span><br><span class="line"><span class="comment">-- KEYS[1] = 写锁名称</span></span><br><span class="line"><span class="comment">-- KEYS[2] = 读锁名称</span></span><br><span class="line"><span class="comment">-- ARGV[1] = 过期时间</span></span><br><span class="line"><span class="comment">-- ARGV[2] = 线程标识</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 检查是否有读锁</span></span><br><span class="line"><span class="keyword">local</span> readLocks = redis.call(<span class="string">&#x27;hlen&#x27;</span>, KEYS[<span class="number">2</span>]);</span><br><span class="line"><span class="keyword">if</span> (readLocks &gt; <span class="number">0</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="comment">-- 有读锁存在，写锁无法获取</span></span><br><span class="line">    <span class="keyword">return</span> redis.call(<span class="string">&#x27;pttl&#x27;</span>, KEYS[<span class="number">2</span>]);</span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 检查写锁</span></span><br><span class="line"><span class="keyword">if</span> (redis.call(<span class="string">&#x27;exists&#x27;</span>, KEYS[<span class="number">1</span>]) == <span class="number">0</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="comment">-- 写锁不存在，获取写锁</span></span><br><span class="line">    redis.call(<span class="string">&#x27;hset&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>], <span class="number">1</span>);</span><br><span class="line">    redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span>;</span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (redis.call(<span class="string">&#x27;hexists&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>]) == <span class="number">1</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="comment">-- 写锁重入</span></span><br><span class="line">    redis.call(<span class="string">&#x27;hincrby&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>], <span class="number">1</span>);</span><br><span class="line">    redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span>;</span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">return</span> redis.call(<span class="string">&#x27;pttl&#x27;</span>, KEYS[<span class="number">1</span>]);</span><br></pre></td></tr></table></figure>
+
+<h3 id="读锁加锁-Lua-脚本核心逻辑"><a href="#读锁加锁-Lua-脚本核心逻辑" class="headerlink" title="读锁加锁 Lua 脚本核心逻辑"></a>读锁加锁 Lua 脚本核心逻辑</h3><figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 读锁加锁脚本简化版</span></span><br><span class="line"><span class="comment">-- KEYS[1] = 读锁名称</span></span><br><span class="line"><span class="comment">-- KEYS[2] = 写锁名称</span></span><br><span class="line"><span class="comment">-- ARGV[1] = 过期时间</span></span><br><span class="line"><span class="comment">-- ARGV[2] = 线程标识</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 检查写锁是否存在且不属于当前线程</span></span><br><span class="line"><span class="keyword">if</span> (redis.call(<span class="string">&#x27;exists&#x27;</span>, KEYS[<span class="number">2</span>]) == <span class="number">1</span>) <span class="keyword">then</span></span><br><span class="line">    <span class="keyword">if</span> (redis.call(<span class="string">&#x27;hexists&#x27;</span>, KEYS[<span class="number">2</span>], ARGV[<span class="number">2</span>]) == <span class="number">0</span>) <span class="keyword">then</span></span><br><span class="line">        <span class="comment">-- 写锁被其他线程持有，读锁无法获取</span></span><br><span class="line">        <span class="keyword">return</span> redis.call(<span class="string">&#x27;pttl&#x27;</span>, KEYS[<span class="number">2</span>]);</span><br><span class="line">    <span class="keyword">end</span>;</span><br><span class="line">    <span class="comment">-- 写锁被当前线程持有，可以获取读锁（锁降级）</span></span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 获取/重入读锁</span></span><br><span class="line"><span class="keyword">if</span> (redis.call(<span class="string">&#x27;hexists&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>]) == <span class="number">1</span>) <span class="keyword">then</span></span><br><span class="line">    redis.call(<span class="string">&#x27;hincrby&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>], <span class="number">1</span>);</span><br><span class="line">    redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span>;</span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"></span><br><span class="line">redis.call(<span class="string">&#x27;hset&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">2</span>], <span class="number">1</span>);</span><br><span class="line">redis.call(<span class="string">&#x27;pexpire&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line"><span class="keyword">return</span> <span class="literal">nil</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="锁降级与锁升级"><a href="#锁降级与锁升级" class="headerlink" title="锁降级与锁升级"></a>锁降级与锁升级</h3><p><strong>锁降级</strong>（写锁→读锁）：持有写锁的线程可以再获取读锁，然后释放写锁，实现从写锁到读锁的平滑过渡。这是合法的，因为持有写锁说明独占了资源，自然可以读。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 锁降级示例</span></span><br><span class="line">writeLock.lock();</span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    <span class="comment">// 修改数据</span></span><br><span class="line">    updateData();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 获取读锁（在写锁持有期间可以获取）</span></span><br><span class="line">    readLock.lock();</span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    <span class="comment">// 释放写锁，但读锁仍然持有</span></span><br><span class="line">    writeLock.unlock();</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    <span class="comment">// 此时只有读锁，其他线程可以并发读取</span></span><br><span class="line">    readData();</span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    readLock.unlock();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>锁升级</strong>（读锁→写锁）：持有读锁的线程不能直接升级为写锁，因为其他读线程可能也在持有读锁。必须先释放读锁，再获取写锁。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 锁升级示例（必须先释放读锁）</span></span><br><span class="line">readLock.lock();</span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    readData();</span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    readLock.unlock();  <span class="comment">// 先释放读锁</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">writeLock.lock();       <span class="comment">// 再获取写锁</span></span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    updateData();</span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    writeLock.unlock();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="信号量与倒计时门闩"><a href="#信号量与倒计时门闩" class="headerlink" title="信号量与倒计时门闩"></a>信号量与倒计时门闩</h2><h3 id="信号量（RedissonSemaphore）"><a href="#信号量（RedissonSemaphore）" class="headerlink" title="信号量（RedissonSemaphore）"></a>信号量（RedissonSemaphore）</h3><p>信号量用于控制同时访问某个资源的线程数量，比如限制数据库连接池大小、限制并发请求数。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 获取信号量</span></span><br><span class="line"><span class="type">RSemaphore</span> <span class="variable">semaphore</span> <span class="operator">=</span> redisson.getSemaphore(<span class="string">&quot;semaphore:db_pool&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 初始化许可数量（只在首次使用时调用）</span></span><br><span class="line">semaphore.trySetPermits(<span class="number">10</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 获取许可（阻塞）</span></span><br><span class="line">semaphore.acquire();    <span class="comment">// 获取1个许可</span></span><br><span class="line">semaphore.acquire(<span class="number">3</span>);   <span class="comment">// 获取3个许可</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 释放许可</span></span><br><span class="line">semaphore.release();    <span class="comment">// 释放1个许可</span></span><br><span class="line">semaphore.release(<span class="number">3</span>);   <span class="comment">// 释放3个许可</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 尝试获取</span></span><br><span class="line"><span class="type">boolean</span> <span class="variable">acquired</span> <span class="operator">=</span> semaphore.tryAcquire(<span class="number">5</span>, <span class="number">10</span>, TimeUnit.SECONDS);</span><br></pre></td></tr></table></figure>
+
+<p>信号量的 Redis 数据结构：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Key:   semaphore:db_pool</span><br><span class="line">Type:  String</span><br><span class="line">Value: 剩余许可数量（如 7）</span><br></pre></td></tr></table></figure>
+
+<p>信号量加锁 Lua 脚本核心逻辑：</p>
+<figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 信号量获取许可脚本简化版</span></span><br><span class="line"><span class="comment">-- KEYS[1] = 信号量名称</span></span><br><span class="line"><span class="comment">-- ARGV[1] = 请求的许可数量</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">local</span> value = redis.call(<span class="string">&#x27;get&#x27;</span>, KEYS[<span class="number">1</span>]);</span><br><span class="line"><span class="keyword">if</span> (value ~= <span class="literal">false</span> <span class="keyword">and</span> <span class="built_in">tonumber</span>(value) &gt;= <span class="built_in">tonumber</span>(ARGV[<span class="number">1</span>])) <span class="keyword">then</span></span><br><span class="line">    <span class="comment">-- 许可数充足，减少许可</span></span><br><span class="line">    redis.call(<span class="string">&#x27;decrby&#x27;</span>, KEYS[<span class="number">1</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line">    <span class="keyword">return</span> <span class="number">1</span>;  <span class="comment">-- 成功</span></span><br><span class="line"><span class="keyword">end</span>;</span><br><span class="line"><span class="keyword">return</span> <span class="number">0</span>;  <span class="comment">-- 许可不足</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="可过期信号量（RedissonPermitExpirableSemaphore）"><a href="#可过期信号量（RedissonPermitExpirableSemaphore）" class="headerlink" title="可过期信号量（RedissonPermitExpirableSemaphore）"></a>可过期信号量（RedissonPermitExpirableSemaphore）</h3><p>比普通信号量多了许可超时释放的功能，获取许可时返回一个 permitId，释放时必须提供该 ID。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">RPermitExpirableSemaphore</span> <span class="variable">semaphore</span> <span class="operator">=</span> redisson.getPermitExpirableSemaphore(<span class="string">&quot;semaphore:expirable&quot;</span>);</span><br><span class="line">semaphore.trySetPermits(<span class="number">10</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 获取许可，返回 permitId，10秒后自动释放</span></span><br><span class="line"><span class="type">String</span> <span class="variable">permitId</span> <span class="operator">=</span> semaphore.acquire(<span class="number">10</span>, TimeUnit.SECONDS);</span><br><span class="line"></span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    <span class="comment">// 业务逻辑</span></span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    semaphore.release(permitId);  <span class="comment">// 释放时需要提供 permitId</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="倒计时门闩（RedissonCountDownLatch）"><a href="#倒计时门闩（RedissonCountDownLatch）" class="headerlink" title="倒计时门闩（RedissonCountDownLatch）"></a>倒计时门闩（RedissonCountDownLatch）</h3><p>与 Java 的 <code>CountDownLatch</code> 语义一致，用于让一个或多个线程等待其他线程完成操作。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">RCountDownLatch</span> <span class="variable">latch</span> <span class="operator">=</span> redisson.getCountDownLatch(<span class="string">&quot;latch:task_complete&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 初始化计数器（只在首次使用时调用）</span></span><br><span class="line">latch.trySetCount(<span class="number">5</span>);   <span class="comment">// 等待5个任务完成</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 在工作线程中</span></span><br><span class="line">latch.countDown();       <span class="comment">// 计数器-1</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 在等待线程中</span></span><br><span class="line">latch.await();           <span class="comment">// 阻塞直到计数器归零</span></span><br><span class="line">latch.await(<span class="number">30</span>, TimeUnit.SECONDS);  <span class="comment">// 带超时等待</span></span><br></pre></td></tr></table></figure>
+
+<p>倒计时门闩的 Redis 数据结构：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Key:   latch:task_complete</span><br><span class="line">Type:  String</span><br><span class="line">Value: 剩余计数（如 3）</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="锁重入机制详解"><a href="#锁重入机制详解" class="headerlink" title="锁重入机制详解"></a>锁重入机制详解</h2><h3 id="跨线程重入的问题"><a href="#跨线程重入的问题" class="headerlink" title="跨线程重入的问题"></a>跨线程重入的问题</h3><p>Redisson 的标准可重入锁是<strong>同一线程</strong>内的重入，即 <code>clientId:threadId</code> 必须完全一致才能重入。但在实际项目中，经常会遇到跨线程重入的需求：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 常见问题场景</span></span><br><span class="line"><span class="keyword">private</span> <span class="type">RLock</span> <span class="variable">lock</span> <span class="operator">=</span> redisson.getLock(<span class="string">&quot;lock:order:1001&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">processOrder</span><span class="params">()</span> &#123;</span><br><span class="line">    lock.lock();                    <span class="comment">// 主线程加锁</span></span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// 提交到线程池执行</span></span><br><span class="line">        executor.submit(() -&gt; &#123;</span><br><span class="line">            lock.lock();            <span class="comment">// 不同线程！无法重入！会阻塞！</span></span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                doSomething();</span><br><span class="line">            &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                lock.unlock();      <span class="comment">// 不同线程！无法解锁！</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        lock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="跨线程重入的解决方案"><a href="#跨线程重入的解决方案" class="headerlink" title="跨线程重入的解决方案"></a>跨线程重入的解决方案</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 方案一：使用 Redisson 的联锁（MultiLock）</span></span><br><span class="line"><span class="type">RLock</span> <span class="variable">lock1</span> <span class="operator">=</span> redisson.getLock(<span class="string">&quot;lock:order:1001:main&quot;</span>);</span><br><span class="line"><span class="type">RLock</span> <span class="variable">lock2</span> <span class="operator">=</span> redisson.getLock(<span class="string">&quot;lock:order:1001:sub&quot;</span>);</span><br><span class="line"><span class="type">RedissonMultiLock</span> <span class="variable">multiLock</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">RedissonMultiLock</span>(lock1, lock2);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方案二：传递锁的持有信息</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">processOrder</span><span class="params">()</span> &#123;</span><br><span class="line">    lock.lock();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">lockValue</span> <span class="operator">=</span> getLockValue();  <span class="comment">// 获取当前锁的持有者标识</span></span><br><span class="line">        executor.submit(() -&gt; &#123;</span><br><span class="line">            <span class="comment">// 使用同一连接的Redisson客户端</span></span><br><span class="line">            doSomethingWithLockContext(lockValue);</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        lock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方案三：在外层管理锁，内层不加锁</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">processOrder</span><span class="params">()</span> &#123;</span><br><span class="line">    lock.lock();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        executor.submit(() -&gt; &#123;</span><br><span class="line">            doSomething();  <span class="comment">// 不需要再次加锁</span></span><br><span class="line">        &#125;).get();            <span class="comment">// 等待子任务完成</span></span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        lock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="锁等待队列实现"><a href="#锁等待队列实现" class="headerlink" title="锁等待队列实现"></a>锁等待队列实现</h2><h3 id="等待队列的数据结构"><a href="#等待队列的数据结构" class="headerlink" title="等待队列的数据结构"></a>等待队列的数据结构</h3><p>当线程获取锁失败时，不是立即重试（自旋），而是进入等待队列，通过 Pub&#x2F;Sub 机制等待锁释放通知。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Redis 中的数据结构：</span><br><span class="line"></span><br><span class="line">1. 锁本体：redisson_lock:&#123;锁名称&#125;                    (Hash)</span><br><span class="line">2. 通知通道：redisson_lock_channel:&#123;锁名称&#125;            (Pub/Sub Channel)</span><br><span class="line">3. 订阅计数：redisson_lock_channel:&#123;锁名称&#125;:1f3a2b... (String, 计数器)</span><br></pre></td></tr></table></figure>
+
+<h3 id="等待线程的本地管理"><a href="#等待线程的本地管理" class="headerlink" title="等待线程的本地管理"></a>等待线程的本地管理</h3><p>每个 Redisson 客户端在本地维护了一个 <code>RedissonLockEntry</code>，用于管理等待线程：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// RedissonLockEntry 核心字段</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RedissonLockEntry</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> counter;                    <span class="comment">// 订阅计数器</span></span><br><span class="line">    <span class="keyword">private</span> CompletableFuture&lt;RedissonLockEntry&gt; promise;  <span class="comment">// 等待Future</span></span><br><span class="line">    <span class="keyword">private</span> ConcurrentLinkedQueue&lt;Runnable&gt; listeners = <span class="keyword">new</span> <span class="title class_">ConcurrentLinkedQueue</span>&lt;&gt;();  <span class="comment">// 监听器队列</span></span><br><span class="line">    <span class="keyword">private</span> Semaphore latch;                <span class="comment">// 信号量，用于阻塞/唤醒等待线程</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 当收到锁释放消息时，释放信号量，唤醒一个等待线程</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">acquired</span><span class="params">()</span> &#123;</span><br><span class="line">        latch.release();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 等待锁释放</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">await</span><span class="params">(<span class="type">long</span> time, TimeUnit unit)</span> <span class="keyword">throws</span> InterruptedException &#123;</span><br><span class="line">        <span class="keyword">return</span> latch.tryAcquire(time, unit);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="等待与唤醒流程"><a href="#等待与唤醒流程" class="headerlink" title="等待与唤醒流程"></a>等待与唤醒流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">线程A持有锁                  线程B尝试获取锁               Redis</span><br><span class="line">    │                            │                          │</span><br><span class="line">    │                            ├─ tryLock() ──────────────┤</span><br><span class="line">    │                            │  加锁失败，返回TTL         │</span><br><span class="line">    │                            │                          │</span><br><span class="line">    │                            ├─ subscribe(channel) ────►│ 订阅锁通道</span><br><span class="line">    │                            │                          │</span><br><span class="line">    │                            ├─ await(TTL) ──┐          │</span><br><span class="line">    │                            │               │ 等待       │</span><br><span class="line">    │                            │               │           │</span><br><span class="line">    ├─ unlock() ─────────────────┤───────────────┤           │</span><br><span class="line">    │                            │               │           │</span><br><span class="line">    │  ┌─ PUBLISH channel ──────┤──────────────►│ 发布通知   │</span><br><span class="line">    │  │                        │               │           │</span><br><span class="line">    │  │                        ├─ ◄─── 唤醒 ───┘           │</span><br><span class="line">    │  │                        │                           │</span><br><span class="line">    │  │                        ├─ tryLock() ──────────────►│</span><br><span class="line">    │  │                        │  加锁成功！                 │</span><br><span class="line">    │  │                        ├─ unsubscribe() ─────────►│ 取消订阅</span><br></pre></td></tr></table></figure>
+
+<h3 id="信号量控制并发唤醒"><a href="#信号量控制并发唤醒" class="headerlink" title="信号量控制并发唤醒"></a>信号量控制并发唤醒</h3><p>当锁释放时，可能有很多线程在等待。Redisson 使用 Semaphore 来控制唤醒：每次收到锁释放通知，只释放一个许可（<code>latch.release()</code>），只有一个等待线程能被唤醒，避免”惊群效应”。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 等待锁的核心循环（RedissonLock 源码简化）</span></span><br><span class="line"><span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">    <span class="comment">// 尝试获取锁</span></span><br><span class="line">    <span class="type">Long</span> <span class="variable">ttl</span> <span class="operator">=</span> tryAcquire(leaseTime, unit, threadId);</span><br><span class="line">    <span class="keyword">if</span> (ttl == <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="comment">// 获取锁成功</span></span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 等待锁释放消息</span></span><br><span class="line">    <span class="comment">// latch.tryAcquire() 会阻塞，直到收到Pub/Sub消息释放信号量</span></span><br><span class="line">    <span class="keyword">if</span> (ttl &gt; <span class="number">0</span>) &#123;</span><br><span class="line">        entry.getLatch().tryAcquire(ttl, TimeUnit.MILLISECONDS);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="Pub-Sub-通知机制"><a href="#Pub-Sub-通知机制" class="headerlink" title="Pub&#x2F;Sub 通知机制"></a>Pub&#x2F;Sub 通知机制</h2><h3 id="为什么需要-Pub-Sub"><a href="#为什么需要-Pub-Sub" class="headerlink" title="为什么需要 Pub&#x2F;Sub"></a>为什么需要 Pub&#x2F;Sub</h3><p>如果没有 Pub&#x2F;Sub，获取锁失败的线程只能不断轮询（自旋）来检测锁是否释放：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">没有Pub/Sub：</span><br><span class="line">  线程B: tryLock() → 失败 → sleep(100ms) → tryLock() → 失败 → sleep(100ms) → ...</span><br><span class="line">  问题：1) 延迟大  2) 浪费CPU  3) 浪费网络带宽</span><br><span class="line"></span><br><span class="line">有Pub/Sub：</span><br><span class="line">  线程B: tryLock() → 失败 → subscribe(channel) → await() → 收到通知 → tryLock() → 成功</span><br><span class="line">  优势：1) 延迟低（毫秒级）  2) 不浪费CPU  3) 不浪费带宽</span><br></pre></td></tr></table></figure>
+
+<h3 id="Pub-Sub-的订阅与取消"><a href="#Pub-Sub-的订阅与取消" class="headerlink" title="Pub&#x2F;Sub 的订阅与取消"></a>Pub&#x2F;Sub 的订阅与取消</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 订阅锁释放通道（源码简化）</span></span><br><span class="line"><span class="keyword">private</span> CompletableFuture&lt;RedissonLockEntry&gt; <span class="title function_">subscribe</span><span class="params">(<span class="type">long</span> threadId)</span> &#123;</span><br><span class="line">    <span class="type">String</span> <span class="variable">entryName</span> <span class="operator">=</span> getEntryName();</span><br><span class="line">    <span class="type">RedissonLockEntry</span> <span class="variable">entry</span> <span class="operator">=</span> ENTRIES.get(entryName);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (entry != <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="comment">// 已经有其他线程订阅了同一通道，增加计数器</span></span><br><span class="line">        entry.acquire();</span><br><span class="line">        <span class="keyword">return</span> entry.getPromise();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 首次订阅，创建Entry</span></span><br><span class="line">    entry = <span class="keyword">new</span> <span class="title class_">RedissonLockEntry</span>();</span><br><span class="line">    <span class="type">RedissonLockEntry</span> <span class="variable">oldEntry</span> <span class="operator">=</span> ENTRIES.putIfAbsent(entryName, entry);</span><br><span class="line">    <span class="keyword">if</span> (oldEntry != <span class="literal">null</span>) &#123;</span><br><span class="line">        oldEntry.acquire();</span><br><span class="line">        <span class="keyword">return</span> oldEntry.getPromise();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 执行Redis SUBSCRIBE命令</span></span><br><span class="line">    CompletableFuture&lt;RedissonLockEntry&gt; promise = <span class="keyword">new</span> <span class="title class_">CompletableFuture</span>&lt;&gt;();</span><br><span class="line">    entry.setPromise(promise);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 订阅通道，注册消息监听器</span></span><br><span class="line">    subscribeService.subscribe(channelName, (channel, msg) -&gt; &#123;</span><br><span class="line">        <span class="comment">// 收到锁释放消息，唤醒等待线程</span></span><br><span class="line">        <span class="type">RedissonLockEntry</span> <span class="variable">e</span> <span class="operator">=</span> ENTRIES.get(entryName);</span><br><span class="line">        <span class="keyword">if</span> (e != <span class="literal">null</span>) &#123;</span><br><span class="line">            e.acquired();  <span class="comment">// 释放信号量，唤醒一个等待线程</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> promise;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 取消订阅</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">unsubscribe</span><span class="params">(<span class="type">long</span> threadId)</span> &#123;</span><br><span class="line">    <span class="type">String</span> <span class="variable">entryName</span> <span class="operator">=</span> getEntryName();</span><br><span class="line">    <span class="type">RedissonLockEntry</span> <span class="variable">entry</span> <span class="operator">=</span> ENTRIES.get(entryName);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (entry != <span class="literal">null</span>) &#123;</span><br><span class="line">        entry.release();  <span class="comment">// 减少计数器</span></span><br><span class="line">        <span class="keyword">if</span> (entry.isFree()) &#123;</span><br><span class="line">            <span class="comment">// 没有线程在等待了，执行Redis UNSUBSCRIBE命令</span></span><br><span class="line">            ENTRIES.remove(entryName);</span><br><span class="line">            subscribeService.unsubscribe(channelName);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="Pub-Sub-消息类型"><a href="#Pub-Sub-消息类型" class="headerlink" title="Pub&#x2F;Sub 消息类型"></a>Pub&#x2F;Sub 消息类型</h3><p>Redisson 在解锁时发布的消息有不同的类型标识：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 解锁消息类型常量</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">UNLOCK_MESSAGE</span> <span class="operator">=</span> <span class="number">0</span>;        <span class="comment">// 普通解锁</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">READ_UNLOCK_MESSAGE</span> <span class="operator">=</span> <span class="number">1</span>;   <span class="comment">// 读锁解锁</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 解锁时发布消息</span></span><br><span class="line">redis.call(<span class="string">&#x27;publish&#x27;</span>, KEYS[<span class="number">2</span>], ARGV[<span class="number">1</span>]);</span><br><span class="line"><span class="comment">// ARGV[1] 的值就是 UNLOCK_MESSAGE 或 READ_UNLOCK_MESSAGE</span></span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="常见项目问题与解决方案"><a href="#常见项目问题与解决方案" class="headerlink" title="常见项目问题与解决方案"></a>常见项目问题与解决方案</h2><p>在实际的实际场景中，我们遇到过大量与 Redisson 分布式锁相关的问题。以下是总结的常见问题与解决方案：</p>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>Redisson 分布式锁的源码揭示了以下核心设计思想：</p>
+<ol>
+<li><strong>看门狗机制</strong>：通过 Netty 的 <code>HashedWheelTimer</code> + 递归 <code>Timeout</code> 任务实现每 10 秒续期一次（<code>internalLockLeaseTime / 3</code>），解决业务未完成锁过期的问题。客户端宕机后看门狗自动停止，锁 30 秒后自动释放</li>
+<li><strong>Hash 结构实现可重入</strong>：用 Hash 的 field 存储 <code>clientId:threadId</code>，value 存储重入次数，加锁时计数器 +1，解锁时 -1，归零才真正释放</li>
+<li><strong>Lua 脚本保证原子性</strong>：所有复合操作（加锁+设过期、解锁+通知）通过 Lua 脚本在 Redis 服务端原子执行</li>
+<li><strong>Pub&#x2F;Sub 通知避免轮询</strong>：获取锁失败的线程通过订阅 Redis 频道等待锁释放通知，用 Semaphore 控制唤醒，避免惊群</li>
+<li><strong>RedLock 解决主从切换丢锁</strong>：向 N 个独立 Redis 实例加锁，超过半数成功才算获取，但存在时钟漂移等争议</li>
+<li><strong>公平锁通过 List + ZSet 排队</strong>：List 维护 FIFO 等待队列，ZSet 管理等待超时</li>
+<li><strong>读写锁通过双 Hash 实现并发读</strong>：读锁和写锁分别用不同的 Hash Key，读锁允许多线程共存，写锁独占</li>
+</ol>
+<p>理解这些源码层面的实现，才能在生产中正确使用、高效排错、合理选型。在实际场景中，我们正是基于这些理解，针对不同场景选择了不同类型的锁，并规避了大量潜在问题。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2025/05/05/8aaea14553b5/">应急预案与故障自愈——让系统自己解决问题</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2025/05/25/b6fbab7945d2/">Spring事务深度原理——从@Transactional到事务传播机制</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/Redis/" class="tag" aria-label="标签: #Redis">#Redis</a>
+            
+                <a href="/tags/%E6%BA%90%E7%A0%81/" class="tag" aria-label="标签: #源码">#源码</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2025/" aria-label="分类: 2025">
+                        2025
+                        <span>(30)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2025/%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" aria-label="分类: 源码分析">
+                        源码分析
+                        <span>(2)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

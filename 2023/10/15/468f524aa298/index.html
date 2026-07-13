@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>JVM内存泄漏排查——从现象到根因 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="JVM内存泄漏排查——从现象到根因">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/10/15/468f524aa298/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言2023年，实际项目进入了第三个年头，系统从最初的几十个监控点位扩展到覆盖集团旗下6座矿井、超过1200台设备的实时监控平台。随着业务规模的高速增长，线上服务开始暴露出令人头疼的内存问题——safety-service（安全监控服务）在连续运行一周后，堆内存从2G悄然攀升到4G，最终以java.lang.">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">JVM内存泄漏排查——从现象到根因</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-10-15T12:07:42.000Z">2023-10-15</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/JVM/">JVM</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>2023年，实际项目进入了第三个年头，系统从最初的几十个监控点位扩展到覆盖集团旗下6座矿井、超过1200台设备的实时监控平台。随着业务规模的高速增长，线上服务开始暴露出令人头疼的内存问题——safety-service（安全监控服务）在连续运行一周后，堆内存从2G悄然攀升到4G，最终以 <code>java.lang.OutOfMemoryError: Java heap space</code> 崩溃收场。那次故障持续了2个多小时，直接影响了3座矿井的实时安全告警推送，是实际项目上线以来最严重的一次P0级事故。</p>
+<p>那次事故之后，我系统性地学习了JVM内存模型、GC机制、堆分析工具链，并在实际项目的多个微服务中反复实践，逐步建立起一套从”现象发现”到”根因定位”的完整排查方法论。本文就是这套方法论的完整记录，结合实际项目的真实案例，从内存泄漏的基本概念、排查工具、常见泄漏场景、MAT深度分析、自动化监控到面试高频问题，力求做到理论有深度、实战有细节、方案可落地。</p>
+<hr>
+<h2 id="一、内存泄漏-vs-内存溢出"><a href="#一、内存泄漏-vs-内存溢出" class="headerlink" title="一、内存泄漏 vs 内存溢出"></a>一、内存泄漏 vs 内存溢出</h2><p>在实际项目排查内存问题的过程中，我发现很多同事（包括半年前的自己）对”内存泄漏”和”内存溢出”的概念混淆不清，导致排查方向跑偏。这里先明确区分。</p>
+<h3 id="1-1-概念辨析"><a href="#1-1-概念辨析" class="headerlink" title="1.1 概念辨析"></a>1.1 概念辨析</h3><p><strong>内存泄漏 vs 内存溢出</strong></p>
+<ul>
+<li>内存泄漏（Memory Leak）：</li>
+<li>对象不再被业务使用，但仍然被GC Roots可达的引用链持有</li>
+<li>→ GC无法回收 → 内存持续增长</li>
+<li>→ 像水龙头没关紧，水一直在漏</li>
+<li>内存溢出（OutOfMemoryError）：</li>
+<li>JVM实际需要使用的内存超过了可用的堆内存</li>
+<li>→ 直接抛出OOM错误</li>
+<li>→ 像水杯装满了，再倒就溢出来</li>
+<li>关系：</li>
+<li>内存泄漏 (持续积累)→ 内存持续增长 (达到上限)→ OOM</li>
+<li>关键区别：</li>
+<li>内存泄漏是”原因”，内存溢出是”结果”</li>
+<li>泄漏不一定导致溢出（可能只是浪费内存）</li>
+<li>溢出不一定是泄漏导致（可能就是内存确实不够用）</li>
+</ul>
+<h3 id="1-2-实际项目中的典型案例"><a href="#1-2-实际项目中的典型案例" class="headerlink" title="1.2 实际项目中的典型案例"></a>1.2 实际项目中的典型案例</h3><table>
+<thead>
+<tr>
+<th>场景</th>
+<th>类型</th>
+<th>表现</th>
+<th>根因</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>safety-service运行7天后OOM</td>
+<td>内存泄漏→溢出</td>
+<td>堆内存从2G涨到4G后崩溃</td>
+<td>ThreadLocal未remove</td>
+</tr>
+<tr>
+<td>device-service批量导入设备时OOM</td>
+<td>内存溢出（非泄漏）</td>
+<td>导入10万条设备数据时崩溃</td>
+<td>一次性加载全部数据到内存</td>
+</tr>
+<tr>
+<td>report-service生成月报时OOM</td>
+<td>内存泄漏→溢出</td>
+<td>生成报表后内存不释放</td>
+<td>POI大对象未关闭</td>
+</tr>
+<tr>
+<td>order-service缓存膨胀</td>
+<td>内存泄漏</td>
+<td>老年代持续增长</td>
+<td>静态Map只增不减</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="二、JVM内存模型回顾"><a href="#二、JVM内存模型回顾" class="headerlink" title="二、JVM内存模型回顾"></a>二、JVM内存模型回顾</h2><p>要排查内存泄漏，必须先清楚JVM内存的分区和对象的生命周期。以下是基于实际项目使用的JDK 8+G1GC的内存模型回顾。</p>
+<h3 id="2-1-JVM运行时数据区"><a href="#2-1-JVM运行时数据区" class="headerlink" title="2.1 JVM运行时数据区"></a>2.1 JVM运行时数据区</h3><p><strong>JVM运行时数据区</strong></p>
+<ul>
+<li>+————————+  +——————————+</li>
+<li>|    线程私有区域         |  |      线程共享区域            |</li>
+<li>+————————+  +——————————+</li>
+<li>|                        |  |                              |</li>
+<li>|  +——————+  |  |  +————————+  |</li>
+<li>|  | 程序计数器       |  |  |  |       堆（Heap）       |  |</li>
+<li>|  | (字节码行号)     |  |  |  |  +——————+  |  |</li>
+<li>|  +——————+  |  |  |  |  Young Generation |  |  |</li>
+<li>|                        |  |  |  |  +——+——-+ |  |  |</li>
+<li>|  +——————+  |  |  |  |  | Eden | S0&#x2F;S1 | |  |  |</li>
+<li>|  | 虚拟机栈         |  |  |  |  +–+——+——-+-+  |  |</li>
+<li>|  | (栈帧:局部变量   |  |  |  |  |                    |  |  |</li>
+<li>|  |  操作数栈、动态  |  |  |  |  |  Old Generation    |  |  |</li>
+<li>|  |  链接、返回地址) |  |  |  |  |  (长期存活对象)     |  |  |</li>
+<li>|  +——————+  |  |  |  |                    |  |  |</li>
+<li>|                        |  |  |  +——————–+  |  |</li>
+<li>|  +——————+  |  |  +————————+  |</li>
+<li>|  | 本地方法栈       |  |  |                              |</li>
+<li>|  | (Native方法)    |  |  |  +————————+  |</li>
+<li>|  +——————+  |  |  |   方法区（Metaspace）  |  |</li>
+<li>|                        |  |  |   类信息、常量池、     |  |</li>
+<li>+————————+  |  |   静态变量             |  |</li>
+<li>|  +————————+  |</li>
+<li>+——————————+</li>
+</ul>
+<h3 id="2-2-堆内存与GC的关系"><a href="#2-2-堆内存与GC的关系" class="headerlink" title="2.2 堆内存与GC的关系"></a>2.2 堆内存与GC的关系</h3><p><strong>对象生命周期与GC：</strong></p>
+<ul>
+<li>新对象创建</li>
+<li>|</li>
+<li>▼</li>
+<li>+———+         Young GC          +———–+</li>
+<li>Eden   | →   | Survivor</li>
+<li>(新对象) |   存活对象复制到Survivor  | (from&#x2F;to)</li>
+<li>+———+                           +———–+</li>
+<li>|</li>
+<li>年龄达到阈值(默认15)</li>
+<li>|</li>
+<li>▼</li>
+<li>Old Gen</li>
+<li>(老年代)</li>
+<li>长期存活对象</li>
+<li>|</li>
+<li>Full GC</li>
+<li>|</li>
+<li><ul>
+<li></li>
+</ul>
+</li>
+<li>|  |</li>
+<li>▼                       ▼</li>
+<li>回收死亡对象              内存仍不够</li>
+<li>空间释放                  → OOM</li>
+<li>内存泄漏发生点：</li>
+<li>对象被GC Roots持有 → Young GC无法回收 → 晋升到老年代 → Full GC仍无法回收 → 老年代持续增长 → OOM</li>
+</ul>
+<h3 id="2-3-GC-Roots有哪些"><a href="#2-3-GC-Roots有哪些" class="headerlink" title="2.3 GC Roots有哪些"></a>2.3 GC Roots有哪些</h3><p>理解GC Roots是排查内存泄漏的核心——只要对象到某个GC Root有可达路径，GC就不会回收它。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">GC Roots类型：</span><br><span class="line"></span><br><span class="line">  1. 虚拟机栈中引用的对象</span><br><span class="line">     └─ 方法局部变量、临时变量（正在执行的方法中的对象）</span><br><span class="line"></span><br><span class="line">  2. 方法区中类静态属性引用的对象</span><br><span class="line">     └─ static修饰的变量（最常见的泄漏源头之一）</span><br><span class="line"></span><br><span class="line">  3. 方法区中常量引用的对象</span><br><span class="line">     └─ final static修饰的常量</span><br><span class="line"></span><br><span class="line">  4. 本地方法栈中JNI引用的对象</span><br><span class="line">     └─ Native方法的引用</span><br><span class="line"></span><br><span class="line">  5. JVM内部引用</span><br><span class="line">     └─ 基本类型对应的Class对象、常驻异常、类加载器等</span><br><span class="line"></span><br><span class="line">  6. 同步锁(synchronized)持有的对象</span><br><span class="line">     └─ 被synchronized锁住的对象</span><br><span class="line"></span><br><span class="line">  7. Thread对象</span><br><span class="line">     └─ 活着的线程本身就是GC Root（ThreadLocal泄漏的关键）</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="三、内存泄漏的常见表现"><a href="#三、内存泄漏的常见表现" class="headerlink" title="三、内存泄漏的常见表现"></a>三、内存泄漏的常见表现</h2><p>在实际项目的运维实践中，内存泄漏通常有以下几种表现：</p>
+<h3 id="3-1-症状清单"><a href="#3-1-症状清单" class="headerlink" title="3.1 症状清单"></a>3.1 症状清单</h3><table>
+<thead>
+<tr>
+<th>序号</th>
+<th>症状</th>
+<th>检测方式</th>
+<th>实际项目实例</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>老年代使用率持续增长</td>
+<td>jstat监控O列</td>
+<td>safety-service老年代从40%涨到95%</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Full GC后内存不下降</td>
+<td>jstat观察FGC后O列</td>
+<td>Full GC后老年代从92%仅降到89%</td>
+</tr>
+<tr>
+<td>3</td>
+<td>应用运行时间越长越慢</td>
+<td>接口响应时间监控</td>
+<td>safety-service启动时P99&lt;200ms，3天后P99&gt;2s</td>
+</tr>
+<tr>
+<td>4</td>
+<td>最终OOM: Java heap space</td>
+<td>应用日志</td>
+<td>周日凌晨2点safety-service OOM崩溃</td>
+</tr>
+<tr>
+<td>5</td>
+<td>GC频率越来越高</td>
+<td>jstat观察YGC&#x2F;FGC</td>
+<td>Young GC从10秒1次变为2秒1次</td>
+</tr>
+<tr>
+<td>6</td>
+<td>CPU使用率持续偏高</td>
+<td>监控大盘</td>
+<td>GC线程占用CPU从5%升到40%</td>
+</tr>
+<tr>
+<td>7</td>
+<td>堆内存水位线呈阶梯式上升</td>
+<td>Prometheus内存趋势图</td>
+<td>每次Full GC后的低点比上一次高</td>
+</tr>
+</tbody></table>
+<h3 id="3-2-正常内存-vs-泄漏内存的趋势对比"><a href="#3-2-正常内存-vs-泄漏内存的趋势对比" class="headerlink" title="3.2 正常内存 vs 泄漏内存的趋势对比"></a>3.2 正常内存 vs 泄漏内存的趋势对比</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line">正常应用的内存趋势：</span><br><span class="line"></span><br><span class="line">  内存%</span><br><span class="line">   100|                                                   </span><br><span class="line">    80|        /\/\/\              /\/\/\                  </span><br><span class="line">    60|   /\/\/\      /\/\/\ /\/\/\      /\/\/\           </span><br><span class="line">    40|  /      \    /      \/      \    /    \           </span><br><span class="line">    20| /        \/\/                 \/\/      \         </span><br><span class="line">     0+------------------------------------------→ 时间  </span><br><span class="line">      创建     GC    GC    GC    GC    GC    GC           </span><br><span class="line">      对象     回收   回收   回收   回收   回收  回收     </span><br><span class="line">                                                           </span><br><span class="line">   特征：锯齿形，Full GC后能回到稳定基线                  </span><br><span class="line"></span><br><span class="line"></span><br><span class="line">内存泄漏的趋势：</span><br><span class="line"></span><br><span class="line">  内存%</span><br><span class="line">   100|                                            OOM! </span><br><span class="line">    80|                              /\/\/\       /</span><br><span class="line">    60|                    /\/\/\   /      \/\/\/\ </span><br><span class="line">    40|          /\/\/\   /      \/                    </span><br><span class="line">    20|   /\/\/\/      \/                               </span><br><span class="line">     0+------------------------------------------→ 时间  </span><br><span class="line">      创建   GC  泄漏积累  GC  泄漏积累  GC  泄漏积累  </span><br><span class="line">                                                           </span><br><span class="line">   特征：锯齿形，但基线持续上移，Full GC后无法回到前低点  </span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="四、排查方法论"><a href="#四、排查方法论" class="headerlink" title="四、排查方法论"></a>四、排查方法论</h2><p>经过实际项目的多次实战，我总结出以下标准化的排查流程：</p>
+<h3 id="4-1-排查全景流程图"><a href="#4-1-排查全景流程图" class="headerlink" title="4.1 排查全景流程图"></a>4.1 排查全景流程图</h3><p><strong>JVM内存泄漏排查全景流程</strong></p>
+<ul>
+<li><strong>观察O（老年代使用率）趋势</strong><ul>
+<li>正常：Full GC后O降到60%以下           → 非泄漏，检查容量</li>
+<li>jstat -gcutil <pid> 5000 10</li>
+<li>泄漏：Full GC后O不降反升</li>
+<li>→ 继续第2步</li>
+</ul>
+</li>
+<li><strong>方式1：-XX:+HeapDumpOnOutOfMemoryError  提前配置，OOM自动dump</strong><ul>
+<li>方式2：jmap -dump:format&#x3D;b,file&#x3D;xxx     手动dump</li>
+<li>方式3：jcmd <pid> GC.heap_dump xxx</li>
+<li>推荐，更安全</li>
+<li>方式4：Arthas heapdump &#x2F;tmp&#x2F;xxx.hprof</li>
+<li>在线诊断工具</li>
+</ul>
+</li>
+<li><strong>1. Leak Suspects（泄漏嫌疑报告）</strong><ul>
+<li><ol start="2">
+<li>Dominator Tree（支配树）</li>
+</ol>
+</li>
+<li><ol start="3">
+<li>Top Consumers（大对象排行）</li>
+</ol>
+</li>
+<li><ol start="4">
+<li>GC Roots引用链</li>
+</ol>
+</li>
+</ul>
+</li>
+<li><strong>关注Retained Size最大的对象</strong><ul>
+<li>沿GC Roots引用链找到泄漏源头</li>
+<li>对照业务代码确定修复方案</li>
+</ul>
+</li>
+<li><strong>修复代码 → 重启服务 → 监控内存趋势</strong><ul>
+<li>确认Full GC后老年代回到正常水位</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-2-第1步：确认是否内存泄漏"><a href="#4-2-第1步：确认是否内存泄漏" class="headerlink" title="4.2 第1步：确认是否内存泄漏"></a>4.2 第1步：确认是否内存泄漏</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># jstat监控GC状况，每5秒采样1次，共10次</span></span><br><span class="line">jstat -gcutil &lt;pid&gt; 5000 10</span><br><span class="line"></span><br><span class="line"><span class="comment"># 输出示例（智慧矿山safety-service泄漏时）：</span></span><br><span class="line"><span class="comment">#   S0     S1     E      O      M     CCS    YGC   YGCT   FGC  FGCT   GCT</span></span><br><span class="line"><span class="comment">#   0.00  45.23  67.89  92.34  95.12  91.56   342  12.456   5   3.789  16.245</span></span><br><span class="line"><span class="comment">#   0.00  45.23  78.12  93.12  95.12  91.56   343  12.512   5   3.789  16.301</span></span><br><span class="line"><span class="comment">#   0.00  45.23  89.45  93.89  95.12  91.56   344  12.578   5   3.789  16.367</span></span><br><span class="line"><span class="comment">#   ...</span></span><br><span class="line"><span class="comment">#   0.00  45.23  67.89  94.56  95.12  91.56   347  12.789   6   4.567  17.356  ← Full GC后O仍上升！</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>判断标准</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>观察</th>
+<th>正常</th>
+<th>泄漏</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>O（老年代使用率）</td>
+<td>Full GC后降到60%以下</td>
+<td>Full GC后仍&gt;85%且持续上升</td>
+</tr>
+<tr>
+<td>FGC（Full GC次数）</td>
+<td>偶尔发生</td>
+<td>越来越频繁</td>
+</tr>
+<tr>
+<td>FGCT（Full GC总时间）</td>
+<td>较短</td>
+<td>每次越来越长</td>
+</tr>
+<tr>
+<td>GCT（GC总时间）</td>
+<td>占比&lt;5%</td>
+<td>占比&gt;15%</td>
+</tr>
+</tbody></table>
+<h3 id="4-3-第2步：获取堆dump"><a href="#4-3-第2步：获取堆dump" class="headerlink" title="4.3 第2步：获取堆dump"></a>4.3 第2步：获取堆dump</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 方式1：提前配置OOM自动dump（推荐，但只能捕获OOM时刻的dump）</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 在JVM启动参数中添加：</span></span><br><span class="line">-XX:+HeapDumpOnOutOfMemoryError</span><br><span class="line">-XX:HeapDumpPath=/data/logs/heapdump/</span><br><span class="line"></span><br><span class="line"><span class="comment"># 实际项目safety-service的完整JVM参数：</span></span><br><span class="line">java -Xms2g -Xmx2g \</span><br><span class="line">     -XX:+UseG1GC \</span><br><span class="line">     -XX:MaxGCPauseMillis=200 \</span><br><span class="line">     -XX:+HeapDumpOnOutOfMemoryError \</span><br><span class="line">     -XX:HeapDumpPath=/data/logs/heapdump/safety_oom.hprof \</span><br><span class="line">     -XX:+PrintGCDetails \</span><br><span class="line">     -XX:+PrintGCDateStamps \</span><br><span class="line">     -Xloggc:/data/logs/gc/safety_gc.log \</span><br><span class="line">     -jar safety-service.jar</span><br><span class="line"></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 方式2：手动dump（适用于内存增长但还未OOM时）</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 注意：jmap -dump会导致STW（Stop The World），生产环境慎用！</span></span><br><span class="line">jmap -dump:format=b,file=/data/logs/heap_$(<span class="built_in">date</span> +%Y%m%d%H%M%S).hprof &lt;pid&gt;</span><br><span class="line"></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 方式3：jcmd（推荐，比jmap更安全）</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line">jcmd &lt;pid&gt; GC.heap_dump /data/logs/heap_$(<span class="built_in">date</span> +%Y%m%d%H%M%S).hprof</span><br><span class="line"></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 方式4：Arthas在线诊断（推荐，影响最小）</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 下载并启动Arthas</span></span><br><span class="line">curl -O https://arthas.aliyun.com/arthas-boot.jar</span><br><span class="line">java -jar arthas-boot.jar</span><br><span class="line"></span><br><span class="line"><span class="comment"># 在Arthas控制台执行</span></span><br><span class="line">heapdump /data/logs/heap_$(<span class="built_in">date</span> +%Y%m%d%H%M%S).hprof</span><br><span class="line"></span><br><span class="line"><span class="comment"># 只dump存活对象（更小更快）</span></span><br><span class="line">heapdump --live /data/logs/heap_live_$(<span class="built_in">date</span> +%Y%m%d%H%M%S).hprof</span><br></pre></td></tr></table></figure>
+
+<p><strong>dump文件获取注意事项</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>注意事项</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>磁盘空间</td>
+<td>dump文件约等于堆内存大小，2G堆会产生约2G的dump文件</td>
+</tr>
+<tr>
+<td>STW影响</td>
+<td>jmap -dump会触发Full GC+STW，影响业务；jcmd相对更安全</td>
+</tr>
+<tr>
+<td>dump时机</td>
+<td>最好在内存增长到高位但还未OOM时dump，此时泄漏对象最明显</td>
+</tr>
+<tr>
+<td>传输方式</td>
+<td>dump文件较大，建议在服务器上用MAT直接分析，或压缩后下载</td>
+</tr>
+<tr>
+<td>多次dump</td>
+<td>条件允许时，间隔一段时间做两次dump，对比差异更精准</td>
+</tr>
+</tbody></table>
+<h3 id="4-4-第3步：MAT分析"><a href="#4-4-第3步：MAT分析" class="headerlink" title="4.4 第3步：MAT分析"></a>4.4 第3步：MAT分析</h3><p><strong>MAT（Memory Analyzer Tool）分析步骤详解：</strong></p>
+<ul>
+<li>| 打开dump文件     |  →  File → Open Heap Dump</li>
+<li>|</li>
+<li>▼</li>
+<li>+——————+     +———————————–+</li>
+<li>Leak Suspects    | → | 自动分析泄漏嫌疑，给出最可能的</li>
+<li>(泄漏嫌疑报告)   |     | 泄漏对象和保留大小</li>
+<li>+——–+———+     +———————————–+</li>
+<li>|</li>
+<li>▼</li>
+<li>+——————+     +———————————–+</li>
+<li>Dominator Tree   | → | 按Retained Size排序，找出占用</li>
+<li>(支配树)         |     | 内存最大的对象及引用关系</li>
+<li>+——–+———+     +———————————–+</li>
+<li>|</li>
+<li>▼</li>
+<li>+——————+     +———————————–+</li>
+<li>Top Consumers    | → | 按类分组统计内存占用，快速定位</li>
+<li>(大对象排行)     |     | 哪种类型的对象最耗内存</li>
+<li>+——–+———+     +———————————–+</li>
+<li>|</li>
+<li>▼</li>
+<li>+——————+     +———————————–+</li>
+<li>GC Roots引用链   | → | 从泄漏对象回溯到GC Root，确定</li>
+<li>(引用链追溯)     |     | 是谁”抓住”了对象不让它被回收</li>
+<li>+——————+     +———————————–+</li>
+</ul>
+<h3 id="4-5-第4步：MAT关键概念"><a href="#4-5-第4步：MAT关键概念" class="headerlink" title="4.5 第4步：MAT关键概念"></a>4.5 第4步：MAT关键概念</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">MAT两个核心概念：</span><br><span class="line"></span><br><span class="line">  Shallow Size（浅堆）：</span><br><span class="line">    对象自身占用的内存大小</span><br><span class="line">    ┌─────────────────────────────────────────────┐</span><br><span class="line">    │  对象头（12-16字节）                         │</span><br><span class="line">    │  + 实例变量占用的内存                        │</span><br><span class="line">    │  + 对齐填充（8字节对齐）                     │</span><br><span class="line">    │                                             │</span><br><span class="line">    │  注意：不包括引用对象的大小                   │</span><br><span class="line">    │  一个ArrayList的Shallow Size可能只有几十字节 │</span><br><span class="line">    └─────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">  Retained Size（深堆/保留大小）：</span><br><span class="line">    对象被GC回收后可释放的总内存</span><br><span class="line">    ┌─────────────────────────────────────────────┐</span><br><span class="line">    │  对象的Shallow Size                         │</span><br><span class="line">    │  + 对象直接引用的所有对象的Shallow Size      │</span><br><span class="line">    │  + 间接引用的所有对象的Shallow Size          │</span><br><span class="line">    │  （排除被其他GC Root可达的对象）             │</span><br><span class="line">    │                                             │</span><br><span class="line">    │  关键：Retained Size = 该对象独占的内存       │</span><br><span class="line">    │  如果该对象被回收，这些内存就可以释放        │</span><br><span class="line">    └─────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">  排查重点：关注Retained Size最大的对象</span><br><span class="line">  → 它是内存泄漏的最大嫌疑犯</span><br><span class="line">  → 沿GC Roots引用链找到&quot;谁在持有它&quot;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="五、常见内存泄漏场景"><a href="#五、常见内存泄漏场景" class="headerlink" title="五、常见内存泄漏场景"></a>五、常见内存泄漏场景</h2><h3 id="5-1-场景总览"><a href="#5-1-场景总览" class="headerlink" title="5.1 场景总览"></a>5.1 场景总览</h3><table>
+<thead>
+<tr>
+<th>序号</th>
+<th>场景</th>
+<th>泄漏机制</th>
+<th>实际项目发生频率</th>
+<th>严重程度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>ThreadLocal未remove</td>
+<td>线程池中线程复用，ThreadLocalMap的value强引用不释放</td>
+<td>高（3次）</td>
+<td>严重</td>
+</tr>
+<tr>
+<td>2</td>
+<td>静态集合持续增长</td>
+<td>static Map&#x2F;List只增不减</td>
+<td>高（2次）</td>
+<td>严重</td>
+</tr>
+<tr>
+<td>3</td>
+<td>资源未关闭</td>
+<td>连接&#x2F;流未close，内部缓冲区不释放</td>
+<td>中（2次）</td>
+<td>高</td>
+</tr>
+<tr>
+<td>4</td>
+<td>监听器未注销</td>
+<td>事件总线持有listener引用</td>
+<td>中（1次）</td>
+<td>中</td>
+</tr>
+<tr>
+<td>5</td>
+<td>内部类持有外部引用</td>
+<td>非静态内部类隐式持有外部类this</td>
+<td>低（1次）</td>
+<td>中</td>
+</tr>
+<tr>
+<td>6</td>
+<td>缓存key变化导致泄漏</td>
+<td>可变对象做Map key，hash变化后无法访问</td>
+<td>低（1次）</td>
+<td>中</td>
+</tr>
+<tr>
+<td>7</td>
+<td>finalize方法阻塞</td>
+<td>Finalizer队列堆积</td>
+<td>低（0次）</td>
+<td>高</td>
+</tr>
+<tr>
+<td>8</td>
+<td>ClassLoader泄漏</td>
+<td>重复动态加载类无法卸载</td>
+<td>低（0次）</td>
+<td>严重</td>
+</tr>
+</tbody></table>
+<h3 id="5-2-场景1：ThreadLocal未remove（智慧矿山P0事故根因）"><a href="#5-2-场景1：ThreadLocal未remove（智慧矿山P0事故根因）" class="headerlink" title="5.2 场景1：ThreadLocal未remove（智慧矿山P0事故根因）"></a>5.2 场景1：ThreadLocal未remove（智慧矿山P0事故根因）</h3><p>这是实际项目safety-service OOM事故的直接原因。safety-service使用线程池处理安全告警，每个线程通过ThreadLocal保存当前矿井的上下文信息（MineContext），但使用完后忘记调用remove()。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br><span class="line">142</span><br><span class="line">143</span><br><span class="line">144</span><br><span class="line">145</span><br><span class="line">146</span><br><span class="line">147</span><br><span class="line">148</span><br><span class="line">149</span><br><span class="line">150</span><br><span class="line">151</span><br><span class="line">152</span><br><span class="line">153</span><br><span class="line">154</span><br><span class="line">155</span><br><span class="line">156</span><br><span class="line">157</span><br><span class="line">158</span><br><span class="line">159</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 错误写法：ThreadLocal泄漏</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 矿井上下文 —— 保存当前线程处理的矿井信息</span></span><br><span class="line"><span class="comment"> * 泄漏根因：线程池中线程被复用，ThreadLocalMap中的value</span></span><br><span class="line"><span class="comment"> *           是强引用，不会被GC回收</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MineContextHolder</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> ThreadLocal&lt;MineContext&gt; CONTEXT = <span class="keyword">new</span> <span class="title class_">ThreadLocal</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">set</span><span class="params">(MineContext context)</span> &#123;</span><br><span class="line">        CONTEXT.set(context);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> MineContext <span class="title function_">get</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> CONTEXT.get();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ❌ 没有 remove 方法！</span></span><br><span class="line">    <span class="comment">// ❌ 或者有 remove 方法但调用方忘记调用！</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// Controller层调用</span></span><br><span class="line"><span class="meta">@RestController</span></span><br><span class="line"><span class="meta">@RequestMapping(&quot;/api/safety&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SafetyAlertController</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> SafetyAlertService alertService;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@PostMapping(&quot;/alert&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> Result <span class="title function_">handleAlert</span><span class="params">(<span class="meta">@RequestBody</span> SafetyAlertDTO dto)</span> &#123;</span><br><span class="line">        <span class="comment">// 设置矿井上下文</span></span><br><span class="line">        <span class="type">MineContext</span> <span class="variable">context</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">MineContext</span>(dto.getMineId(), dto.getAreaId());</span><br><span class="line">        MineContextHolder.set(context);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 处理告警逻辑</span></span><br><span class="line">        alertService.processAlert(dto);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// ❌ 忘记 remove！</span></span><br><span class="line">        <span class="comment">// 下次这个线程被复用时，旧的MineContext仍然在ThreadLocalMap中</span></span><br><span class="line">        <span class="comment">// 随着告警不断处理，每个线程的ThreadLocalMap都在积累MineContext</span></span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> Result.success();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 泄漏机制图解</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/*</span></span><br><span class="line"><span class="comment">  线程池（核心线程数 = 50）</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">  Thread-1 ──→ ThreadLocalMap ──→ Entry[] ──→ Entry(mineContext_1, 2MB)</span></span><br><span class="line"><span class="comment">                                              Entry(mineContext_2, 2MB)   ← 旧值未remove</span></span><br><span class="line"><span class="comment">                                              Entry(mineContext_3, 2MB)   ← 旧值未remove</span></span><br><span class="line"><span class="comment">                                              ...（持续积累）</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">  Thread-2 ──→ ThreadLocalMap ──→ Entry[] ──→ Entry(mineContext_1, 2MB)</span></span><br><span class="line"><span class="comment">                                              Entry(mineContext_2, 2MB)</span></span><br><span class="line"><span class="comment">                                              Entry(mineContext_3, 2MB)</span></span><br><span class="line"><span class="comment">                                              ...</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">  ...</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">  Thread-50 ──→ ThreadLocalMap ──→ Entry[] ──→ ...</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">  泄漏总量 = 50个线程 × 每线程积累N个MineContext × 2MB/个</span></span><br><span class="line"><span class="comment">           7天后：50 × 200 × 2MB = 20GB（但堆只有4G → OOM!）</span></span><br><span class="line"><span class="comment"></span></span><br><span class="line"><span class="comment">  关键：ThreadLocalMap的key是弱引用（会被GC回收），</span></span><br><span class="line"><span class="comment">        但value是强引用（不会被GC回收）！</span></span><br><span class="line"><span class="comment">        key被回收后，value变成&quot;孤立值&quot;，永远无法访问也无法回收。</span></span><br><span class="line"><span class="comment">*/</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 正确写法：try-finally确保remove</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MineContextHolder</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> ThreadLocal&lt;MineContext&gt; CONTEXT = <span class="keyword">new</span> <span class="title class_">ThreadLocal</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">set</span><span class="params">(MineContext context)</span> &#123;</span><br><span class="line">        CONTEXT.set(context);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> MineContext <span class="title function_">get</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> CONTEXT.get();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ✅ 提供 remove 方法</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">remove</span><span class="params">()</span> &#123;</span><br><span class="line">        CONTEXT.remove();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@RestController</span></span><br><span class="line"><span class="meta">@RequestMapping(&quot;/api/safety&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SafetyAlertController</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> SafetyAlertService alertService;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@PostMapping(&quot;/alert&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> Result <span class="title function_">handleAlert</span><span class="params">(<span class="meta">@RequestBody</span> SafetyAlertDTO dto)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">MineContext</span> <span class="variable">context</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">MineContext</span>(dto.getMineId(), dto.getAreaId());</span><br><span class="line">            MineContextHolder.set(context);</span><br><span class="line">            alertService.processAlert(dto);</span><br><span class="line">            <span class="keyword">return</span> Result.success();</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            <span class="comment">// ✅ 无论是否异常，都必须remove</span></span><br><span class="line">            MineContextHolder.remove();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 更优雅的方案：使用阿里TransmittableThreadLocal + 自动清理</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 利用Scope机制自动清理ThreadLocal</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MineContextHolder</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> ThreadLocal&lt;MineContext&gt; CONTEXT = <span class="keyword">new</span> <span class="title class_">ThreadLocal</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 执行带上下文的任务，自动清理</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> &lt;T&gt; T <span class="title function_">executeWithContext</span><span class="params">(MineContext context, Supplier&lt;T&gt; task)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            CONTEXT.set(context);</span><br><span class="line">            <span class="keyword">return</span> task.get();</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            CONTEXT.remove();  <span class="comment">// 自动清理，调用方无需关心</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">executeWithContext</span><span class="params">(MineContext context, Runnable task)</span> &#123;</span><br><span class="line">        executeWithContext(context, () -&gt; &#123; task.run(); <span class="keyword">return</span> <span class="literal">null</span>; &#125;);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> MineContext <span class="title function_">get</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> CONTEXT.get();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 调用方式</span></span><br><span class="line">MineContextHolder.executeWithContext(</span><br><span class="line">    <span class="keyword">new</span> <span class="title class_">MineContext</span>(mineId, areaId),</span><br><span class="line">    () -&gt; alertService.processAlert(dto)</span><br><span class="line">);</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-3-场景2：静态集合持续增长"><a href="#5-3-场景2：静态集合持续增长" class="headerlink" title="5.3 场景2：静态集合持续增长"></a>5.3 场景2：静态集合持续增长</h3><p>实际场景中，device-service使用了一个静态HashMap做本地缓存，但从未清理，导致缓存无限膨胀。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 错误写法：静态Map只增不减</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 设备状态本地缓存</span></span><br><span class="line"><span class="comment"> * 泄漏根因：CACHE是static final，生命周期等同于类，</span></span><br><span class="line"><span class="comment"> *           put进来的对象永远不会被移除</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceStatusCache</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Map&lt;String, DeviceStatus&gt; CACHE = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">put</span><span class="params">(String deviceId, DeviceStatus status)</span> &#123;</span><br><span class="line">        CACHE.put(deviceId, status);  <span class="comment">// 永远不清理！</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> DeviceStatus <span class="title function_">get</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> CACHE.get(deviceId);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 问题分析：</span></span><br><span class="line"><span class="comment">// 智慧矿山6座矿井，1200+台设备，每台设备每5秒上报一次状态</span></span><br><span class="line"><span class="comment">// DeviceStatus对象约2KB</span></span><br><span class="line"><span class="comment">// 1小时缓存增长：1200 × (3600/5) × 2KB = 1.7GB</span></span><br><span class="line"><span class="comment">// 即使有重复key覆盖，不同时间戳的DeviceStatus对象（如果key含时间戳）也会无限增长</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 正确写法1：使用Guava Cache</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceStatusCache</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 设置最大条目数和过期策略</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Cache&lt;String, DeviceStatus&gt; CACHE = CacheBuilder.newBuilder()</span><br><span class="line">        .maximumSize(<span class="number">5000</span>)                              <span class="comment">// 最多缓存5000条</span></span><br><span class="line">        .expireAfterWrite(<span class="number">30</span>, TimeUnit.MINUTES)         <span class="comment">// 写入30分钟后过期</span></span><br><span class="line">        .expireAfterAccess(<span class="number">10</span>, TimeUnit.MINUTES)        <span class="comment">// 10分钟无人访问则过期</span></span><br><span class="line">        .recordStats()                                  <span class="comment">// 记录统计信息</span></span><br><span class="line">        .removalListener(notification -&gt; &#123;</span><br><span class="line">            log.debug(<span class="string">&quot;缓存移除: key=&#123;&#125;, cause=&#123;&#125;&quot;</span>,</span><br><span class="line">                notification.getKey(), notification.getCause());</span><br><span class="line">        &#125;)</span><br><span class="line">        .build();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">put</span><span class="params">(String deviceId, DeviceStatus status)</span> &#123;</span><br><span class="line">        CACHE.put(deviceId, status);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> DeviceStatus <span class="title function_">get</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> CACHE.getIfPresent(deviceId);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> CacheStats <span class="title function_">stats</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> CACHE.stats();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 正确写法2：使用Caffeine（更高性能的Guava Cache替代）</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceStatusCache</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Cache&lt;String, DeviceStatus&gt; CACHE = Caffeine.newBuilder()</span><br><span class="line">        .maximumSize(<span class="number">5000</span>)</span><br><span class="line">        .expireAfterWrite(<span class="number">30</span>, TimeUnit.MINUTES)</span><br><span class="line">        .weakKeys()                     <span class="comment">// 弱引用key，避免key对象阻止GC</span></span><br><span class="line">        .recordStats()</span><br><span class="line">        .build();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 用法与Guava Cache完全一致</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-4-场景3：资源未关闭"><a href="#5-4-场景3：资源未关闭" class="headerlink" title="5.4 场景3：资源未关闭"></a>5.4 场景3：资源未关闭</h3><p>实际场景中，report-service使用Apache POI生成Excel报表时，Workbook对象未关闭导致内存泄漏。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 错误写法：POI Workbook未关闭</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SafetyReportGenerator</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">byte</span>[] generateMonthlyReport(String mineId, <span class="type">int</span> year, <span class="type">int</span> month) &#123;</span><br><span class="line">        <span class="comment">// ❌ Workbook未关闭！</span></span><br><span class="line">        <span class="type">Workbook</span> <span class="variable">workbook</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">XSSFWorkbook</span>();  <span class="comment">// XSSFWorkbook会分配大量临时内存</span></span><br><span class="line">        <span class="type">Sheet</span> <span class="variable">sheet</span> <span class="operator">=</span> workbook.createSheet(<span class="string">&quot;安全月报&quot;</span>);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 写入大量数据...</span></span><br><span class="line">        List&lt;SafetyAlert&gt; alerts = alertRepository.findByMonth(mineId, year, month);</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; alerts.size(); i++) &#123;</span><br><span class="line">            <span class="type">Row</span> <span class="variable">row</span> <span class="operator">=</span> sheet.createRow(i);</span><br><span class="line">            <span class="comment">// ... 写入单元格</span></span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="type">ByteArrayOutputStream</span> <span class="variable">out</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ByteArrayOutputStream</span>();</span><br><span class="line">        workbook.write(out);</span><br><span class="line">        <span class="comment">// ❌ 忘记 workbook.close()！</span></span><br><span class="line">        <span class="comment">// XSSFWorkbook内部使用大量临时对象和字节缓冲区，</span></span><br><span class="line">        <span class="comment">// 不close的话这些内存不会被释放</span></span><br><span class="line">        <span class="keyword">return</span> out.toByteArray();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 正确写法：try-with-resources确保资源关闭</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SafetyReportGenerator</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">byte</span>[] generateMonthlyReport(String mineId, <span class="type">int</span> year, <span class="type">int</span> month) &#123;</span><br><span class="line">        <span class="comment">// ✅ try-with-resources自动关闭</span></span><br><span class="line">        <span class="keyword">try</span> (<span class="type">Workbook</span> <span class="variable">workbook</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">SXSSFWorkbook</span>(<span class="number">100</span>)) &#123;  <span class="comment">// SXSSFWorkbook流式写入，更省内存</span></span><br><span class="line">            <span class="type">Sheet</span> <span class="variable">sheet</span> <span class="operator">=</span> workbook.createSheet(<span class="string">&quot;安全月报&quot;</span>);</span><br><span class="line"></span><br><span class="line">            List&lt;SafetyAlert&gt; alerts = alertRepository.findByMonth(mineId, year, month);</span><br><span class="line">            <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; alerts.size(); i++) &#123;</span><br><span class="line">                <span class="type">Row</span> <span class="variable">row</span> <span class="operator">=</span> sheet.createRow(i);</span><br><span class="line">                <span class="type">SafetyAlert</span> <span class="variable">alert</span> <span class="operator">=</span> alerts.get(i);</span><br><span class="line">                row.createCell(<span class="number">0</span>).setCellValue(alert.getId());</span><br><span class="line">                row.createCell(<span class="number">1</span>).setCellValue(alert.getLevel().name());</span><br><span class="line">                row.createCell(<span class="number">2</span>).setCellValue(alert.getDescription());</span><br><span class="line">                <span class="comment">// ...</span></span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="type">ByteArrayOutputStream</span> <span class="variable">out</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ByteArrayOutputStream</span>();</span><br><span class="line">            workbook.write(out);</span><br><span class="line">            <span class="keyword">return</span> out.toByteArray();</span><br><span class="line"></span><br><span class="line">        &#125; <span class="keyword">catch</span> (IOException e) &#123;</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">RuntimeException</span>(<span class="string">&quot;报表生成失败&quot;</span>, e);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 数据库连接泄漏</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// ❌ 错误写法</span></span><br><span class="line"><span class="keyword">public</span> Device <span class="title function_">getDevice</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">    <span class="type">Connection</span> <span class="variable">conn</span> <span class="operator">=</span> dataSource.getConnection();  <span class="comment">// 从连接池获取</span></span><br><span class="line">    <span class="type">PreparedStatement</span> <span class="variable">ps</span> <span class="operator">=</span> conn.prepareStatement(<span class="string">&quot;SELECT * FROM device WHERE id = ?&quot;</span>);</span><br><span class="line">    ps.setString(<span class="number">1</span>, deviceId);</span><br><span class="line">    <span class="type">ResultSet</span> <span class="variable">rs</span> <span class="operator">=</span> ps.executeQuery();</span><br><span class="line">    <span class="comment">// 如果这里抛异常，conn不会被关闭！</span></span><br><span class="line">    <span class="type">Device</span> <span class="variable">device</span> <span class="operator">=</span> mapToDevice(rs);</span><br><span class="line">    rs.close();</span><br><span class="line">    ps.close();</span><br><span class="line">    conn.close();  <span class="comment">// 如果上面抛异常，这行永远不会执行</span></span><br><span class="line">    <span class="keyword">return</span> device;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 正确写法</span></span><br><span class="line"><span class="keyword">public</span> Device <span class="title function_">getDevice</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> (<span class="type">Connection</span> <span class="variable">conn</span> <span class="operator">=</span> dataSource.getConnection();</span><br><span class="line">         <span class="type">PreparedStatement</span> <span class="variable">ps</span> <span class="operator">=</span> conn.prepareStatement(<span class="string">&quot;SELECT * FROM device WHERE id = ?&quot;</span>)) &#123;</span><br><span class="line">        ps.setString(<span class="number">1</span>, deviceId);</span><br><span class="line">        <span class="keyword">try</span> (<span class="type">ResultSet</span> <span class="variable">rs</span> <span class="operator">=</span> ps.executeQuery()) &#123;</span><br><span class="line">            <span class="keyword">return</span> rs.next() ? mapToDevice(rs) : <span class="literal">null</span>;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125; <span class="keyword">catch</span> (SQLException e) &#123;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">RuntimeException</span>(<span class="string">&quot;查询设备失败: &quot;</span> + deviceId, e);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-5-场景4：监听器未注销"><a href="#5-5-场景4：监听器未注销" class="headerlink" title="5.5 场景4：监听器未注销"></a>5.5 场景4：监听器未注销</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 错误写法：EventBus注册后不注销</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SafetyAlertListener</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> EventBus eventBus;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@PostConstruct</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">init</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// ❌ 注册了监听器</span></span><br><span class="line">        eventBus.register(<span class="built_in">this</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ❌ 没有 @PreDestroy 注销！</span></span><br><span class="line">    <span class="comment">// 在Spring容器刷新时，旧的listener实例不会被eventBus释放</span></span><br><span class="line">    <span class="comment">// eventBus内部维护着所有注册的listener引用 → listener无法被GC</span></span><br><span class="line"></span><br><span class="line">    <span class="meta">@Subscribe</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">onAlert</span><span class="params">(SafetyAlertEvent event)</span> &#123;</span><br><span class="line">        <span class="comment">// 处理安全告警</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 正确写法：及时注销</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SafetyAlertListener</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> EventBus eventBus;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@PostConstruct</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">init</span><span class="params">()</span> &#123;</span><br><span class="line">        eventBus.register(<span class="built_in">this</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ✅ 销毁时注销</span></span><br><span class="line">    <span class="meta">@PreDestroy</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">destroy</span><span class="params">()</span> &#123;</span><br><span class="line">        eventBus.unregister(<span class="built_in">this</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Subscribe</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">onAlert</span><span class="params">(SafetyAlertEvent event)</span> &#123;</span><br><span class="line">        <span class="comment">// 处理安全告警</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-6-场景5：内部类持有外部引用"><a href="#5-6-场景5：内部类持有外部引用" class="headerlink" title="5.6 场景5：内部类持有外部引用"></a>5.6 场景5：内部类持有外部引用</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 错误写法：非静态内部类持有外部类引用</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceDataProcessor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 外部类有一个大数组</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">byte</span>[] historyBuffer = <span class="keyword">new</span> <span class="title class_">byte</span>[<span class="number">1024</span> * <span class="number">1024</span> * <span class="number">50</span>];  <span class="comment">// 50MB历史数据缓冲区</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// ❌ 非静态内部类 → 隐式持有 DeviceDataProcessor.this</span></span><br><span class="line">    <span class="comment">//    即使只需要用到一个小方法，也会把50MB的historyBuffer一起持有</span></span><br><span class="line">    <span class="keyword">public</span> Runnable <span class="title function_">createAlertTask</span><span class="params">(SafetyAlert alert)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">Runnable</span>() &#123;</span><br><span class="line">            <span class="meta">@Override</span></span><br><span class="line">            <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">run</span><span class="params">()</span> &#123;</span><br><span class="line">                processAlert(alert);  <span class="comment">// 只用了processAlert方法</span></span><br><span class="line">                <span class="comment">// 但内部类实例持有外部类引用 → 50MB的historyBuffer无法释放</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125;;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">processAlert</span><span class="params">(SafetyAlert alert)</span> &#123;</span><br><span class="line">        <span class="comment">// 处理告警逻辑</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 如果这个Runnable被提交到线程池并长时间未执行，</span></span><br><span class="line"><span class="comment">// 外部类DeviceDataProcessor及其50MB的historyBuffer就无法被GC回收！</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 正确写法：使用静态内部类</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceDataProcessor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">byte</span>[] historyBuffer = <span class="keyword">new</span> <span class="title class_">byte</span>[<span class="number">1024</span> * <span class="number">1024</span> * <span class="number">50</span>];  <span class="comment">// 50MB</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// ✅ 静态内部类 → 不持有外部类引用</span></span><br><span class="line">    <span class="keyword">public</span> Runnable <span class="title function_">createAlertTask</span><span class="params">(SafetyAlert alert)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">AlertTask</span>(alert);  <span class="comment">// 只传必要参数，不持有外部类引用</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ✅ 静态内部类</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">class</span> <span class="title class_">AlertTask</span> <span class="keyword">implements</span> <span class="title class_">Runnable</span> &#123;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> SafetyAlert alert;  <span class="comment">// 只持有alert引用</span></span><br><span class="line"></span><br><span class="line">        AlertTask(SafetyAlert alert) &#123;</span><br><span class="line">            <span class="built_in">this</span>.alert = alert;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="meta">@Override</span></span><br><span class="line">        <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">run</span><span class="params">()</span> &#123;</span><br><span class="line">            <span class="comment">// 处理告警逻辑（将processAlert逻辑内聚到Task中）</span></span><br><span class="line">            doProcessAlert(alert);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">doProcessAlert</span><span class="params">(SafetyAlert alert)</span> &#123;</span><br><span class="line">            <span class="comment">// 具体处理逻辑，不依赖外部类实例</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">processAlert</span><span class="params">(SafetyAlert alert)</span> &#123;</span><br><span class="line">        <span class="comment">// ...</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-7-场景6：缓存key变化导致泄漏"><a href="#5-7-场景6：缓存key变化导致泄漏" class="headerlink" title="5.7 场景6：缓存key变化导致泄漏"></a>5.7 场景6：缓存key变化导致泄漏</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 错误写法：可变对象做Map的key</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 实际场景中，有人用List&lt;String&gt;做缓存key</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceAlertCache</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// key = [mineId, areaId, deviceType]</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Map&lt;List&lt;String&gt;, List&lt;SafetyAlert&gt;&gt; CACHE = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">put</span><span class="params">(String mineId, String areaId, String deviceType,</span></span><br><span class="line"><span class="params">                           List&lt;SafetyAlert&gt; alerts)</span> &#123;</span><br><span class="line">        List&lt;String&gt; key = <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(Arrays.asList(mineId, areaId, deviceType));</span><br><span class="line">        CACHE.put(key, alerts);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// ❌ 如果外部修改了key（虽然这个例子中不太可能，但实际项目中更复杂）</span></span><br><span class="line">        <span class="comment">// key.add(&quot;extra&quot;);  → hashCode变了！</span></span><br><span class="line">        <span class="comment">// CACHE.get(key) → 找不到！</span></span><br><span class="line">        <span class="comment">// 旧entry永远无法访问和删除 → 内存泄漏</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"><span class="comment">// 正确写法1：使用不可变对象做key</span></span><br><span class="line"><span class="comment">// ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 方案A：用String拼接（简单场景）</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Map&lt;String, List&lt;SafetyAlert&gt;&gt; CACHE = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"><span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> mineId + <span class="string">&quot;:&quot;</span> + areaId + <span class="string">&quot;:&quot;</span> + deviceType;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方案B：使用不可变的记录类（JDK 14+）</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">record</span> <span class="title class_">CacheKey</span><span class="params">(String mineId, String areaId, String deviceType)</span> &#123;&#125;</span><br><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Map&lt;CacheKey, List&lt;SafetyAlert&gt;&gt; CACHE = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方案C：使用Guava Table</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Table&lt;String, String, List&lt;SafetyAlert&gt;&gt; CACHE = HashBasedTable.create();</span><br><span class="line">CACHE.put(mineId + <span class="string">&quot;:&quot;</span> + areaId, deviceType, alerts);</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="六、MAT分析实战"><a href="#六、MAT分析实战" class="headerlink" title="六、MAT分析实战"></a>六、MAT分析实战</h2><h3 id="6-1-实战1：safety-service-ThreadLocal泄漏（P0事故复盘）"><a href="#6-1-实战1：safety-service-ThreadLocal泄漏（P0事故复盘）" class="headerlink" title="6.1 实战1：safety-service ThreadLocal泄漏（P0事故复盘）"></a>6.1 实战1：safety-service ThreadLocal泄漏（P0事故复盘）</h3><p>这是实际项目2023年最严重的内存泄漏事故的完整复盘过程。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">事故背景：</span><br><span class="line">  服务：safety-service（安全监控服务）</span><br><span class="line">  配置：-Xmx4g -Xms4g -XX:+UseG1GC</span><br><span class="line">  现象：运行7天后OOM，重启后7天再次OOM</span><br><span class="line"></span><br><span class="line">  时间线：</span><br><span class="line">  Day1  启动，内存1.2G（正常）</span><br><span class="line">  Day2  内存1.8G</span><br><span class="line">  Day3  内存2.5G，开始频繁Full GC</span><br><span class="line">  Day4  内存3.2G，Full GC后仅降到3.0G</span><br><span class="line">  Day5  内存3.8G，接口P99从200ms升到2s</span><br><span class="line">  Day6  内存4.0G（接近上限），频繁Full GC，CPU 80%+</span><br><span class="line">  Day7  OOM! java.lang.OutOfMemoryError: Java heap space</span><br></pre></td></tr></table></figure>
+
+<p><strong>MAT分析过程</strong>：</p>
+<p><strong>步骤1：打开Leak Suspects</strong></p>
+<ul>
+<li>Leak Suspect 1</li>
+<li>The class java.lang.ThreadLocal$ThreadLocalMap$Entry</li>
+<li>occupies 2,847,395,832 bytes (67.3%) of the heap.</li>
+<li>The biggest instances are:</li>
+<li>Thread-1  → ThreadLocalMap → 68.2 MB</li>
+<li>Thread-2  → ThreadLocalMap → 65.7 MB</li>
+<li>Thread-3  → ThreadLocalMap → 71.3 MB</li>
+<li>…</li>
+<li>Thread-50 → ThreadLocalMap → 63.9 MB</li>
+<li>Total: 50 threads × ~57MB&#x2F;thread ≈ 2.85GB</li>
+<li>步骤2：查看Dominator Tree</li>
+<li>Class Name                              | Shallow Heap | Retained Heap | %</li>
+<li>—————————————-|————-|————–|—-</li>
+<li>Thread-1 @ 0xfe123456                   |       104   | 68,200,416   | 1.6%</li>
+<li>threadLocals @ 0xfe234567          |        48   | 68,200,312   | 1.6%</li>
+<li>|  table (Entry[]) @ 0xfe345678   |    820,000  | 68,199,768   | 1.6%</li>
+<li>|  Entry[0] @ 0xfe456789      |        32   |     2,048    | 0.0%</li>
+<li>|  Entry[1] @ 0xfe567890      |        32   | 2,048,576    | 0.0%</li>
+<li>|  |  value → MineContext    |        64   | 2,048,544    | 0.0%</li>
+<li>|  Entry[2] @ 0xfe678901      |        32   | 2,048,576    | 0.0%</li>
+<li>|  |  value → MineContext    |        64   | 2,048,544    | 0.0%</li>
+<li>|  Entry[3] …               |        …  |      …     | …</li>
+<li>|  Entry[33] @ 0xff123456     |        32   | 2,048,576    | 0.0%</li>
+<li>|  value → MineContext    |        64   | 2,048,544    | 0.0%</li>
+<li>target (Runnable)                  |        48   |       120    | 0.0%</li>
+<li>★ 每个线程的ThreadLocalMap中有30+个Entry</li>
+<li>★ 每个Entry的value指向一个MineContext，Retained Size约2MB</li>
+<li>★ 这些MineContext是不同矿井的上下文信息，处理完后未被remove</li>
+<li>步骤3：查看GC Roots引用链</li>
+<li>Thread-1 (alive, GC Root)               ← 线程池中的核心线程，始终存活</li>
+<li>threadLocals (ThreadLocalMap)       ← 线程的ThreadLocalMap</li>
+<li>table (Entry[])                 ← ThreadLocalMap内部的Entry数组</li>
+<li>Entry[1]                    ← 一个Entry</li>
+<li>referent &#x3D; null         ← key已经被GC回收（弱引用）</li>
+<li>value &#x3D; MineContext      ← value仍然存活！（强引用）</li>
+<li>mineId &#x3D; “MINE-001”</li>
+<li>areaId &#x3D; “AREA-A3”</li>
+<li>deviceList &#x3D; ArrayList(1200个DeviceStatus对象)</li>
+<li>safetyRules &#x3D; ArrayList(500个SafetyRule对象)</li>
+<li>★ 关键发现：key为null但value不为null → 典型的ThreadLocal内存泄漏特征</li>
+<li>★ value中持有的MineContext包含了大量设备状态数据</li>
+<li>步骤4：定位代码</li>
+<li>搜索代码中所有MineContextHolder.set的调用点</li>
+<li>发现SafetyAlertController.handleAlert()中set后未调用remove</li>
+<li>步骤5：修复</li>
+<li>在handleAlert方法中添加try-finally，确保MineContextHolder.remove()</li>
+</ul>
+<h3 id="6-2-实战2：device-service静态Map泄漏"><a href="#6-2-实战2：device-service静态Map泄漏" class="headerlink" title="6.2 实战2：device-service静态Map泄漏"></a>6.2 实战2：device-service静态Map泄漏</h3><p><strong>事故背景：</strong></p>
+<ul>
+<li>服务：device-service（设备调度服务）</li>
+<li>配置：-Xmx2g -Xms2g -XX:+UseG1GC</li>
+<li>现象：运行2天后老年代使用率持续90%+</li>
+<li>MAT分析过程：</li>
+<li>步骤1：Leak Suspects</li>
+<li>Leak Suspect 1</li>
+<li>The class java.util.HashMap$Node</li>
+<li>occupies 1,245,678,912 bytes (59.3%) of the heap.</li>
+<li>The biggest instance:</li>
+<li>java.util.HashMap @ 0xfeabcdef</li>
+<li>→ size &#x3D; 4,872,345</li>
+<li>→ Retained Heap &#x3D; 1.2GB</li>
+<li>步骤2：Dominator Tree</li>
+<li>Class Name                              | Shallow Heap | Retained Heap</li>
+<li>—————————————-|————-|————–</li>
+<li>HashMap @ 0xfeabcdef                    |        48   | 1,245,678,912</li>
+<li>table (Node[]) @ 0xfebcd234        | 39,001,224  | 1,245,678,864</li>
+<li>|  Node[0]                        |        32   |       256</li>
+<li>|  Node[1]                        |        32   |     1,024</li>
+<li>|  …                            |        …  |        …</li>
+<li>|  Node[8392710]                  |        32   |       512</li>
+<li>size &#x3D; 4,872,345                   |             |</li>
+<li>★ HashMap的size高达487万！远超预期的5000条</li>
+<li>★ 每条Entry约256字节，总计1.2GB</li>
+<li>步骤3：查看引用链</li>
+<li>Class DeviceStatusCache @ 0xfe987654   (GC Root: 静态变量)</li>
+<li>CACHE (HashMap) @ 0xfeabcdef</li>
+<li>487万个Entry</li>
+<li>DeviceStatus对象</li>
+<li>★ 根因：DeviceStatusCache.CACHE只增不减</li>
+<li>★ deviceType + timestamp作为key，导致每次上报都新增Entry</li>
+<li>★ 原本以为deviceId是固定key会覆盖，但实际key包含了时间戳</li>
+<li>步骤4：修复</li>
+<li>替换HashMap为Caffeine Cache，设置maximumSize&#x3D;5000和expireAfterWrite&#x3D;30min</li>
+</ul>
+<h3 id="6-3-实战3：report-service-POI大对象泄漏"><a href="#6-3-实战3：report-service-POI大对象泄漏" class="headerlink" title="6.3 实战3：report-service POI大对象泄漏"></a>6.3 实战3：report-service POI大对象泄漏</h3><p><strong>事故背景：</strong></p>
+<ol>
+<li>使用SXSSFWorkbook替代XSSFWorkbook（流式写入，内存占用极小）</li>
+<li>用try-with-resources确保workbook.close()</li>
+<li>禁用finalize，改为显式资源管理</li>
+</ol>
+<hr>
+<h2 id="七、高级排查技巧"><a href="#七、高级排查技巧" class="headerlink" title="七、高级排查技巧"></a>七、高级排查技巧</h2><h3 id="7-1-在线诊断：Arthas实战"><a href="#7-1-在线诊断：Arthas实战" class="headerlink" title="7.1 在线诊断：Arthas实战"></a>7.1 在线诊断：Arthas实战</h3><p>在实际场景中，很多时候无法直接获取dump文件（生产环境安全限制），Arthas成为了在线诊断的首选工具。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># Arthas在线诊断内存泄漏</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 1. 启动Arthas</span></span><br><span class="line">curl -O https://arthas.aliyun.com/arthas-boot.jar</span><br><span class="line">java -jar arthas-boot.jar</span><br><span class="line"><span class="comment"># 选择目标Java进程</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 查看JVM信息</span></span><br><span class="line">dashboard        <span class="comment"># 实时查看内存、线程、GC信息</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 查看内存使用详情</span></span><br><span class="line">memory           <span class="comment"># 查看各内存区域使用情况</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 4. 查看类加载统计</span></span><br><span class="line">classloader      <span class="comment"># 查看类加载数量（排查ClassLoader泄漏）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 5. 查看某个类的实例数量</span></span><br><span class="line"><span class="comment"># 查看MineContext类有多少实例</span></span><br><span class="line">vmtool --action getInstances --className com.smartmine.safety.MineContext --<span class="built_in">limit</span> 5</span><br><span class="line"></span><br><span class="line"><span class="comment"># 6. 监控方法调用</span></span><br><span class="line"><span class="comment"># 监控MineContextHolder.set的调用</span></span><br><span class="line">watch com.smartmine.safety.MineContextHolder <span class="built_in">set</span> <span class="string">&#x27;&#123;params, returnObj, #cost&#125;&#x27;</span> -n 100</span><br><span class="line"></span><br><span class="line"><span class="comment"># 7. 查看ThreadLocal值</span></span><br><span class="line"><span class="comment"># 查看当前线程的ThreadLocalMap内容</span></span><br><span class="line">vmtool --action getInstances --className java.lang.ThreadLocal --<span class="built_in">limit</span> 10</span><br><span class="line"></span><br><span class="line"><span class="comment"># 8. 生成堆dump</span></span><br><span class="line">heapdump /data/logs/heapdump.hprof</span><br><span class="line"></span><br><span class="line"><span class="comment"># 9. 只dump存活对象</span></span><br><span class="line">heapdump --live /data/logs/heapdump_live.hprof</span><br><span class="line"></span><br><span class="line"><span class="comment"># 10. 查看线程栈</span></span><br><span class="line">thread          <span class="comment"># 查看所有线程</span></span><br><span class="line">thread -n 5     <span class="comment"># 查看CPU占用最高的5个线程</span></span><br><span class="line">thread -b       <span class="comment"># 查看死锁线程</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 11. 查看GC日志</span></span><br><span class="line">logger --name gc --level debug</span><br></pre></td></tr></table></figure>
+
+<h3 id="7-2-GC日志分析"><a href="#7-2-GC日志分析" class="headerlink" title="7.2 GC日志分析"></a>7.2 GC日志分析</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># GC日志配置</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># JDK 8</span></span><br><span class="line">-XX:+PrintGCDetails</span><br><span class="line">-XX:+PrintGCDateStamps</span><br><span class="line">-XX:+PrintGCTimeStamps</span><br><span class="line">-XX:+PrintGCApplicationStoppedTime</span><br><span class="line">-XX:+PrintGCApplicationConcurrentTime</span><br><span class="line">-Xloggc:/data/logs/gc/safety_gc.log</span><br><span class="line">-XX:+UseGCLogFileRotation</span><br><span class="line">-XX:NumberOfGCLogFiles=10</span><br><span class="line">-XX:GCLogFileSize=50M</span><br><span class="line"></span><br><span class="line"><span class="comment"># JDK 11+</span></span><br><span class="line">-Xlog:gc*=info:file=/data/logs/gc/safety_gc.log:<span class="keyword">time</span>,<span class="built_in">uptime</span>,level,tags:filecount=10,filesize=50M</span><br><span class="line"></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># GC日志分析实战</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 典型的内存泄漏GC日志模式：</span></span><br><span class="line"><span class="comment"># [Full GC (G1 Evacuation Pause) [PSYoungGen: 0K-&gt;0K(512M)]</span></span><br><span class="line"><span class="comment">#  [ParOldGen: 3584M-&gt;3580M(3584M)] 3584M-&gt;3580M(4096M),</span></span><br><span class="line"><span class="comment">#  [Metaspace: 95123K-&gt;95123K(1134592K)], 3.4567890 secs]</span></span><br><span class="line"><span class="comment">#  [Times: user=12.34 sys=0.56, real=3.46 secs]</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 关键观察点：</span></span><br><span class="line"><span class="comment"># 1. Old Gen: 3584M-&gt;3580M → Full GC前后几乎没变化！说明老年代对象无法回收</span></span><br><span class="line"><span class="comment"># 2. 耗时3.46秒 → STW（Stop The World）3.46秒，严重影响业务</span></span><br><span class="line"><span class="comment"># 3. 3584M几乎占满了4G堆 → 内存泄漏严重</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 使用GCEasy在线分析</span></span><br><span class="line"><span class="comment"># 访问 https://gceasy.io/ 上传GC日志文件</span></span><br><span class="line"><span class="comment"># 自动生成分析报告：内存趋势、GC暂停统计、内存泄漏检测</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="7-3-对比两次dump定位泄漏对象"><a href="#7-3-对比两次dump定位泄漏对象" class="headerlink" title="7.3 对比两次dump定位泄漏对象"></a>7.3 对比两次dump定位泄漏对象</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 对比两次dump法 —— 精准定位增长对象</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 1. 间隔1小时做两次dump</span></span><br><span class="line">jcmd &lt;pid&gt; GC.heap_dump /data/logs/dump1.hprof</span><br><span class="line"><span class="comment"># 等待1小时</span></span><br><span class="line">jcmd &lt;pid&gt; GC.heap_dump /data/logs/dump2.hprof</span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 使用MAT对比</span></span><br><span class="line"><span class="comment"># 打开两个dump文件 → Compare Basket → 对比对象数量变化</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 典型结果：</span></span><br><span class="line"><span class="comment"># 类名                    | dump1实例数 | dump2实例数 | 增长量 | 增长率</span></span><br><span class="line"><span class="comment"># ------------------------|-----------|-----------|-------|------</span></span><br><span class="line"><span class="comment"># MineContext             |       150 |      1150 |  1000 | 667%</span></span><br><span class="line"><span class="comment"># DeviceStatus            |     1,200 |    36,200 | 35000 | 2917%</span></span><br><span class="line"><span class="comment"># SafetyRule              |       500 |     4,500 |  4000 | 800%</span></span><br><span class="line"><span class="comment"># HashMap$Node            |     3,500 |    45,000 | 41500 | 1186%</span></span><br><span class="line"><span class="comment"># String                  |    28,000 |   112,000 | 84000 | 300%</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 精准定位</span></span><br><span class="line"><span class="comment"># 增长最快的类就是泄漏的主要对象</span></span><br><span class="line"><span class="comment"># MineContext增长667% → ThreadLocal泄漏</span></span><br><span class="line"><span class="comment"># DeviceStatus增长2917% → 缓存泄漏</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="7-4-JFR（Java-Flight-Recorder）持续监控"><a href="#7-4-JFR（Java-Flight-Recorder）持续监控" class="headerlink" title="7.4 JFR（Java Flight Recorder）持续监控"></a>7.4 JFR（Java Flight Recorder）持续监控</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># JFR启动与配置</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 启动JFR记录（JDK 11+）</span></span><br><span class="line">jcmd &lt;pid&gt; JFR.start name=leak-analysis settings=profile duration=1h filename=/data/logs/leak.jfr</span><br><span class="line"></span><br><span class="line"><span class="comment"># 自定义JFR配置</span></span><br><span class="line">jcmd &lt;pid&gt; JFR.start name=custom-leak \</span><br><span class="line">    settings=profile \</span><br><span class="line">    duration=2h \</span><br><span class="line">    filename=/data/logs/leak_custom.jfr \</span><br><span class="line">    maxsize=500m</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看JFR记录状态</span></span><br><span class="line">jcmd &lt;pid&gt; JFR.check</span><br><span class="line"></span><br><span class="line"><span class="comment"># 停止JFR记录</span></span><br><span class="line">jcmd &lt;pid&gt; JFR.stop name=leak-analysis</span><br><span class="line"></span><br><span class="line"><span class="comment"># 使用JDK Mission Control打开.jfr文件分析</span></span><br><span class="line"><span class="comment"># 关注事件：</span></span><br><span class="line"><span class="comment"># - Old Garbage Collection（Full GC事件）</span></span><br><span class="line"><span class="comment"># - Java Monitor Wait / Blocked（线程阻塞）</span></span><br><span class="line"><span class="comment"># - Thread Allocation Statistics（线程分配统计）</span></span><br><span class="line"><span class="comment"># - GC Heap Summary（堆摘要变化）</span></span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="八、自动化监控与告警"><a href="#八、自动化监控与告警" class="headerlink" title="八、自动化监控与告警"></a>八、自动化监控与告警</h2><h3 id="8-1-内存监控组件"><a href="#8-1-内存监控组件" class="headerlink" title="8.1 内存监控组件"></a>8.1 内存监控组件</h3><p>实际项目在2023年Q4建设了自动化的内存监控告警机制，以下是核心代码：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 实际项目 - JVM内存监控组件</span></span><br><span class="line"><span class="comment"> * 功能：定时监控内存使用率，超过阈值自动告警和dump</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MemoryMonitor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">MemoryMXBean</span> <span class="variable">memoryBean</span> <span class="operator">=</span> ManagementFactory.getMemoryMXBean();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> List&lt;MemoryPoolMXBean&gt; poolBeans = ManagementFactory.getMemoryPoolMXBeans();</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;monitor.memory.warn-threshold:0.75&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">double</span> warnThreshold;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;monitor.memory.critical-threshold:0.85&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">double</span> criticalThreshold;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;monitor.memory.dump-threshold:0.90&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">double</span> dumpThreshold;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;monitor.memory.dump-path:/data/logs/heapdump&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> String dumpPath;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> AlertService alertService;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 每60秒检查一次内存状态</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(fixedRate = 60000)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">monitor</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">MemoryUsage</span> <span class="variable">heapUsage</span> <span class="operator">=</span> memoryBean.getHeapMemoryUsage();</span><br><span class="line">        <span class="type">long</span> <span class="variable">used</span> <span class="operator">=</span> heapUsage.getUsed();</span><br><span class="line">        <span class="type">long</span> <span class="variable">max</span> <span class="operator">=</span> heapUsage.getMax();</span><br><span class="line">        <span class="type">double</span> <span class="variable">usage</span> <span class="operator">=</span> (<span class="type">double</span>) used / max;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 收集各内存区域详情</span></span><br><span class="line">        Map&lt;String, MemoryPoolInfo&gt; poolInfo = collectPoolInfo();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (usage &gt; warnThreshold) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">message</span> <span class="operator">=</span> String.format(</span><br><span class="line">                <span class="string">&quot;内存使用率告警: %.1f%%, used: %dMB, max: %dMB, 老年代: %s&quot;</span>,</span><br><span class="line">                usage * <span class="number">100</span>, used / <span class="number">1024</span> / <span class="number">1024</span>, max / <span class="number">1024</span> / <span class="number">1024</span>,</span><br><span class="line">                poolInfo.getOrDefault(<span class="string">&quot;Old Gen&quot;</span>, MemoryPoolInfo.unknown()).toString()</span><br><span class="line">            );</span><br><span class="line">            log.warn(message);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 发送告警</span></span><br><span class="line">            alertService.sendAlert(<span class="string">&quot;MEMORY_WARN&quot;</span>, message);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (usage &gt; dumpThreshold) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;内存使用率超过dump阈值: &#123;:.1f&#125;%，自动生成堆dump&quot;</span>, usage * <span class="number">100</span>);</span><br><span class="line">            dumpHeap();</span><br><span class="line">            alertService.sendAlert(<span class="string">&quot;MEMORY_CRITICAL&quot;</span>,</span><br><span class="line">                <span class="string">&quot;内存使用率&quot;</span> + String.format(<span class="string">&quot;%.1f&quot;</span>, usage * <span class="number">100</span>) + <span class="string">&quot;%，已自动dump堆内存，请尽快排查！&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 收集各内存区域使用情况</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">private</span> Map&lt;String, MemoryPoolInfo&gt; <span class="title function_">collectPoolInfo</span><span class="params">()</span> &#123;</span><br><span class="line">        Map&lt;String, MemoryPoolInfo&gt; result = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line">        <span class="keyword">for</span> (MemoryPoolMXBean pool : poolBeans) &#123;</span><br><span class="line">            <span class="type">MemoryUsage</span> <span class="variable">usage</span> <span class="operator">=</span> pool.getUsage();</span><br><span class="line">            result.put(pool.getName(), <span class="keyword">new</span> <span class="title class_">MemoryPoolInfo</span>(</span><br><span class="line">                pool.getName(),</span><br><span class="line">                usage.getUsed() / <span class="number">1024</span> / <span class="number">1024</span>,</span><br><span class="line">                usage.getMax() / <span class="number">1024</span> / <span class="number">1024</span>,</span><br><span class="line">                usage.getMax() &gt; <span class="number">0</span> ? (<span class="type">double</span>) usage.getUsed() / usage.getMax() : <span class="number">0</span></span><br><span class="line">            ));</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 自动dump堆内存</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">dumpHeap</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">timestamp</span> <span class="operator">=</span> LocalDateTime.now().format(</span><br><span class="line">                DateTimeFormatter.ofPattern(<span class="string">&quot;yyyyMMdd_HHmmss&quot;</span>));</span><br><span class="line">            <span class="type">String</span> <span class="variable">path</span> <span class="operator">=</span> dumpPath + <span class="string">&quot;/heap_&quot;</span> + timestamp + <span class="string">&quot;.hprof&quot;</span>;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 确保目录存在</span></span><br><span class="line">            <span class="type">Path</span> <span class="variable">dir</span> <span class="operator">=</span> Paths.get(dumpPath);</span><br><span class="line">            <span class="keyword">if</span> (!Files.exists(dir)) &#123;</span><br><span class="line">                Files.createDirectories(dir);</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 使用HotSpotDiagnosticMXBean dump（比jcmd更可控）</span></span><br><span class="line">            <span class="type">HotSpotDiagnosticMXBean</span> <span class="variable">diagnostic</span> <span class="operator">=</span> ManagementFactory.newPlatformMXBeanProxy(</span><br><span class="line">                ManagementFactory.getPlatformMBeanServer(),</span><br><span class="line">                <span class="string">&quot;com.sun.management:type=HotSpotDiagnostic&quot;</span>,</span><br><span class="line">                HotSpotDiagnosticMXBean.class</span><br><span class="line">            );</span><br><span class="line">            diagnostic.dumpHeap(path, <span class="literal">true</span>);  <span class="comment">// true = 只dump存活对象</span></span><br><span class="line"></span><br><span class="line">            log.info(<span class="string">&quot;Heap dump已生成: &#123;&#125;, 文件大小: &#123;&#125;MB&quot;</span>,</span><br><span class="line">                path, Files.size(Paths.get(path)) / <span class="number">1024</span> / <span class="number">1024</span>);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;Heap dump生成失败&quot;</span>, e);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 内存区域信息</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Data</span></span><br><span class="line">    <span class="meta">@AllArgsConstructor</span></span><br><span class="line">    <span class="keyword">static</span> <span class="keyword">class</span> <span class="title class_">MemoryPoolInfo</span> &#123;</span><br><span class="line">        <span class="keyword">private</span> String name;</span><br><span class="line">        <span class="keyword">private</span> <span class="type">long</span> usedMB;</span><br><span class="line">        <span class="keyword">private</span> <span class="type">long</span> maxMB;</span><br><span class="line">        <span class="keyword">private</span> <span class="type">double</span> usagePercent;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">static</span> MemoryPoolInfo <span class="title function_">unknown</span><span class="params">()</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">MemoryPoolInfo</span>(<span class="string">&quot;unknown&quot;</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="meta">@Override</span></span><br><span class="line">        <span class="keyword">public</span> String <span class="title function_">toString</span><span class="params">()</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> String.format(<span class="string">&quot;%s: %dMB/%dMB (%.1f%%)&quot;</span>,</span><br><span class="line">                name, usedMB, maxMB, usagePercent * <span class="number">100</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="8-2-GC监控与告警"><a href="#8-2-GC监控与告警" class="headerlink" title="8.2 GC监控与告警"></a>8.2 GC监控与告警</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * GC监控组件 - 检测GC异常模式</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">GCMonitor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> GarbageCollectorMXBean youngGCBean;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> GarbageCollectorMXBean oldGCBean;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> <span class="variable">lastYoungGCCount</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> <span class="variable">lastOldGCCount</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> <span class="variable">lastOldGCTime</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> <span class="variable">lastCheckTime</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> AlertService alertService;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="title function_">GCMonitor</span><span class="params">()</span> &#123;</span><br><span class="line">        List&lt;GarbageCollectorMXBean&gt; gcBeans = ManagementFactory.getGarbageCollectorMXBeans();</span><br><span class="line">        <span class="comment">// G1GC: &quot;G1 Young Generation&quot; 和 &quot;G1 Old Generation&quot;</span></span><br><span class="line">        youngGCBean = gcBeans.stream()</span><br><span class="line">            .filter(b -&gt; b.getName().contains(<span class="string">&quot;Young&quot;</span>) || b.getName().contains(<span class="string">&quot;Minor&quot;</span>))</span><br><span class="line">            .findFirst()</span><br><span class="line">            .orElse(<span class="literal">null</span>);</span><br><span class="line">        oldGCBean = gcBeans.stream()</span><br><span class="line">            .filter(b -&gt; b.getName().contains(<span class="string">&quot;Old&quot;</span>) || b.getName().contains(<span class="string">&quot;Major&quot;</span>)</span><br><span class="line">                       || b.getName().contains(<span class="string">&quot;Full&quot;</span>))</span><br><span class="line">            .findFirst()</span><br><span class="line">            .orElse(<span class="literal">null</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 每30秒检查GC状况</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(fixedRate = 30000)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">monitor</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">now</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line">        <span class="type">long</span> <span class="variable">intervalMinutes</span> <span class="operator">=</span> (now - lastCheckTime) / <span class="number">60000</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (intervalMinutes &lt; <span class="number">1</span>) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 检查Full GC频率</span></span><br><span class="line">        <span class="keyword">if</span> (oldGCBean != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="type">long</span> <span class="variable">currentFGCCount</span> <span class="operator">=</span> oldGCBean.getCollectionCount();</span><br><span class="line">            <span class="type">long</span> <span class="variable">currentFGCTime</span> <span class="operator">=</span> oldGCBean.getCollectionTime();</span><br><span class="line">            <span class="type">long</span> <span class="variable">fgcDelta</span> <span class="operator">=</span> currentFGCCount - lastOldGCCount;</span><br><span class="line">            <span class="type">long</span> <span class="variable">fgcTimeDelta</span> <span class="operator">=</span> currentFGCTime - lastOldGCTime;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 30分钟内超过2次Full GC视为异常</span></span><br><span class="line">            <span class="keyword">if</span> (fgcDelta &gt; <span class="number">2</span>) &#123;</span><br><span class="line">                <span class="type">String</span> <span class="variable">msg</span> <span class="operator">=</span> String.format(</span><br><span class="line">                    <span class="string">&quot;Full GC频率异常: %d分钟内发生%d次Full GC, 耗时%dms&quot;</span>,</span><br><span class="line">                    intervalMinutes, fgcDelta, fgcTimeDelta);</span><br><span class="line">                log.error(msg);</span><br><span class="line">                alertService.sendAlert(<span class="string">&quot;GC_ABNORMAL&quot;</span>, msg);</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 单次Full GC耗时超过3秒</span></span><br><span class="line">            <span class="keyword">if</span> (fgcDelta &gt; <span class="number">0</span> &amp;&amp; fgcTimeDelta / fgcDelta &gt; <span class="number">3000</span>) &#123;</span><br><span class="line">                <span class="type">String</span> <span class="variable">msg</span> <span class="operator">=</span> String.format(</span><br><span class="line">                    <span class="string">&quot;Full GC耗时异常: 平均每次%dms&quot;</span>, fgcTimeDelta / fgcDelta);</span><br><span class="line">                log.error(msg);</span><br><span class="line">                alertService.sendAlert(<span class="string">&quot;GC_SLOW&quot;</span>, msg);</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            lastOldGCCount = currentFGCCount;</span><br><span class="line">            lastOldGCTime = currentFGCTime;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        lastCheckTime = now;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="8-3-Prometheus-Grafana-监控大盘"><a href="#8-3-Prometheus-Grafana-监控大盘" class="headerlink" title="8.3 Prometheus + Grafana 监控大盘"></a>8.3 Prometheus + Grafana 监控大盘</h3><p>实际项目使用Prometheus采集JVM指标，Grafana展示监控大盘。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># prometheus.yml - JVM监控配置</span></span><br><span class="line"><span class="attr">scrape_configs:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">job_name:</span> <span class="string">&#x27;smartmine-jvm&#x27;</span></span><br><span class="line">    <span class="attr">metrics_path:</span> <span class="string">&#x27;/actuator/prometheus&#x27;</span></span><br><span class="line">    <span class="attr">scrape_interval:</span> <span class="string">15s</span></span><br><span class="line">    <span class="attr">static_configs:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">targets:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">&#x27;safety-service:8080&#x27;</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">&#x27;device-service:8081&#x27;</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">&#x27;order-service:8082&#x27;</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">&#x27;user-service:8083&#x27;</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">&#x27;report-service:8084&#x27;</span></span><br></pre></td></tr></table></figure>
+
+
+<p><strong>Grafana内存监控大盘关键指标：</strong></p>
+<ul>
+<li><strong>堆内存趋势</strong><ul>
+<li>used |     <em><strong>—–^^^^^^^</strong></em>—–^^^^^^^</li>
+<li>max  |__________________________________________</li>
+</ul>
+</li>
+<li><strong>堆内存使用率        老年代使用率       GC频率</strong><ul>
+<li>78.5%              89.2%           YGC: 5&#x2F;min</li>
+<li>FGC: 0&#x2F;hour</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="九、实际项目问题汇总"><a href="#九、实际项目问题汇总" class="headerlink" title="九、实际项目问题汇总"></a>九、实际项目问题汇总</h2><p>在实际项目2023年的开发和运维过程中，团队遇到了15个与内存相关的实际问题。以下汇总了每个问题的根因、解决方案和效果：</p>
+<table>
+<thead>
+<tr>
+<th>序号</th>
+<th>问题类别</th>
+<th>问题描述</th>
+<th>根因分析</th>
+<th>解决方案</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>ThreadLocal泄漏</td>
+<td>safety-service运行7天后OOM，堆内存从2G涨到4G</td>
+<td>线程池场景下MineContextHolder.set()后未调用remove()，ThreadLocalMap中value强引用不释放</td>
+<td>添加try-finally确保remove()；封装executeWithContext模板方法自动清理</td>
+<td>OOM事件从月均3次降为0</td>
+</tr>
+<tr>
+<td>2</td>
+<td>静态Map泄漏</td>
+<td>device-service老年代持续增长，2天后使用率&gt;90%</td>
+<td>DeviceStatusCache使用HashMap做本地缓存，key含时间戳导致只增不减，size达487万</td>
+<td>替换为Caffeine Cache，设置maximumSize&#x3D;5000和expireAfterWrite&#x3D;30min</td>
+<td>内存占用从1.2GB降至50MB</td>
+</tr>
+<tr>
+<td>3</td>
+<td>POI内存泄漏</td>
+<td>report-service每次生成月报后内存增长500MB不释放</td>
+<td>XSSFWorkbook未close()，依赖finalize回收但Finalizer线程处理慢</td>
+<td>改用SXSSFWorkbook流式写入+try-with-resources确保close()</td>
+<td>单次报表内存增长从500MB降至20MB</td>
+</tr>
+<tr>
+<td>4</td>
+<td>数据库连接泄漏</td>
+<td>safety-service高峰期连接池耗尽，新请求超时</td>
+<td>手动获取Connection后异常未关闭，连接池active连接数持续增长</td>
+<td>全部改用try-with-resources；Spring事务管理确保自动释放</td>
+<td>连接泄漏从日均3次降为0</td>
+</tr>
+<tr>
+<td>5</td>
+<td>EventBus监听器泄漏</td>
+<td>safety-service热部署后内存持续增长</td>
+<td>@PostConstruct注册EventBus监听器但@PreDestroy未注销，旧实例无法GC</td>
+<td>添加@PreDestroy调用eventBus.unregister(this)</td>
+<td>热部署后内存增长消除</td>
+</tr>
+<tr>
+<td>6</td>
+<td>内部类泄漏</td>
+<td>device-service定时任务内存异常</td>
+<td>匿名Runnable持有外部类引用，外部类包含50MB缓冲区，提交到延迟队列后无法GC</td>
+<td>改为static内部类，只传递必要参数</td>
+<td>单任务内存占用从50MB+降至2KB</td>
+</tr>
+<tr>
+<td>7</td>
+<td>InputStream未关闭</td>
+<td>device-service与第三方设备通信后内存增长</td>
+<td>Socket InputStream未关闭，底层缓冲区无法释放</td>
+<td>try-with-resources确保所有流关闭</td>
+<td>通信后内存增长消除</td>
+</tr>
+<tr>
+<td>8</td>
+<td>缓存key设计缺陷</td>
+<td>safety-service告警缓存无限膨胀</td>
+<td>使用ArrayList做HashMap的key，外部修改后hashCode变化，旧entry不可达</td>
+<td>改用String拼接或record做key</td>
+<td>缓存条目从无限增长变为可控</td>
+</tr>
+<tr>
+<td>9</td>
+<td>大对象直接加载</td>
+<td>device-service导入设备时OOM</td>
+<td>一次性将10万条Device数据加载到内存生成Excel</td>
+<td>分页查询+SXSSFWorkbook流式写入+批量处理</td>
+<td>导入10万条内存峰值从4GB降至200MB</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Spring Bean作用域错误</td>
+<td>safety-service并发请求时数据错乱</td>
+<td>@Component默认单例，但成员变量存储请求级数据，并发下互相覆盖</td>
+<td>改用ThreadLocal或@Scope(“prototype”)</td>
+<td>并发数据错乱问题消除</td>
+</tr>
+<tr>
+<td>11</td>
+<td>finalize方法阻塞</td>
+<td>order-service GC越来越慢</td>
+<td>自定义finalize()方法中执行IO操作，Finalizer线程被阻塞，对象堆积</td>
+<td>移除finalize()，改用try-with-resources显式关闭</td>
+<td>GC停顿从5秒降至50ms</td>
+</tr>
+<tr>
+<td>12</td>
+<td>ClassLoader泄漏</td>
+<td>report-service动态编译Groovy脚本后Metaspace持续增长</td>
+<td>每次编译创建新GroovyClassLoader，脚本Class无法卸载</td>
+<td>缓存GroovyClassLoader实例；改用GroovyScriptEngine管理脚本生命周期</td>
+<td>Metaspace增长停止</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Netty ByteBuf泄漏</td>
+<td>device-service与设备通信时DirectMemory增长</td>
+<td>ByteBuf引用计数未释放，PooledByteBufAllocator分配的内存无法回收</td>
+<td>添加ARTHAS检查ByteBuf泄漏；确保release()在finally中调用</td>
+<td>DirectMemory增长消除</td>
+</tr>
+<tr>
+<td>14</td>
+<td>日志对象累积</td>
+<td>safety-service日志对象未及时清理</td>
+<td>Logback的AsyncAppender队列满时阻塞，历史MDC对象堆积</td>
+<td>调整异步队列大小+discardingThreshold；MDC使用后及时clear()</td>
+<td>日志相关内存增长消除</td>
+</tr>
+<tr>
+<td>15</td>
+<td>Spring缓存代理泄漏</td>
+<td>order-service使用@Cacheable后内存持续增长</td>
+<td>Spring Cache抽象层缓存代理对象持有原始对象引用，Caffeine配置未限制maximumSize</td>
+<td>配置Caffeine的maximumSize和expireAfterWrite；定期清理</td>
+<td>缓存内存占用稳定在预期范围</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="十、内存泄漏预防体系"><a href="#十、内存泄漏预防体系" class="headerlink" title="十、内存泄漏预防体系"></a>十、内存泄漏预防体系</h2><h3 id="10-1-编码规范"><a href="#10-1-编码规范" class="headerlink" title="10.1 编码规范"></a>10.1 编码规范</h3><table>
+<thead>
+<tr>
+<th>规范项</th>
+<th>要求</th>
+<th>检查方式</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ThreadLocal</td>
+<td>必须try-finally调用remove()</td>
+<td>ArchUnit规则 + Code Review</td>
+</tr>
+<tr>
+<td>缓存</td>
+<td>必须设置上限和过期策略</td>
+<td>配置检查 + 启动校验</td>
+</tr>
+<tr>
+<td>资源关闭</td>
+<td>必须使用try-with-resources</td>
+<td>SonarQube规则 S2095</td>
+</tr>
+<tr>
+<td>监听器</td>
+<td>@PostConstruct注册必须@PreDestroy注销</td>
+<td>Code Review清单</td>
+</tr>
+<tr>
+<td>内部类</td>
+<td>优先使用静态内部类</td>
+<td>ArchUnit规则</td>
+</tr>
+<tr>
+<td>Map key</td>
+<td>必须使用不可变对象</td>
+<td>Code Review清单</td>
+</tr>
+<tr>
+<td>大对象</td>
+<td>必须分页&#x2F;流式处理</td>
+<td>SonarQube规则</td>
+</tr>
+<tr>
+<td>finalize</td>
+<td>禁止使用finalize()</td>
+<td>ArchUnit规则</td>
+</tr>
+</tbody></table>
+<h3 id="10-2-ArchUnit守护规则"><a href="#10-2-ArchUnit守护规则" class="headerlink" title="10.2 ArchUnit守护规则"></a>10.2 ArchUnit守护规则</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 架构守护规则 - 防止内存泄漏编码模式</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@AnalyzeClasses(packages = &quot;com.smartmine&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MemoryLeakPreventionRules</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 规则1：ThreadLocal使用必须配对remove</span></span><br><span class="line"><span class="comment">     * 检查所有调用ThreadLocal.set()的方法是否在finally块中调用了remove()</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@ArchTest</span></span><br><span class="line">    <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">ArchRule</span> <span class="variable">thread_local_must_remove</span> <span class="operator">=</span> methods()</span><br><span class="line">        .that().callMethod(ThreadLocal.class, <span class="string">&quot;set&quot;</span>, Object.class)</span><br><span class="line">        .should().callMethodInFinallyBlock(ThreadLocal.class, <span class="string">&quot;remove&quot;</span>)</span><br><span class="line">        .because(<span class="string">&quot;ThreadLocal必须remove，否则线程池场景下会内存泄漏&quot;</span>);</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 规则2：禁止使用finalize方法</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@ArchTest</span></span><br><span class="line">    <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">ArchRule</span> <span class="variable">no_finalize_methods</span> <span class="operator">=</span> methods()</span><br><span class="line">        .that().haveName(<span class="string">&quot;finalize&quot;</span>)</span><br><span class="line">        .and().areNotDeclaredIn(Object.class)</span><br><span class="line">        .should().notExist()</span><br><span class="line">        .because(<span class="string">&quot;finalize方法不可靠且可能导致内存泄漏，应使用try-with-resources&quot;</span>);</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 规则3：禁止直接new HashMap做缓存</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@ArchTest</span></span><br><span class="line">    <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">ArchRule</span> <span class="variable">no_hashmap_as_cache</span> <span class="operator">=</span> fields()</span><br><span class="line">        .that().haveRawType(HashMap.class)</span><br><span class="line">        .and().areAnnotatedWith(<span class="string">&quot;org.springframework.stereotype.Component&quot;</span>)</span><br><span class="line">        .should().notExist()</span><br><span class="line">        .because(<span class="string">&quot;缓存必须使用Guava Cache或Caffeine，设置上限和过期策略&quot;</span>);</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 规则4：资源类必须实现AutoCloseable</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@ArchTest</span></span><br><span class="line">    <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">ArchRule</span> <span class="variable">resource_must_be_autocloseable</span> <span class="operator">=</span> classes()</span><br><span class="line">        .that().resideInAPackage(<span class="string">&quot;..resource..&quot;</span>)</span><br><span class="line">        .and().areNotInterfaces()</span><br><span class="line">        .should().implement(AutoCloseable.class)</span><br><span class="line">        .because(<span class="string">&quot;资源类必须实现AutoCloseable，支持try-with-resources&quot;</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="10-3-JVM参数最佳实践"><a href="#10-3-JVM参数最佳实践" class="headerlink" title="10.3 JVM参数最佳实践"></a>10.3 JVM参数最佳实践</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"><span class="comment"># 实际项目JVM参数最佳实践</span></span><br><span class="line"><span class="comment"># ============================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 通用参数（所有微服务）</span></span><br><span class="line">JAVA_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  # 堆内存设置（-Xms = -Xmx，避免堆动态调整的开销）</span></span><br><span class="line"><span class="string">  -Xms2g -Xmx2g</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">  # GC算法（G1GC，适合大堆+低延迟场景）</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=200</span></span><br><span class="line"><span class="string">  -XX:G1HeapRegionSize=4m</span></span><br><span class="line"><span class="string">  -XX:InitiatingHeapOccupancyPercent=45</span></span><br><span class="line"><span class="string">  -XX:+ParallelRefProcEnabled</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">  # OOM自动dump</span></span><br><span class="line"><span class="string">  -XX:+HeapDumpOnOutOfMemoryError</span></span><br><span class="line"><span class="string">  -XX:HeapDumpPath=/data/logs/heapdump/</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">  # GC日志</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDetails</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDateStamps</span></span><br><span class="line"><span class="string">  -Xloggc:/data/logs/gc/</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">  # 元空间设置</span></span><br><span class="line"><span class="string">  -XX:MetaspaceSize=256m</span></span><br><span class="line"><span class="string">  -XX:MaxMetaspaceSize=512m</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">  # OOM时执行脚本（发告警+保留现场）</span></span><br><span class="line"><span class="string">  -XX:OnOutOfMemoryError=&#x27;/data/scripts/on_oom.sh %p&#x27;</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">  # 优化参数</span></span><br><span class="line"><span class="string">  -XX:+AlwaysPreTouch         # 启动时预分配内存，减少运行时缺页中断</span></span><br><span class="line"><span class="string">  -XX:+DisableExplicitGC      # 禁止System.gc()，防止误触发Full GC</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># safety-service（告警服务，低延迟优先）</span></span><br><span class="line">SAFETY_JAVA_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -Xms4g -Xmx4g</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=100</span></span><br><span class="line"><span class="string">  -XX:G1HeapRegionSize=8m</span></span><br><span class="line"><span class="string">  -XX:InitiatingHeapOccupancyPercent=40</span></span><br><span class="line"><span class="string">  -XX:+ParallelRefProcEnabled</span></span><br><span class="line"><span class="string">  -XX:+HeapDumpOnOutOfMemoryError</span></span><br><span class="line"><span class="string">  -XX:HeapDumpPath=/data/logs/heapdump/safety_oom.hprof</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDetails</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDateStamps</span></span><br><span class="line"><span class="string">  -Xloggc:/data/logs/gc/safety_gc.log</span></span><br><span class="line"><span class="string">  -XX:MetaspaceSize=256m -XX:MaxMetaspaceSize=512m</span></span><br><span class="line"><span class="string">  -XX:+AlwaysPreTouch</span></span><br><span class="line"><span class="string">  -XX:+DisableExplicitGC</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># device-service（设备采集，高吞吐优先）</span></span><br><span class="line">DEVICE_JAVA_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -Xms4g -Xmx4g</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=200</span></span><br><span class="line"><span class="string">  -XX:G1HeapRegionSize=8m</span></span><br><span class="line"><span class="string">  -XX:InitiatingHeapOccupancyPercent=45</span></span><br><span class="line"><span class="string">  -XX:+ParallelRefProcEnabled</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=200</span></span><br><span class="line"><span class="string">  -XX:+HeapDumpOnOutOfMemoryError</span></span><br><span class="line"><span class="string">  -XX:HeapDumpPath=/data/logs/heapdump/device_oom.hprof</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDetails</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDateStamps</span></span><br><span class="line"><span class="string">  -Xloggc:/data/logs/gc/device_gc.log</span></span><br><span class="line"><span class="string">  -XX:MetaspaceSize=256m -XX:MaxMetaspaceSize=512m</span></span><br><span class="line"><span class="string">  -XX:+AlwaysPreTouch</span></span><br><span class="line"><span class="string">  -XX:+DisableExplicitGC</span></span><br><span class="line"><span class="string">  -XX:MaxDirectMemorySize=512m</span></span><br><span class="line"><span class="string">&quot;</span></span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="十一、面试高频问题"><a href="#十一、面试高频问题" class="headerlink" title="十一、面试高频问题"></a>十一、面试高频问题</h2><h3 id="11-1-如何排查内存泄漏？"><a href="#11-1-如何排查内存泄漏？" class="headerlink" title="11.1 如何排查内存泄漏？"></a>11.1 如何排查内存泄漏？</h3><p>标准答案（五步法）：jstat确认泄漏趋势 → jmap&#x2F;jcmd获取堆dump → MAT分析定位泄漏对象 → 查看GC Roots引用链找到持有者 → 修复代码并验证。</p>
+<p>结合实际项目：safety-service OOM事故中，通过jstat发现Full GC后老年代不降，jcmd获取dump后MAT发现ThreadLocalMap$Entry占67.3%，引用链追溯到MineContextHolder.set()后未remove，添加try-finally修复后验证内存趋势恢复正常。</p>
+<h3 id="11-2-内存泄漏和内存溢出的区别？"><a href="#11-2-内存泄漏和内存溢出的区别？" class="headerlink" title="11.2 内存泄漏和内存溢出的区别？"></a>11.2 内存泄漏和内存溢出的区别？</h3><p>内存泄漏是对象不再被业务使用但仍被GC Roots持有，导致GC无法回收，内存持续增长；内存溢出是JVM需要使用的内存超过了可用堆内存，直接抛出OOM。泄漏是原因，溢出是结果。但溢出不一定是泄漏导致的，也可能就是内存确实不够用（如一次性加载大数据）。</p>
+<h3 id="11-3-ThreadLocal为什么会导致内存泄漏？"><a href="#11-3-ThreadLocal为什么会导致内存泄漏？" class="headerlink" title="11.3 ThreadLocal为什么会导致内存泄漏？"></a>11.3 ThreadLocal为什么会导致内存泄漏？</h3><p>ThreadLocalMap的key是ThreadLocal对象的弱引用，当ThreadLocal变量被置为null后，key会被GC回收变为null。但value是强引用，不会被GC回收。线程池场景下核心线程不销毁，ThreadLocalMap生命周期等同于线程，value永远无法回收。解决：使用完必须调用remove()。</p>
+<h3 id="11-4-Shallow-Size和Retained-Size的区别？"><a href="#11-4-Shallow-Size和Retained-Size的区别？" class="headerlink" title="11.4 Shallow Size和Retained Size的区别？"></a>11.4 Shallow Size和Retained Size的区别？</h3><p>Shallow Size是对象自身占用的内存，包括对象头、实例变量和对齐填充，不包括引用对象的大小。Retained Size是对象被GC回收后可释放的总内存，包括对象自身和所有只有通过该对象才能到达的其他对象的内存。排查内存泄漏时应重点关注Retained Size最大的对象。</p>
+<h3 id="11-5-如何区分是内存泄漏还是内存确实不够？"><a href="#11-5-如何区分是内存泄漏还是内存确实不够？" class="headerlink" title="11.5 如何区分是内存泄漏还是内存确实不够？"></a>11.5 如何区分是内存泄漏还是内存确实不够？</h3><p>关键看Full GC后老年代是否能回落。如果Full GC后老年代使用率能降到60%以下，说明是内存不够，需要增大堆或优化对象生命周期；如果Full GC后老年代使用率不降反升，说明有内存泄漏，对象无法被GC回收。</p>
+<h3 id="11-6-G1GC和CMS的Full-GC有什么区别？"><a href="#11-6-G1GC和CMS的Full-GC有什么区别？" class="headerlink" title="11.6 G1GC和CMS的Full GC有什么区别？"></a>11.6 G1GC和CMS的Full GC有什么区别？</h3><p>CMS的Full GC是单线程的，停顿时间很长；G1的Full GC在JDK 10之前也是单线程的，JDK 10之后改进为多线程并行。但无论哪种GC，频繁Full GC都是严重问题的信号。G1的目标是避免Full GC，通过MaxGCPauseMillis控制停顿时间，但如果堆占用率超过InitiatingHeapOccupancyPercent，仍会触发并发标记，如果回收速度跟不上分配速度，最终仍会退化为Full GC。</p>
+<hr>
+<h2 id="十二、总结"><a href="#十二、总结" class="headerlink" title="十二、总结"></a>十二、总结</h2><p>2023年是实际项目从”出问题了再说”到”系统化防控”转变的一年。从safety-service那次P0级OOM事故开始，我系统性地学习了JVM内存模型、GC机制、堆分析工具链，在后续的多次实战中逐步建立起完整的内存泄漏排查方法论。</p>
+<p>核心认知总结：</p>
+<ol>
+<li><p><strong>排查有法</strong>：jstat确认趋势 → jcmd获取dump → MAT分析定位 → GC Roots找引用链 → 修复验证，五步法可覆盖95%以上的内存泄漏场景。</p>
+</li>
+<li><p><strong>泄漏有源</strong>：ThreadLocal未remove、静态集合只增不减、资源未关闭是最常见的三种泄漏原因，占实际项目内存问题的80%以上。</p>
+</li>
+<li><p><strong>防控有道</strong>：编码规范（try-finally&#x2F;Caffeine&#x2F;try-with-resources）+ ArchUnit守护规则 + 自动化监控告警 + OOM自动dump，四层防线从源头到末端全方位防控。</p>
+</li>
+<li><p><strong>工具有力</strong>：jstat&#x2F;jmap&#x2F;jcmd用于现场诊断，MAT&#x2F;Arthas用于深度分析，Prometheus+Grafana用于持续监控，JFR用于飞行记录，每种工具都有其最佳使用场景。</p>
+</li>
+<li><p><strong>经验宝贵</strong>：15个实际项目问题的排查和修复经验，是最有价值的知识财富。每次事故复盘都是一次深刻的学习，而将这些经验固化为规范和工具，才能避免同类问题再次发生。</p>
+</li>
+</ol>
+<p>2024年，实际项目将继续完善JVM监控体系，引入AIOps智能告警，推动内存问题的自动发现和自动定位，将故障响应时间从分钟级缩短到秒级。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/10/08/d762d168fb9e/">MySQL Online DDL——大表加字段的正确姿势</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/10/22/0a9ee1061a30/">MyBatis批量操作深度优化——从逐条到批量</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E7%9B%91%E6%8E%A7%E8%BF%90%E7%BB%B4/" class="tag" aria-label="标签: #监控运维">#监控运维</a>
+            
+                <a href="/tags/JVM/" class="tag" aria-label="标签: #JVM">#JVM</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/JVM/" aria-label="分类: JVM">
+                        JVM
+                        <span>(6)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MySQL事务隔离级别与MVCC实现——从原理到实战 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="MySQL事务隔离级别与MVCC实现——从原理到实战">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/06/11/bb2f9bd717b9/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言学习了事务四大特性和四种隔离级别，但需要深入理解。线上遇到一次”不可重复读”问题：同一个事务中两次读取结果不同，排查后才发现是隔离级别设置不当。2023年深入MVCC实现原理后，终于从底层理解了隔离级别的本质。事务ACID回顾12345678910A（原子性）：事务是不可分割的最小操作单元，要么全部成功，">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">MySQL事务隔离级别与MVCC实现——从原理到实战</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-06-11T09:08:03.000Z">2023-06-11</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL%E6%B7%B1%E5%BA%A6/">MySQL深度</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>学习了事务四大特性和四种隔离级别，但需要深入理解。线上遇到一次”不可重复读”问题：同一个事务中两次读取结果不同，排查后才发现是隔离级别设置不当。2023年深入MVCC实现原理后，终于从底层理解了隔离级别的本质。</p>
+<h2 id="事务ACID回顾"><a href="#事务ACID回顾" class="headerlink" title="事务ACID回顾"></a>事务ACID回顾</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">A（原子性）：事务是不可分割的最小操作单元，要么全部成功，要么全部失败</span><br><span class="line">C（一致性）：事务执行前后，数据必须保持一致状态</span><br><span class="line">I（隔离性）：并发事务之间互不影响</span><br><span class="line">D（持久性）：事务提交后，数据永久保存</span><br><span class="line"></span><br><span class="line">实现机制：</span><br><span class="line">原子性 → undo log（回滚日志）</span><br><span class="line">一致性 → 是目标，由AID保证</span><br><span class="line">隔离性 → MVCC + 锁</span><br><span class="line">持久性 → redo log（重做日志）</span><br></pre></td></tr></table></figure>
+
+<h2 id="四种隔离级别"><a href="#四种隔离级别" class="headerlink" title="四种隔离级别"></a>四种隔离级别</h2><h3 id="并发事务问题"><a href="#并发事务问题" class="headerlink" title="并发事务问题"></a>并发事务问题</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">1. 脏读：读到其他事务未提交的数据</span><br><span class="line">   事务A修改了数据但未提交 → 事务B读到了 → 事务A回滚 → B读到的是脏数据</span><br><span class="line"></span><br><span class="line">2. 不可重复读：同一事务中两次读取结果不同</span><br><span class="line">   事务A读取数据 → 事务B修改并提交 → 事务A再次读取 → 结果不同</span><br><span class="line"></span><br><span class="line">3. 幻读：同一事务中两次查询的行数不同</span><br><span class="line">   事务A查询范围 → 事务B插入新行 → 事务A再次查询 → 多了行</span><br></pre></td></tr></table></figure>
+
+<h3 id="隔离级别对比"><a href="#隔离级别对比" class="headerlink" title="隔离级别对比"></a>隔离级别对比</h3><table>
+<thead>
+<tr>
+<th>隔离级别</th>
+<th>脏读</th>
+<th>不可重复读</th>
+<th>幻读</th>
+<th>性能</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>READ UNCOMMITTED</td>
+<td>✅有</td>
+<td>✅有</td>
+<td>✅有</td>
+<td>最高</td>
+</tr>
+<tr>
+<td>READ COMMITTED</td>
+<td>无</td>
+<td>✅有</td>
+<td>✅有</td>
+<td>高</td>
+</tr>
+<tr>
+<td>REPEATABLE READ</td>
+<td>无</td>
+<td>无</td>
+<td>✅有*</td>
+<td>中</td>
+</tr>
+<tr>
+<td>SERIALIZABLE</td>
+<td>无</td>
+<td>无</td>
+<td>无</td>
+<td>最低</td>
+</tr>
+</tbody></table>
+<p>*InnoDB的REPEATABLE READ通过MVCC+间隙锁基本解决了幻读</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 查看隔离级别</span></span><br><span class="line"><span class="keyword">SELECT</span> @<span class="variable">@transaction_isolation</span>;  <span class="comment">-- MySQL 8.0+</span></span><br><span class="line"><span class="keyword">SELECT</span> @<span class="variable">@tx_isolation</span>;           <span class="comment">-- MySQL 5.7</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 设置隔离级别</span></span><br><span class="line"><span class="keyword">SET</span> SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 配置文件</span></span><br><span class="line">[mysqld]</span><br><span class="line">transaction<span class="operator">-</span>isolation <span class="operator">=</span> READ<span class="operator">-</span>COMMITTED</span><br></pre></td></tr></table></figure>
+
+<h2 id="MVCC实现原理"><a href="#MVCC实现原理" class="headerlink" title="MVCC实现原理"></a>MVCC实现原理</h2><h3 id="核心概念"><a href="#核心概念" class="headerlink" title="核心概念"></a>核心概念</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">MVCC（Multi-Version Concurrency Control）多版本并发控制</span><br><span class="line">核心思想：读不加锁，读写不冲突</span><br><span class="line"></span><br><span class="line">实现依赖：</span><br><span class="line">1. 隐藏列：每行数据包含事务ID和回滚指针</span><br><span class="line">2. undo log版本链：每行数据的历史版本</span><br><span class="line">3. ReadView：事务快照，决定能看到哪个版本</span><br></pre></td></tr></table></figure>
+
+<h3 id="隐藏列"><a href="#隐藏列" class="headerlink" title="隐藏列"></a>隐藏列</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- InnoDB每行数据包含两个隐藏列：</span></span><br><span class="line"><span class="comment">-- DB_TRX_ID：最后修改该行的事务ID（6字节）</span></span><br><span class="line"><span class="comment">-- DB_ROLL_PTR：回滚指针，指向undo log中的上一个版本（7字节）</span></span><br><span class="line"><span class="comment">-- DB_ROW_ID：隐藏主键（6字节，无主键时生成）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 示例</span></span><br><span class="line"><span class="comment">-- 假设事务ID=100插入了id=1, name=&#x27;张三&#x27;</span></span><br><span class="line"><span class="comment">-- 行数据：</span></span><br><span class="line"><span class="comment">-- id=1, name=&#x27;张三&#x27;, DB_TRX_ID=100, DB_ROLL_PTR=NULL</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="undo-log版本链"><a href="#undo-log版本链" class="headerlink" title="undo log版本链"></a>undo log版本链</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">-- 事务101将name改为&#x27;李四&#x27;</span><br><span class="line">-- 事务102将age改为30</span><br><span class="line"></span><br><span class="line">-- 当前行数据：</span><br><span class="line">-- id=1, name=&#x27;李四&#x27;, age=30, DB_TRX_ID=102, DB_ROLL_PTR=0x002</span><br><span class="line"></span><br><span class="line">-- undo log版本链：</span><br><span class="line">-- 0x002: id=1, name=&#x27;李四&#x27;, age=25, DB_TRX_ID=101, DB_ROLL_PTR=0x001</span><br><span class="line">-- 0x001: id=1, name=&#x27;张三&#x27;, age=25, DB_TRX_ID=100, DB_ROLL_PTR=NULL</span><br><span class="line"></span><br><span class="line">-- 通过DB_ROLL_PTR可以遍历整条版本链</span><br></pre></td></tr></table></figure>
+
+<h3 id="ReadView"><a href="#ReadView" class="headerlink" title="ReadView"></a>ReadView</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ReadView是事务开始时创建的一个&quot;快照&quot;</span></span><br><span class="line"><span class="comment">// 决定当前事务能看到哪个版本的数据</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// ReadView核心属性：</span></span><br><span class="line"><span class="comment">// creator_trx_id：创建该ReadView的事务ID</span></span><br><span class="line"><span class="comment">// m_ids：创建ReadView时，当前活跃（未提交）的事务ID列表</span></span><br><span class="line"><span class="comment">// min_trx_id：m_ids中最小的事务ID</span></span><br><span class="line"><span class="comment">// max_trx_id：创建ReadView时系统应分配给下一个事务的ID</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 版本可见性判断规则：</span></span><br><span class="line"><span class="comment">// 对于版本链中的某个版本，其DB_TRX_ID为trx_id：</span></span><br><span class="line"><span class="comment">// 1. trx_id == creator_trx_id → 自己的修改，可见</span></span><br><span class="line"><span class="comment">// 2. trx_id &lt; min_trx_id → 事务已提交，可见</span></span><br><span class="line"><span class="comment">// 3. trx_id &gt;= max_trx_id → 事务在ReadView创建后才开始，不可见</span></span><br><span class="line"><span class="comment">// 4. min_trx_id &lt;= trx_id &lt; max_trx_id → 检查是否在m_ids中</span></span><br><span class="line"><span class="comment">//    在m_ids中 → 事务未提交，不可见</span></span><br><span class="line"><span class="comment">//    不在m_ids中 → 事务已提交，可见</span></span><br><span class="line"><span class="comment">// 5. 如果当前版本不可见 → 沿版本链找上一个版本，重复判断</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="RC-vs-RR的MVCC差异"><a href="#RC-vs-RR的MVCC差异" class="headerlink" title="RC vs RR的MVCC差异"></a>RC vs RR的MVCC差异</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">READ COMMITTED：每次SELECT都创建新的ReadView</span><br><span class="line">  → 每次查询都能看到最新已提交的数据</span><br><span class="line">  → 允许不可重复读</span><br><span class="line"></span><br><span class="line">REPEATABLE READ：只在第一次SELECT时创建ReadView</span><br><span class="line">  → 后续查询复用同一个ReadView</span><br><span class="line">  → 保证可重复读</span><br></pre></td></tr></table></figure>
+
+<h3 id="RC隔离级别示例"><a href="#RC隔离级别示例" class="headerlink" title="RC隔离级别示例"></a>RC隔离级别示例</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">时间线：</span><br><span class="line">  事务A(trx_id=100)          事务B(trx_id=101)</span><br><span class="line">  ─────────────────          ─────────────────</span><br><span class="line">  BEGIN;                     </span><br><span class="line">  SELECT * FROM user         </span><br><span class="line">  WHERE id=1;                </span><br><span class="line">  -- name=&#x27;张三&#x27;             </span><br><span class="line">  (ReadView: m_ids=[100])    </span><br><span class="line"></span><br><span class="line">                             BEGIN;</span><br><span class="line">                             UPDATE user SET name=&#x27;李四&#x27; </span><br><span class="line">                             WHERE id=1;</span><br><span class="line">                             COMMIT;</span><br><span class="line"></span><br><span class="line">  SELECT * FROM user         </span><br><span class="line">  WHERE id=1;                </span><br><span class="line">  -- name=&#x27;李四&#x27; ← 新ReadView</span><br><span class="line">  (ReadView: m_ids=[100])    -- 101已提交，不在m_ids中</span><br><span class="line">  -- 可见！不可重复读</span><br></pre></td></tr></table></figure>
+
+<h3 id="RR隔离级别示例"><a href="#RR隔离级别示例" class="headerlink" title="RR隔离级别示例"></a>RR隔离级别示例</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">时间线：</span><br><span class="line">  事务A(trx_id=100)          事务B(trx_id=101)</span><br><span class="line">  ─────────────────          ─────────────────</span><br><span class="line">  BEGIN;                     </span><br><span class="line">  SELECT * FROM user         </span><br><span class="line">  WHERE id=1;                </span><br><span class="line">  -- name=&#x27;张三&#x27;             </span><br><span class="line">  (ReadView: m_ids=[100])    -- 创建ReadView，后续复用</span><br><span class="line"></span><br><span class="line">                             BEGIN;</span><br><span class="line">                             UPDATE user SET name=&#x27;李四&#x27; </span><br><span class="line">                             WHERE id=1;</span><br><span class="line">                             COMMIT;</span><br><span class="line"></span><br><span class="line">  SELECT * FROM user         </span><br><span class="line">  WHERE id=1;                </span><br><span class="line">  -- name=&#x27;张三&#x27; ← 复用ReadView</span><br><span class="line">  -- 101在m_ids创建时不存在但已提交</span><br><span class="line">  -- 但ReadView是第一次创建的，101&gt;min_trx_id</span><br><span class="line">  -- 实际判断：101不在m_ids中但大于创建时的max</span><br><span class="line">  -- 关键：复用ReadView，所以看到的版本不变</span><br><span class="line">  -- 可重复读！</span><br></pre></td></tr></table></figure>
+
+<h2 id="快照读-vs-当前读"><a href="#快照读-vs-当前读" class="headerlink" title="快照读 vs 当前读"></a>快照读 vs 当前读</h2><h3 id="快照读（普通SELECT）"><a href="#快照读（普通SELECT）" class="headerlink" title="快照读（普通SELECT）"></a>快照读（普通SELECT）</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 快照读：读取MVCC快照，不加锁</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> <span class="keyword">user</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="comment">-- RC：每次SELECT创建新ReadView</span></span><br><span class="line"><span class="comment">-- RR：复用第一次SELECT的ReadView</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="当前读（加锁SELECT-DML）"><a href="#当前读（加锁SELECT-DML）" class="headerlink" title="当前读（加锁SELECT&#x2F;DML）"></a>当前读（加锁SELECT&#x2F;DML）</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 当前读：读取最新已提交数据，加锁</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> <span class="keyword">user</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span> <span class="keyword">FOR</span> <span class="keyword">UPDATE</span>;      <span class="comment">-- 加X锁</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> <span class="keyword">user</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span> LOCK <span class="keyword">IN</span> SHARE MODE; <span class="comment">-- 加S锁</span></span><br><span class="line"><span class="keyword">UPDATE</span> <span class="keyword">user</span> <span class="keyword">SET</span> name <span class="operator">=</span> <span class="string">&#x27;王五&#x27;</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span>;       <span class="comment">-- 加X锁</span></span><br><span class="line"><span class="keyword">DELETE</span> <span class="keyword">FROM</span> <span class="keyword">user</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span>;                     <span class="comment">-- 加X锁</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 当前读不走MVCC，直接读最新数据+加锁</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="RR隔离级别下的幻读"><a href="#RR隔离级别下的幻读" class="headerlink" title="RR隔离级别下的幻读"></a>RR隔离级别下的幻读</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- RR隔离级别下，快照读不会幻读（MVCC保证）</span></span><br><span class="line"><span class="comment">-- 但当前读可能幻读！</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 事务A</span></span><br><span class="line"><span class="keyword">BEGIN</span>;</span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> <span class="keyword">user</span> <span class="keyword">WHERE</span> age <span class="operator">&gt;</span> <span class="number">20</span>;  <span class="comment">-- 快照读，返回2行</span></span><br><span class="line"><span class="comment">-- 事务B插入一行age=25的数据并提交</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> <span class="keyword">user</span> <span class="keyword">WHERE</span> age <span class="operator">&gt;</span> <span class="number">20</span> <span class="keyword">FOR</span> <span class="keyword">UPDATE</span>;  <span class="comment">-- 当前读，返回3行！幻读！</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- InnoDB的解决：Next-Key Lock</span></span><br><span class="line"><span class="comment">-- 当前读时，对age&gt;20的范围加Next-Key Lock</span></span><br><span class="line"><span class="comment">-- 事务B无法插入age=25的行 → 防止幻读</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="实战：隔离级别选择"><a href="#实战：隔离级别选择" class="headerlink" title="实战：隔离级别选择"></a>实战：隔离级别选择</h2><h3 id="大多数业务：RC"><a href="#大多数业务：RC" class="headerlink" title="大多数业务：RC"></a>大多数业务：RC</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 为什么很多互联网公司选择RC而不是默认的RR？</span></span><br><span class="line"><span class="comment">-- 1. RC的间隙锁更少，锁冲突更少，并发更高</span></span><br><span class="line"><span class="comment">-- 2. RC每次读都是最新数据，数据一致性更好</span></span><br><span class="line"><span class="comment">-- 3. RC下binlog建议用ROW格式，主从一致性更好</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 设置</span></span><br><span class="line">transaction<span class="operator">-</span>isolation <span class="operator">=</span> READ<span class="operator">-</span>COMMITTED</span><br><span class="line">binlog_format <span class="operator">=</span> <span class="type">ROW</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="金融场景：RR或SERIALIZABLE"><a href="#金融场景：RR或SERIALIZABLE" class="headerlink" title="金融场景：RR或SERIALIZABLE"></a>金融场景：RR或SERIALIZABLE</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 需要可重复读的场景</span></span><br><span class="line"><span class="comment">-- 如：对账、审计、报表</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 需要严格一致性的场景</span></span><br><span class="line"><span class="comment">-- 如：转账、交易</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="InnoDB锁与MVCC的配合"><a href="#InnoDB锁与MVCC的配合" class="headerlink" title="InnoDB锁与MVCC的配合"></a>InnoDB锁与MVCC的配合</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">快照读 → MVCC（无锁，高并发）</span><br><span class="line">当前读 → 锁机制（Next-Key Lock防幻读）</span><br><span class="line"></span><br><span class="line">INSERT → 插入意向锁 + 行锁</span><br><span class="line">UPDATE → X锁 + Next-Key Lock</span><br><span class="line">DELETE → X锁 + Next-Key Lock</span><br><span class="line">SELECT ... FOR UPDATE → X锁 + Next-Key Lock</span><br><span class="line">SELECT ... LOCK IN SHARE MODE → S锁 + Next-Key Lock</span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-MVCC的原理？"><a href="#1-MVCC的原理？" class="headerlink" title="1. MVCC的原理？"></a>1. MVCC的原理？</h3><p>通过隐藏列（事务ID+回滚指针）+undo log版本链+ReadView实现。每个事务根据ReadView判断能看到哪个版本的数据，实现读写不冲突。</p>
+<h3 id="2-RC和RR的MVCC区别？"><a href="#2-RC和RR的MVCC区别？" class="headerlink" title="2. RC和RR的MVCC区别？"></a>2. RC和RR的MVCC区别？</h3><p>RC每次SELECT创建新ReadView，RR只在第一次SELECT创建。所以RC允许不可重复读，RR保证可重复读。</p>
+<h3 id="3-RR隔离级别能完全解决幻读吗？"><a href="#3-RR隔离级别能完全解决幻读吗？" class="headerlink" title="3. RR隔离级别能完全解决幻读吗？"></a>3. RR隔离级别能完全解决幻读吗？</h3><p>快照读通过MVCC解决幻读，当前读通过Next-Key Lock解决幻读。但在某些特殊场景下（先快照读再当前读）仍可能出现幻读。</p>
+<p><strong>总结</strong></p>
+<p>事务隔离级别和MVCC是MySQL并发控制的基石。核心认知是：<strong>MVCC通过版本链实现读写不冲突，ReadView决定可见性，RC每次读创建新ReadView而RR复用</strong>*理解了这些，遇到不可重复读、幻读问题就能从底层原理分析根因。</p>
+<h2 id="进阶内容补充"><a href="#进阶内容补充" class="headerlink" title="进阶内容补充"></a>进阶内容补充</h2><h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="学习资源推荐"><a href="#学习资源推荐" class="headerlink" title="学习资源推荐"></a>学习资源推荐</h2><table>
+<thead>
+<tr>
+<th>资源</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL官方文档</td>
+<td>文档</td>
+<td>最权威的参考</td>
+</tr>
+<tr>
+<td>《高性能MySQL》</td>
+<td>书籍</td>
+<td>系统化学习</td>
+</tr>
+<tr>
+<td>《MySQL技术内幕:InnoDB存储引擎》</td>
+<td>书籍</td>
+<td>深入原理</td>
+</tr>
+<tr>
+<td>阿里云RDS最佳实践</td>
+<td>实战</td>
+<td>阿里云DBA经验</td>
+</tr>
+<tr>
+<td>美团技术博客</td>
+<td>实战</td>
+<td>互联网大厂实践</td>
+</tr>
+</tbody></table>
+<h3 id="学习路径"><a href="#学习路径" class="headerlink" title="学习路径"></a>学习路径</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">阶段1：基础概念理解（1-2周）</span><br><span class="line">  -- 重点：核心概念、基本操作</span><br><span class="line"></span><br><span class="line">阶段2：实战优化练习（2-3周）</span><br><span class="line">  -- 重点：结合慢查询日志，逐一优化</span><br><span class="line"></span><br><span class="line">阶段3：深入底层原理（持续）</span><br><span class="line">  -- 重点：源码分析、底层实现</span><br><span class="line"></span><br><span class="line">阶段4：架构设计提升（持续）</span><br><span class="line">  -- 重点：高可用、分库分表、读写分离</span><br></pre></td></tr></table></figure>
+
+<h2 id="InnoDB事务实现原理深度解析"><a href="#InnoDB事务实现原理深度解析" class="headerlink" title="InnoDB事务实现原理深度解析"></a>InnoDB事务实现原理深度解析</h2><h3 id="redo-log（重做日志）"><a href="#redo-log（重做日志）" class="headerlink" title="redo log（重做日志）"></a>redo log（重做日志）</h3><p><strong>redo log作用：保证事务的持久性（Durability）</strong></p>
+<ol>
+<li>事务修改数据页</li>
+<li>先写redo log buffer（内存）</li>
+<li>按策略刷盘到redo log file（磁盘）</li>
+<li>再修改Buffer Pool中的数据页（Write-Ahead Log）</li>
+</ol>
+<h3 id="redo-log刷盘策略"><a href="#redo-log刷盘策略" class="headerlink" title="redo log刷盘策略"></a>redo log刷盘策略</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- innodb_flush_log_at_trx_commit 参数</span></span><br><span class="line"><span class="comment">-- 0: 每秒刷盘（最多丢失1秒数据）</span></span><br><span class="line"><span class="comment">-- 1: 每次提交刷盘（最安全，默认值）</span></span><br><span class="line"><span class="comment">-- 2: 每次提交写OS缓存，每秒刷盘（折中）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 生产环境推荐：设为1（最安全）</span></span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> innodb_flush_log_at_trx_commit <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 性能对比：</span></span><br><span class="line"><span class="comment">-- 值=0: TPS ≈ 12000  风险：丢失1秒数据</span></span><br><span class="line"><span class="comment">-- 值=1: TPS ≈ 3000   风险：无</span></span><br><span class="line"><span class="comment">-- 值=2: TPS ≈ 8000   风险：OS崩溃丢数据</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="undo-log（回滚日志）"><a href="#undo-log（回滚日志）" class="headerlink" title="undo log（回滚日志）"></a>undo log（回滚日志）</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">undo log作用：保证事务的原子性（Atomicity）和MVCC</span><br><span class="line"></span><br><span class="line">undo log类型：</span><br><span class="line">  1. insert undo log: INSERT操作产生，事务提交后即可删除</span><br><span class="line">  2. update undo log: UPDATE/DELETE操作产生，需要保留给MVCC读</span><br><span class="line"></span><br><span class="line">undo log版本链示例：</span><br><span class="line"></span><br><span class="line">  事务A(id=100)          事务B(id=200)         事务C(id=300)</span><br><span class="line">  INSERT INTO t_alarm    |                    |</span><br><span class="line">  VALUES(1,&#x27;GAS&#x27;,50)    |                    |</span><br><span class="line">  --&gt; undo: &#123;&#125;          |                    |</span><br><span class="line">                        |                    |</span><br><span class="line">  UPDATE SET value=60   |                    |</span><br><span class="line">  --&gt; undo: value=50    |                    |</span><br><span class="line">                        | UPDATE SET value=80|</span><br><span class="line">                        | --&gt; undo: value=60 |</span><br><span class="line">                        |                    | UPDATE SET value=100</span><br><span class="line">                        |                    | --&gt; undo: value=80</span><br><span class="line"></span><br><span class="line">版本链（trx_id → 指向上一个版本的roll_pointer）：</span><br><span class="line">  当前值: value=100, trx_id=300</span><br><span class="line">    ↓ roll_pointer</span><br><span class="line">  value=80, trx_id=200</span><br><span class="line">    ↓ roll_pointer</span><br><span class="line">  value=60, trx_id=100</span><br><span class="line">    ↓ roll_pointer</span><br><span class="line">  value=50, trx_id=100</span><br><span class="line">    ↓ roll_pointer</span><br><span class="line">  (初始插入行)</span><br></pre></td></tr></table></figure>
+
+<h3 id="MVCC-ReadView详解"><a href="#MVCC-ReadView详解" class="headerlink" title="MVCC ReadView详解"></a>MVCC ReadView详解</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * ReadView核心数据结构（InnoDB源码简化版）</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">ReadView</span> &#123;</span><br><span class="line">    <span class="comment">// 活跃事务ID列表（生成ReadView时未提交的事务）</span></span><br><span class="line">    List&lt;Long&gt; m_ids;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 活跃事务最小ID</span></span><br><span class="line">    <span class="type">long</span> m_up_limit_id;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 下一个将分配的事务ID（最大事务ID+1）</span></span><br><span class="line">    <span class="type">long</span> m_low_limit_id;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 创建该ReadView的事务ID</span></span><br><span class="line">    <span class="type">long</span> m_creator_trx_id;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 判断某个版本是否对当前事务可见</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="type">boolean</span> <span class="title function_">changesVisible</span><span class="params">(<span class="type">long</span> trxId)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. trxId &lt; m_up_limit_id → 事务已提交，可见</span></span><br><span class="line">        <span class="keyword">if</span> (trxId &lt; m_up_limit_id) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 2. trxId &gt;= m_low_limit_id → 事务在ReadView之后开始，不可见</span></span><br><span class="line">        <span class="keyword">if</span> (trxId &gt;= m_low_limit_id) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 3. trxId在活跃列表中 → 事务未提交，不可见</span></span><br><span class="line">        <span class="keyword">if</span> (m_ids.contains(trxId)) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 4. trxId不在活跃列表中 → 事务已提交，可见</span></span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="MVCC可见性判断流程"><a href="#MVCC可见性判断流程" class="headerlink" title="MVCC可见性判断流程"></a>MVCC可见性判断流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">当执行SELECT语句时，InnoDB的可见性判断流程：</span><br><span class="line"></span><br><span class="line">  1. 获取数据行的最新版本</span><br><span class="line">  2. 检查trx_id是否等于m_creator_trx_id</span><br><span class="line">     → 是：自己修改的，可见</span><br><span class="line">  3. 检查trx_id &lt; m_up_limit_id</span><br><span class="line">     → 是：事务在ReadView前已提交，可见</span><br><span class="line">  4. 检查trx_id &gt;= m_low_limit_id</span><br><span class="line">     → 是：事务在ReadView后才开始，不可见</span><br><span class="line">  5. 检查trx_id是否在m_ids中</span><br><span class="line">     → 是：事务未提交，不可见</span><br><span class="line">     → 否：事务已提交，可见</span><br><span class="line">  6. 不可见时，沿版本链找上一个版本，重复步骤2-5</span><br><span class="line">  7. 如果所有版本都不可见，返回空结果</span><br></pre></td></tr></table></figure>
+
+<h3 id="RC与RR的ReadView区别"><a href="#RC与RR的ReadView区别" class="headerlink" title="RC与RR的ReadView区别"></a>RC与RR的ReadView区别</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">RC（READ COMMITTED）:</span><br><span class="line">  每次SELECT都生成新的ReadView</span><br><span class="line">  → 能看到其他事务已提交的最新数据</span><br><span class="line">  → 产生不可重复读现象</span><br><span class="line"></span><br><span class="line">  时刻1: SELECT → 生成ReadView1 → 看到value=50</span><br><span class="line">  时刻2: 事务B UPDATE并COMMIT</span><br><span class="line">  时刻3: SELECT → 生成ReadView2 → 看到value=80</span><br><span class="line"></span><br><span class="line">RR（REPEATABLE READ）:</span><br><span class="line">  第一次SELECT生成ReadView，后续复用</span><br><span class="line">  → 同一事务内看到的数据一致</span><br><span class="line">  → 解决不可重复读</span><br><span class="line"></span><br><span class="line">  时刻1: SELECT → 生成ReadView1 → 看到value=50</span><br><span class="line">  时刻2: 事务B UPDATE并COMMIT</span><br><span class="line">  时刻3: SELECT → 复用ReadView1 → 仍看到value=50</span><br></pre></td></tr></table></figure>
+
+<h2 id="事务隔离级别实战场景"><a href="#事务隔离级别实战场景" class="headerlink" title="事务隔离级别实战场景"></a>事务隔离级别实战场景</h2><h3 id="场景1-报警处理并发控制"><a href="#场景1-报警处理并发控制" class="headerlink" title="场景1: 报警处理并发控制"></a>场景1: 报警处理并发控制</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 报警处理 - 悲观锁方式</span></span><br><span class="line"><span class="comment"> * 防止同一报警被多人同时处理</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmProcessService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> AlarmMapper alarmMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 方式1: 悲观锁（SELECT FOR UPDATE）</span></span><br><span class="line"><span class="comment">     * 适用于处理时间短、并发高的场景</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Transactional(isolation = Isolation.REPEATABLE_READ)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">processWithPessimisticLock</span><span class="params">(Long alarmId, Long handlerId)</span> &#123;</span><br><span class="line">        <span class="comment">// 加锁查询，其他事务等待</span></span><br><span class="line">        <span class="type">DeviceAlarm</span> <span class="variable">alarm</span> <span class="operator">=</span> alarmMapper.selectForUpdate(alarmId);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (alarm.getStatus() != AlarmStatus.PENDING.getCode()) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;报警已被处理: alarmId=&#123;&#125;, status=&#123;&#125;&quot;</span>,</span><br><span class="line">                    alarmId, alarm.getStatus());</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 更新状态</span></span><br><span class="line">        alarm.setStatus(AlarmStatus.PROCESSING.getCode());</span><br><span class="line">        alarm.setHandlerId(handlerId);</span><br><span class="line">        alarm.setHandleTime(LocalDateTime.now());</span><br><span class="line">        alarmMapper.updateById(alarm);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 方式2: 乐观锁（CAS）</span></span><br><span class="line"><span class="comment">     * 适用于冲突少的场景</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Transactional(isolation = Isolation.REPEATABLE_READ)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">processWithOptimisticLock</span><span class="params">(Long alarmId, Long handlerId,</span></span><br><span class="line"><span class="params">                                              Integer expectedVersion)</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">updated</span> <span class="operator">=</span> alarmMapper.updateWithVersion(</span><br><span class="line">                alarmId,</span><br><span class="line">                AlarmStatus.PROCESSING.getCode(),</span><br><span class="line">                handlerId,</span><br><span class="line">                expectedVersion);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (updated == <span class="number">0</span>) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;乐观锁冲突，报警已被其他事务修改: alarmId=&#123;&#125;&quot;</span>, alarmId);</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 方式3: 状态机CAS（推荐）</span></span><br><span class="line"><span class="comment">     * 只检查状态，不需要版本号</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Transactional(isolation = Isolation.REPEATABLE_READ)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">processWithStatusCas</span><span class="params">(Long alarmId, Long handlerId)</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">updated</span> <span class="operator">=</span> alarmMapper.updateStatusCas(</span><br><span class="line">                alarmId,</span><br><span class="line">                AlarmStatus.PENDING.getCode(),      <span class="comment">// 期望当前状态</span></span><br><span class="line">                AlarmStatus.PROCESSING.getCode(),    <span class="comment">// 目标状态</span></span><br><span class="line">                handlerId);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> updated &gt; <span class="number">0</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 对应的SQL</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 悲观锁</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_device_alarm <span class="keyword">WHERE</span> id <span class="operator">=</span> #&#123;id&#125; <span class="keyword">FOR</span> <span class="keyword">UPDATE</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 乐观锁</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_device_alarm</span><br><span class="line"><span class="keyword">SET</span> status <span class="operator">=</span> #&#123;newStatus&#125;,</span><br><span class="line">    handler_id <span class="operator">=</span> #&#123;handlerId&#125;,</span><br><span class="line">    version <span class="operator">=</span> version <span class="operator">+</span> <span class="number">1</span></span><br><span class="line"><span class="keyword">WHERE</span> id <span class="operator">=</span> #&#123;id&#125; <span class="keyword">AND</span> version <span class="operator">=</span> #&#123;expectedVersion&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 状态机CAS（推荐）</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_device_alarm</span><br><span class="line"><span class="keyword">SET</span> status <span class="operator">=</span> #&#123;newStatus&#125;,</span><br><span class="line">    handler_id <span class="operator">=</span> #&#123;handlerId&#125;,</span><br><span class="line">    handle_time <span class="operator">=</span> NOW()</span><br><span class="line"><span class="keyword">WHERE</span> id <span class="operator">=</span> #&#123;id&#125; <span class="keyword">AND</span> status <span class="operator">=</span> #&#123;expectedStatus&#125;;</span><br></pre></td></tr></table></figure>
+
+<h3 id="场景2-库存扣减防超卖"><a href="#场景2-库存扣减防超卖" class="headerlink" title="场景2: 库存扣减防超卖"></a>场景2: 库存扣减防超卖</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 库存扣减 - 防超卖方案对比</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">StockService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 方案1: 数据库原子操作（最简单可靠）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Transactional</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">deductStock1</span><span class="params">(Long materialId, <span class="type">int</span> quantity)</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">updated</span> <span class="operator">=</span> stockMapper.deductStock(materialId, quantity);</span><br><span class="line">        <span class="comment">// UPDATE t_material_stock SET stock = stock - #&#123;quantity&#125;</span></span><br><span class="line">        <span class="comment">// WHERE material_id = #&#123;materialId&#125; AND stock &gt;= #&#123;quantity&#125;</span></span><br><span class="line">        <span class="keyword">return</span> updated &gt; <span class="number">0</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 方案2: SELECT FOR UPDATE悲观锁</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Transactional(isolation = Isolation.REPEATABLE_READ)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">deductStock2</span><span class="params">(Long materialId, <span class="type">int</span> quantity)</span> &#123;</span><br><span class="line">        <span class="type">MaterialStock</span> <span class="variable">stock</span> <span class="operator">=</span> stockMapper.selectForUpdate(materialId);</span><br><span class="line">        <span class="keyword">if</span> (stock.getStock() &lt; quantity) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        stock.setStock(stock.getStock() - quantity);</span><br><span class="line">        stockMapper.updateById(stock);</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 方案3: Redis预扣 + 数据库最终扣减</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">deductStock3</span><span class="params">(Long materialId, <span class="type">int</span> quantity)</span> &#123;</span><br><span class="line">        <span class="comment">// Redis原子扣减</span></span><br><span class="line">        <span class="type">Long</span> <span class="variable">remain</span> <span class="operator">=</span> redisTemplate.opsForValue().increment(</span><br><span class="line">                <span class="string">&quot;stock:&quot;</span> + materialId, -quantity);</span><br><span class="line">        <span class="keyword">if</span> (remain &lt; <span class="number">0</span>) &#123;</span><br><span class="line">            <span class="comment">// 回滚</span></span><br><span class="line">            redisTemplate.opsForValue().increment(</span><br><span class="line">                    <span class="string">&quot;stock:&quot;</span> + materialId, quantity);</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 异步扣减数据库</span></span><br><span class="line">        stockAsyncService.asyncDeduct(materialId, quantity);</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="场景3-长事务优化"><a href="#场景3-长事务优化" class="headerlink" title="场景3: 长事务优化"></a>场景3: 长事务优化</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 长事务拆分示例</span></span><br><span class="line"><span class="comment"> * 智慧矿山-报警批量处理</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmBatchProcessService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 错误写法：一个大事务处理所有报警</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Transactional</span>  <span class="comment">// ❌ 事务时间过长</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">processAllAlarmsBad</span><span class="params">(List&lt;Long&gt; alarmIds)</span> &#123;</span><br><span class="line">        <span class="keyword">for</span> (Long id : alarmIds) &#123;</span><br><span class="line">            <span class="type">DeviceAlarm</span> <span class="variable">alarm</span> <span class="operator">=</span> alarmMapper.selectById(id);</span><br><span class="line">            <span class="comment">// 处理报警（可能调用外部服务）</span></span><br><span class="line">            processAlarm(alarm);</span><br><span class="line">            alarmMapper.updateById(alarm);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 如果1000条报警，事务可能持续数分钟！</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 正确写法：拆分为小事务</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">processAllAlarmsGood</span><span class="params">(List&lt;Long&gt; alarmIds)</span> &#123;</span><br><span class="line">        <span class="keyword">for</span> (Long id : alarmIds) &#123;</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                processOneAlarm(id);  <span class="comment">// 每条报警独立事务</span></span><br><span class="line">            &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">                log.error(<span class="string">&quot;处理报警失败: alarmId=&#123;&#125;&quot;</span>, id, e);</span><br><span class="line">                <span class="comment">// 记录失败，不影响其他报警处理</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Transactional(propagation = Propagation.REQUIRES_NEW)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">processOneAlarm</span><span class="params">(Long alarmId)</span> &#123;</span><br><span class="line">        <span class="type">DeviceAlarm</span> <span class="variable">alarm</span> <span class="operator">=</span> alarmMapper.selectById(alarmId);</span><br><span class="line">        processAlarm(alarm);</span><br><span class="line">        alarmMapper.updateById(alarm);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="事务隔离级别对比测试"><a href="#事务隔离级别对比测试" class="headerlink" title="事务隔离级别对比测试"></a>事务隔离级别对比测试</h2><h3 id="测试环境"><a href="#测试环境" class="headerlink" title="测试环境"></a>测试环境</h3><table>
+<thead>
+<tr>
+<th>参数</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL版本</td>
+<td>8.0.33</td>
+</tr>
+<tr>
+<td>隔离级别</td>
+<td>RR（默认）</td>
+</tr>
+<tr>
+<td>表数据量</td>
+<td>100万行</td>
+</tr>
+<tr>
+<td>并发线程</td>
+<td>10</td>
+</tr>
+</tbody></table>
+<h3 id="脏读测试（READ-UNCOMMITTED）"><a href="#脏读测试（READ-UNCOMMITTED）" class="headerlink" title="脏读测试（READ UNCOMMITTED）"></a>脏读测试（READ UNCOMMITTED）</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 会话A                          -- 会话B</span></span><br><span class="line"><span class="keyword">SET</span> SESSION TRANSACTION           <span class="keyword">SET</span> SESSION TRANSACTION</span><br><span class="line">  ISOLATION LEVEL                   ISOLATION LEVEL</span><br><span class="line">  READ UNCOMMITTED;                 READ UNCOMMITTED;</span><br><span class="line"></span><br><span class="line"><span class="keyword">BEGIN</span>;                            <span class="keyword">BEGIN</span>;</span><br><span class="line">                                  <span class="keyword">SELECT</span> <span class="keyword">value</span> <span class="keyword">FROM</span> t_alarm</span><br><span class="line">                                    <span class="keyword">WHERE</span> id<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line">                                  <span class="comment">-- value = 50</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">UPDATE</span> t_alarm <span class="keyword">SET</span> <span class="keyword">value</span><span class="operator">=</span><span class="number">999</span></span><br><span class="line">  <span class="keyword">WHERE</span> id<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line"><span class="comment">-- 未提交</span></span><br><span class="line"></span><br><span class="line">                                  <span class="keyword">SELECT</span> <span class="keyword">value</span> <span class="keyword">FROM</span> t_alarm</span><br><span class="line">                                    <span class="keyword">WHERE</span> id<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line">                                  <span class="comment">-- value = 999 ← 脏读！</span></span><br><span class="line">                                  <span class="comment">-- 读到了未提交的数据</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">ROLLBACK</span>; <span class="comment">-- 回滚</span></span><br><span class="line"></span><br><span class="line">                                  <span class="keyword">SELECT</span> <span class="keyword">value</span> <span class="keyword">FROM</span> t_alarm</span><br><span class="line">                                    <span class="keyword">WHERE</span> id<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line">                                  <span class="comment">-- value = 50 ← 数据恢复了</span></span><br><span class="line">                                  <span class="comment">-- 但之前基于999做的决策怎么办？</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="不可重复读测试（READ-COMMITTED）"><a href="#不可重复读测试（READ-COMMITTED）" class="headerlink" title="不可重复读测试（READ COMMITTED）"></a>不可重复读测试（READ COMMITTED）</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 会话A                          -- 会话B</span></span><br><span class="line"><span class="keyword">SET</span> SESSION TRANSACTION           <span class="keyword">SET</span> SESSION TRANSACTION</span><br><span class="line">  ISOLATION LEVEL                   ISOLATION LEVEL</span><br><span class="line">  READ COMMITTED;                   READ COMMITTED;</span><br><span class="line"></span><br><span class="line"><span class="keyword">BEGIN</span>;                            <span class="keyword">BEGIN</span>;</span><br><span class="line">                                  <span class="keyword">SELECT</span> <span class="keyword">value</span> <span class="keyword">FROM</span> t_alarm</span><br><span class="line">                                    <span class="keyword">WHERE</span> id<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line">                                  <span class="comment">-- value = 50</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">UPDATE</span> t_alarm <span class="keyword">SET</span> <span class="keyword">value</span><span class="operator">=</span><span class="number">80</span></span><br><span class="line">  <span class="keyword">WHERE</span> id<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line"><span class="keyword">COMMIT</span>;</span><br><span class="line"></span><br><span class="line">                                  <span class="keyword">SELECT</span> <span class="keyword">value</span> <span class="keyword">FROM</span> t_alarm</span><br><span class="line">                                    <span class="keyword">WHERE</span> id<span class="operator">=</span><span class="number">1</span>;</span><br><span class="line">                                  <span class="comment">-- value = 80 ← 不可重复读！</span></span><br><span class="line">                                  <span class="comment">-- 同一事务两次读结果不同</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="幻读测试（REPEATABLE-READ快照读不幻读）"><a href="#幻读测试（REPEATABLE-READ快照读不幻读）" class="headerlink" title="幻读测试（REPEATABLE READ快照读不幻读）"></a>幻读测试（REPEATABLE READ快照读不幻读）</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 会话A                          -- 会话B</span></span><br><span class="line"><span class="keyword">SET</span> SESSION TRANSACTION           <span class="keyword">SET</span> SESSION TRANSACTION</span><br><span class="line">  ISOLATION LEVEL                   ISOLATION LEVEL</span><br><span class="line">  REPEATABLE READ;                  REPEATABLE READ;</span><br><span class="line"></span><br><span class="line"><span class="keyword">BEGIN</span>;                            <span class="keyword">BEGIN</span>;</span><br><span class="line">                                  <span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_alarm</span><br><span class="line">                                    <span class="keyword">WHERE</span> <span class="keyword">value</span> <span class="operator">&gt;</span> <span class="number">100</span>;</span><br><span class="line">                                  <span class="comment">-- 50行</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">INSERT INTO</span> t_alarm <span class="keyword">VALUES</span></span><br><span class="line">  (<span class="number">999</span>,<span class="string">&#x27;GAS&#x27;</span>,<span class="number">150</span>,...);</span><br><span class="line"><span class="keyword">COMMIT</span>;</span><br><span class="line"></span><br><span class="line">                                  <span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_alarm</span><br><span class="line">                                    <span class="keyword">WHERE</span> <span class="keyword">value</span> <span class="operator">&gt;</span> <span class="number">100</span>;</span><br><span class="line">                                  <span class="comment">-- 50行 ← 快照读不幻读！</span></span><br><span class="line">                                  <span class="comment">-- MVCC保证一致性</span></span><br><span class="line"></span><br><span class="line">                                  <span class="comment">-- 但当前读会幻读：</span></span><br><span class="line">                                  <span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_alarm</span><br><span class="line">                                    <span class="keyword">WHERE</span> <span class="keyword">value</span> <span class="operator">&gt;</span> <span class="number">100</span></span><br><span class="line">                                    <span class="keyword">FOR</span> <span class="keyword">UPDATE</span>;</span><br><span class="line">                                  <span class="comment">-- 51行 ← 当前读幻读！</span></span><br><span class="line">                                  <span class="comment">-- Next-Key Lock可防此问题</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="RR隔离级别下的幻读场景"><a href="#RR隔离级别下的幻读场景" class="headerlink" title="RR隔离级别下的幻读场景"></a>RR隔离级别下的幻读场景</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- RR隔离级别下的经典幻读场景</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 会话A                                    -- 会话B</span></span><br><span class="line"><span class="keyword">BEGIN</span>;                                      <span class="keyword">BEGIN</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_alarm                       <span class="comment">-- 插入一条新记录</span></span><br><span class="line">  <span class="keyword">WHERE</span> alarm_type <span class="operator">=</span> <span class="string">&#x27;GAS&#x27;</span>                  <span class="keyword">INSERT INTO</span> t_alarm</span><br><span class="line">  <span class="keyword">AND</span> <span class="keyword">value</span> <span class="operator">=</span> <span class="number">50</span>;                             <span class="keyword">VALUES</span>(<span class="number">888</span>,<span class="string">&#x27;GAS&#x27;</span>,<span class="number">50</span>,...);</span><br><span class="line"><span class="comment">-- 结果: 1行(id=1)                          COMMIT;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 更新这条&quot;不存在&quot;的记录</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_alarm <span class="keyword">SET</span> <span class="keyword">value</span> <span class="operator">=</span> <span class="number">60</span></span><br><span class="line">  <span class="keyword">WHERE</span> alarm_type <span class="operator">=</span> <span class="string">&#x27;GAS&#x27;</span></span><br><span class="line">  <span class="keyword">AND</span> <span class="keyword">value</span> <span class="operator">=</span> <span class="number">50</span>;</span><br><span class="line"><span class="comment">-- 影响行数: 2 ← 幻读！</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_alarm</span><br><span class="line">  <span class="keyword">WHERE</span> alarm_type <span class="operator">=</span> <span class="string">&#x27;GAS&#x27;</span></span><br><span class="line">  <span class="keyword">AND</span> <span class="keyword">value</span> <span class="operator">=</span> <span class="number">60</span>;</span><br><span class="line"><span class="comment">-- 结果: 2行(id=1和id=888)</span></span><br><span class="line"><span class="comment">-- 虽然快照读看不到id=888</span></span><br><span class="line"><span class="comment">-- 但UPDATE是当前读，能感知到新插入的行</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="分布式事务基础"><a href="#分布式事务基础" class="headerlink" title="分布式事务基础"></a>分布式事务基础</h2><h3 id="本地事务-vs-分布式事务"><a href="#本地事务-vs-分布式事务" class="headerlink" title="本地事务 vs 分布式事务"></a>本地事务 vs 分布式事务</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">本地事务（单库）：</span><br><span class="line">  BEGIN → SQL1 → SQL2 → SQL3 → COMMIT</span><br><span class="line">  └── 由InnoDB保证ACID ──┘</span><br><span class="line"></span><br><span class="line">分布式事务（跨库/跨服务）：</span><br><span class="line">  服务A → DB_A ──┐</span><br><span class="line">                   ├── 如何保证一致性？</span><br><span class="line">  服务B → DB_B ──┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="分布式事务方案对比"><a href="#分布式事务方案对比" class="headerlink" title="分布式事务方案对比"></a>分布式事务方案对比</h3><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>一致性</th>
+<th>性能</th>
+<th>复杂度</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>2PC（XA）</td>
+<td>强一致</td>
+<td>低</td>
+<td>中</td>
+<td>传统企业应用</td>
+</tr>
+<tr>
+<td>TCC</td>
+<td>最终一致</td>
+<td>中</td>
+<td>高</td>
+<td>资金交易</td>
+</tr>
+<tr>
+<td>Saga</td>
+<td>最终一致</td>
+<td>高</td>
+<td>中</td>
+<td>长流程业务</td>
+</tr>
+<tr>
+<td>本地消息表</td>
+<td>最终一致</td>
+<td>高</td>
+<td>低</td>
+<td>互联网应用</td>
+</tr>
+<tr>
+<td>RocketMQ事务消息</td>
+<td>最终一致</td>
+<td>高</td>
+<td>低</td>
+<td>MQ场景</td>
+</tr>
+</tbody></table>
+<h1 id="-1"><a href="#-1" class="headerlink" title=""></a></h1><h2 id="事务监控与诊断"><a href="#事务监控与诊断" class="headerlink" title="事务监控与诊断"></a>事务监控与诊断</h2><h3 id="事务状态监控SQL"><a href="#事务状态监控SQL" class="headerlink" title="事务状态监控SQL"></a>事务状态监控SQL</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 查看当前运行的事务</span></span><br><span class="line"><span class="keyword">SELECT</span> trx_id, trx_state, trx_started,</span><br><span class="line">       trx_query, trx_tables_locked,</span><br><span class="line">       trx_rows_locked, trx_lock_structs</span><br><span class="line"><span class="keyword">FROM</span> information_schema.INNODB_TRX</span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> trx_started <span class="keyword">ASC</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看锁等待</span></span><br><span class="line"><span class="keyword">SELECT</span> r.trx_id <span class="keyword">AS</span> waiting_trx_id,</span><br><span class="line">       r.trx_mysql_thread_id <span class="keyword">AS</span> waiting_thread,</span><br><span class="line">       r.trx_query <span class="keyword">AS</span> waiting_query,</span><br><span class="line">       b.trx_id <span class="keyword">AS</span> blocking_trx_id,</span><br><span class="line">       b.trx_mysql_thread_id <span class="keyword">AS</span> blocking_thread,</span><br><span class="line">       b.trx_query <span class="keyword">AS</span> blocking_query</span><br><span class="line"><span class="keyword">FROM</span> information_schema.INNODB_LOCK_WAITS w</span><br><span class="line"><span class="keyword">JOIN</span> information_schema.INNODB_TRX b <span class="keyword">ON</span> b.trx_id <span class="operator">=</span> w.blocking_trx_id</span><br><span class="line"><span class="keyword">JOIN</span> information_schema.INNODB_TRX r <span class="keyword">ON</span> r.trx_id <span class="operator">=</span> w.requesting_trx_id;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看死锁日志</span></span><br><span class="line"><span class="keyword">SHOW</span> ENGINE INNODB STATUS;</span><br></pre></td></tr></table></figure>
+
+<h3 id="事务超时配置"><a href="#事务超时配置" class="headerlink" title="事务超时配置"></a>事务超时配置</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 锁等待超时（默认50秒）</span></span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> innodb_lock_wait_timeout <span class="operator">=</span> <span class="number">10</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 事务超时（需要应用层控制）</span></span><br><span class="line"><span class="comment">-- Spring Boot配置</span></span><br><span class="line"><span class="comment">-- spring.transaction.default-timeout=30</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 长事务监控阈值</span></span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> long_query_time <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> innodb_print_all_deadlocks <span class="operator">=</span> <span class="keyword">ON</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="死锁分析与处理"><a href="#死锁分析与处理" class="headerlink" title="死锁分析与处理"></a>死锁分析与处理</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 实际项目典型死锁场景</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 死锁场景1: 交叉更新</span></span><br><span class="line"><span class="comment">-- 事务A: UPDATE t_alarm SET status=1 WHERE id=1; → UPDATE t_alarm SET status=2 WHERE id=2;</span></span><br><span class="line"><span class="comment">-- 事务B: UPDATE t_alarm SET status=1 WHERE id=2; → UPDATE t_alarm SET status=2 WHERE id=1;</span></span><br><span class="line"><span class="comment">-- 解决: 统一按id升序更新</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 死锁场景2: 间隙锁冲突</span></span><br><span class="line"><span class="comment">-- 事务A: SELECT * FROM t_alarm WHERE id &gt; 100 FOR UPDATE; → 锁定(100, +∞)间隙</span></span><br><span class="line"><span class="comment">-- 事务B: INSERT INTO t_alarm VALUES(150,...); → 等待间隙锁</span></span><br><span class="line"><span class="comment">-- 事务A: INSERT INTO t_alarm VALUES(200,...); → 死锁！</span></span><br><span class="line"><span class="comment">-- 解决: 减少范围查询FOR UPDATE，使用精确条件</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 死锁场景3: 自增主键锁</span></span><br><span class="line"><span class="comment">-- 事务A: INSERT INTO t_alarm ... → 获得自增锁</span></span><br><span class="line"><span class="comment">-- 事务B: INSERT INTO t_alarm ... → 等待自增锁</span></span><br><span class="line"><span class="comment">-- 如果事务A回滚，事务B继续插入 → 自增ID不连续</span></span><br><span class="line"><span class="comment">-- 解决: innodb_autoinc_lock_mode=2（交错模式）</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="事务隔离级别面试速记表"><a href="#事务隔离级别面试速记表" class="headerlink" title="事务隔离级别面试速记表"></a>事务隔离级别面试速记表</h2><table>
+<thead>
+<tr>
+<th>问题</th>
+<th>关键答案</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>四种隔离级别</td>
+<td>读未提交→读已提交→可重复读→串行化</td>
+</tr>
+<tr>
+<td>MySQL默认隔离级别</td>
+<td>RR（REPEATABLE READ）</td>
+</tr>
+<tr>
+<td>MVCC原理</td>
+<td>隐藏列+undo log版本链+ReadView</td>
+</tr>
+<tr>
+<td>RC和RR的ReadView区别</td>
+<td>RC每次SELECT新建，RR第一次SELECT创建后复用</td>
+</tr>
+<tr>
+<td>RR能否完全防幻读</td>
+<td>快照读可以，当前读不行（需Next-Key Lock）</td>
+</tr>
+<tr>
+<td>当前读有哪些</td>
+<td>SELECT FOR UPDATE&#x2F;LOCK IN SHARE MODE&#x2F;INSERT&#x2F;UPDATE&#x2F;DELETE</td>
+</tr>
+<tr>
+<td>脏读是什么</td>
+<td>读到未提交的数据</td>
+</tr>
+<tr>
+<td>不可重复读是什么</td>
+<td>同一事务两次读同一行结果不同</td>
+</tr>
+<tr>
+<td>幻读是什么</td>
+<td>同一事务两次查询行数不同</td>
+</tr>
+<tr>
+<td>如何解决幻读</td>
+<td>Next-Key Lock（行锁+间隙锁）</td>
+</tr>
+<tr>
+<td>长事务有什么问题</td>
+<td>undo log膨胀、锁持有时间长、阻塞其他事务</td>
+</tr>
+<tr>
+<td>如何优化长事务</td>
+<td>拆分事务、异步处理、设置超时</td>
+</tr>
+</tbody></table>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>事务隔离级别与MVCC是MySQL并发控制的基石，实际项目的实践总结：</p>
+<ol>
+<li><strong>默认RR够用</strong> — 大多数业务场景用RR即可，无需修改</li>
+<li><strong>理解MVCC原理</strong> — ReadView+undo log版本链是理解隔离级别的关键</li>
+<li><strong>当前读要警惕</strong> — RR下当前读仍可能幻读，需要Next-Key Lock保护</li>
+<li><strong>长事务要拆分</strong> — 大事务拆小事务，减少锁持有时间</li>
+<li><strong>乐观锁优先</strong> — 冲突少的场景用乐观锁CAS，冲突多的用悲观锁</li>
+<li><strong>分布式事务用消息表</strong> — 本地消息表实现最终一致性，简单可靠</li>
+</ol>
+<h2 id="Spring事务传播机制实战"><a href="#Spring事务传播机制实战" class="headerlink" title="Spring事务传播机制实战"></a>Spring事务传播机制实战</h2><h3 id="七种传播行为对比"><a href="#七种传播行为对比" class="headerlink" title="七种传播行为对比"></a>七种传播行为对比</h3><table>
+<thead>
+<tr>
+<th>传播行为</th>
+<th>说明</th>
+<th>外部事务</th>
+<th>内部事务</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>REQUIRED</td>
+<td>默认值，有则加入，无则新建</td>
+<td>有→加入</td>
+<td>无→新建</td>
+</tr>
+<tr>
+<td>REQUIRES_NEW</td>
+<td>总是新建事务</td>
+<td>挂起外部事务</td>
+<td>新建独立事务</td>
+</tr>
+<tr>
+<td>NESTED</td>
+<td>嵌套事务（Savepoint）</td>
+<td>有→嵌套</td>
+<td>无→新建</td>
+</tr>
+<tr>
+<td>SUPPORTS</td>
+<td>有则加入，无则非事务</td>
+<td>有→加入</td>
+<td>无→非事务</td>
+</tr>
+<tr>
+<td>NOT_SUPPORTED</td>
+<td>总是非事务</td>
+<td>挂起外部事务</td>
+<td>非事务执行</td>
+</tr>
+<tr>
+<td>MANDATORY</td>
+<td>必须在事务中</td>
+<td>有→加入</td>
+<td>无→抛异常</td>
+</tr>
+<tr>
+<td>NEVER</td>
+<td>必须非事务</td>
+<td>有→抛异常</td>
+<td>无→非事务</td>
+</tr>
+</tbody></table>
+<h1 id="-2"><a href="#-2" class="headerlink" title=""></a></h1>
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/06/04/2f2ede51735c/">MySQL索引失效场景汇总——那些年走过的全表扫描</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/06/11/1360b6e3509a/">MySQL分页优化实战——深分页的性能陷阱与解决方案</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/MySQL/" class="tag" aria-label="标签: #MySQL">#MySQL</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL%E6%B7%B1%E5%BA%A6/" aria-label="分类: MySQL深度">
+                        MySQL深度
+                        <span>(10)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

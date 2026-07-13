@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MySQL大表优化——字段拆分与冷热分离 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="MySQL大表优化——字段拆分与冷热分离">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/09/10/49cd4d13e15e/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言实际场景中，设备报警表超过80个字段、5000万行数据，查询越来越慢。加索引效果有限，因为很多字段根本不常用。2023年通过字段拆分和冷热分离，查询性能提升5倍。本文结合实际项目的真实场景，系统讲解大表优化的字段拆分与冷热分离方案。大表的问题问题分析大表的核心问题：查询慢DDL慢写入慢维护难字段拆分垂直拆">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">MySQL大表优化——字段拆分与冷热分离</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-09-10T08:58:32.000Z">2023-09-10</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL%E6%B7%B1%E5%BA%A6/">MySQL深度</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>实际场景中，设备报警表超过80个字段、5000万行数据，查询越来越慢。加索引效果有限，因为很多字段根本不常用。2023年通过字段拆分和冷热分离，查询性能提升5倍。本文结合实际项目的真实场景，系统讲解大表优化的字段拆分与冷热分离方案。</p>
+<h2 id="大表的问题"><a href="#大表的问题" class="headerlink" title="大表的问题"></a>大表的问题</h2><h3 id="问题分析"><a href="#问题分析" class="headerlink" title="问题分析"></a>问题分析</h3><p><strong>大表的核心问题：</strong></p>
+<ol>
+<li>查询慢</li>
+<li>DDL慢</li>
+<li>写入慢</li>
+<li>维护难</li>
+</ol>
+<h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="字段拆分"><a href="#字段拆分" class="headerlink" title="字段拆分"></a>字段拆分</h2><h3 id="垂直拆表原则"><a href="#垂直拆表原则" class="headerlink" title="垂直拆表原则"></a>垂直拆表原则</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">原则：将访问频率不同的字段拆到不同表</span><br><span class="line"></span><br><span class="line">拆分维度：</span><br><span class="line">1. 按访问频率拆分：热字段 vs 冷字段</span><br><span class="line">2. 按数据类型拆分：常规字段 vs 大字段(TEXT/BLOB/JSON)</span><br><span class="line">3. 按业务含义拆分：核心字段 vs 扩展字段</span><br><span class="line"></span><br><span class="line">拆分后的查询模式：</span><br><span class="line">- 列表查询：只查主表（热数据，10个字段以内）</span><br><span class="line">- 详情查询：关联详情表（温数据，20个字段左右）</span><br><span class="line">- 扩展查询：关联扩展表（冷数据，偶尔查询）</span><br></pre></td></tr></table></figure>
+
+<h3 id="拆表实现：设备报警表"><a href="#拆表实现：设备报警表" class="headerlink" title="拆表实现：设备报警表"></a>拆表实现：设备报警表</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 拆分前：82个字段的报警表</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_device_alarm (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    alarm_level TINYINT,</span><br><span class="line">    alarm_time DATETIME,</span><br><span class="line">    alarm_desc <span class="type">VARCHAR</span>(<span class="number">500</span>),</span><br><span class="line">    <span class="comment">-- ... 80多个字段 ...</span></span><br><span class="line">    extra JSON,</span><br><span class="line">    create_time DATETIME,</span><br><span class="line">    update_time DATETIME</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 拆分后：主表 + 详情表 + 扩展表</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 报警主表（热数据，每次查询都需要）</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_main (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    alarm_code <span class="type">VARCHAR</span>(<span class="number">32</span>) <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;报警编号&#x27;</span>,</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>) <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;设备ID&#x27;</span>,</span><br><span class="line">    alarm_level TINYINT <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;报警级别1-5&#x27;</span>,</span><br><span class="line">    alarm_type TINYINT <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;报警类型&#x27;</span>,</span><br><span class="line">    status TINYINT <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="number">0</span> COMMENT <span class="string">&#x27;0-未处理 1-处理中 2-已处理&#x27;</span>,</span><br><span class="line">    alarm_time DATETIME <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;报警时间&#x27;</span>,</span><br><span class="line">    area_code <span class="type">VARCHAR</span>(<span class="number">10</span>) <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;区域编码&#x27;</span>,</span><br><span class="line">    create_time DATETIME <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="built_in">CURRENT_TIMESTAMP</span>,</span><br><span class="line">    update_time DATETIME <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="built_in">CURRENT_TIMESTAMP</span> <span class="keyword">ON</span> <span class="keyword">UPDATE</span> <span class="built_in">CURRENT_TIMESTAMP</span>,</span><br><span class="line">    <span class="keyword">UNIQUE</span> KEY uk_alarm_code (alarm_code),</span><br><span class="line">    KEY idx_device_id (device_id),</span><br><span class="line">    KEY idx_alarm_time (alarm_time),</span><br><span class="line">    KEY idx_area_level (area_code, alarm_level)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB COMMENT<span class="operator">=</span><span class="string">&#x27;报警主表-热数据&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 报警详情表（温数据，详情查询需要）</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_detail (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    alarm_id <span class="type">BIGINT</span> <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;报警ID&#x27;</span>,</span><br><span class="line">    alarm_desc <span class="type">VARCHAR</span>(<span class="number">500</span>) COMMENT <span class="string">&#x27;报警描述&#x27;</span>,</span><br><span class="line">    alarm_source <span class="type">VARCHAR</span>(<span class="number">50</span>) COMMENT <span class="string">&#x27;报警来源&#x27;</span>,</span><br><span class="line">    trigger_value <span class="type">DECIMAL</span>(<span class="number">12</span>,<span class="number">2</span>) COMMENT <span class="string">&#x27;触发值&#x27;</span>,</span><br><span class="line">    threshold_value <span class="type">DECIMAL</span>(<span class="number">12</span>,<span class="number">2</span>) COMMENT <span class="string">&#x27;阈值&#x27;</span>,</span><br><span class="line">    handle_by <span class="type">VARCHAR</span>(<span class="number">32</span>) COMMENT <span class="string">&#x27;处理人&#x27;</span>,</span><br><span class="line">    handle_time DATETIME COMMENT <span class="string">&#x27;处理时间&#x27;</span>,</span><br><span class="line">    handle_remark <span class="type">VARCHAR</span>(<span class="number">500</span>) COMMENT <span class="string">&#x27;处理备注&#x27;</span>,</span><br><span class="line">    receiver_name <span class="type">VARCHAR</span>(<span class="number">50</span>) COMMENT <span class="string">&#x27;接收人&#x27;</span>,</span><br><span class="line">    receiver_phone <span class="type">VARCHAR</span>(<span class="number">20</span>) COMMENT <span class="string">&#x27;接收电话&#x27;</span>,</span><br><span class="line">    KEY idx_alarm_id (alarm_id)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB COMMENT<span class="operator">=</span><span class="string">&#x27;报警详情表-温数据&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 报警扩展表（冷数据，极少查询）</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_ext (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    alarm_id <span class="type">BIGINT</span> <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;报警ID&#x27;</span>,</span><br><span class="line">    alarm_snapshot JSON COMMENT <span class="string">&#x27;报警时设备快照&#x27;</span>,</span><br><span class="line">    notify_log JSON COMMENT <span class="string">&#x27;通知记录&#x27;</span>,</span><br><span class="line">    extra JSON COMMENT <span class="string">&#x27;扩展信息&#x27;</span>,</span><br><span class="line">    source_ip <span class="type">VARCHAR</span>(<span class="number">50</span>) COMMENT <span class="string">&#x27;来源IP&#x27;</span>,</span><br><span class="line">    user_agent <span class="type">VARCHAR</span>(<span class="number">500</span>) COMMENT <span class="string">&#x27;请求UA&#x27;</span>,</span><br><span class="line">    KEY idx_alarm_id (alarm_id)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB COMMENT<span class="operator">=</span><span class="string">&#x27;报警扩展表-冷数据&#x27;</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="拆分后的性能对比"><a href="#拆分后的性能对比" class="headerlink" title="拆分后的性能对比"></a>拆分后的性能对比</h3><p><strong>查询性能对比（列表查询，只查主表）：</strong></p>
+<ul>
+<li>查询类型         | 拆分前   | 拆分后   | 提升</li>
+<li>列表查询(10字段) | 1.2s     | 0.08s    | 15x</li>
+<li>详情查询(20字段) | 2.5s     | 0.15s    | 16x</li>
+<li>统计查询(5字段)  | 3.8s     | 0.2s     | 19x</li>
+<li>DDL加字段        | 2小时    | 5分钟    | 24x</li>
+<li>原理：</li>
+<li><ul>
+<li>主表只有10个字段，行数据约150字节</li>
+</ul>
+</li>
+<li><ul>
+<li>16KB页可存储约100行（原来只能存16行）</li>
+</ul>
+</li>
+<li><ul>
+<li>同样扫描100万行，IO次数减少6倍</li>
+</ul>
+</li>
+</ul>
+<h3 id="代码层面实现"><a href="#代码层面实现" class="headerlink" title="代码层面实现"></a>代码层面实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// MyBatis-Plus实体定义</span></span><br><span class="line"><span class="meta">@Data</span></span><br><span class="line"><span class="meta">@TableName(&quot;t_alarm_main&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmMain</span> &#123;</span><br><span class="line">    <span class="meta">@TableId(type = IdType.ASSIGN_ID)</span></span><br><span class="line">    <span class="keyword">private</span> Long id;</span><br><span class="line">    <span class="keyword">private</span> String alarmCode;</span><br><span class="line">    <span class="keyword">private</span> String deviceId;</span><br><span class="line">    <span class="keyword">private</span> Integer alarmLevel;</span><br><span class="line">    <span class="keyword">private</span> Integer alarmType;</span><br><span class="line">    <span class="keyword">private</span> Integer status;</span><br><span class="line">    <span class="keyword">private</span> LocalDateTime alarmTime;</span><br><span class="line">    <span class="keyword">private</span> String areaCode;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@TableField(exist = false)</span></span><br><span class="line">    <span class="keyword">private</span> AlarmDetail detail;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@TableField(exist = false)</span></span><br><span class="line">    <span class="keyword">private</span> AlarmExt ext;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 查询时按需关联</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmQueryService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmMainMapper alarmMainMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmDetailMapper detailMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmExtMapper extMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 列表查询：只查主表</span></span><br><span class="line">    <span class="keyword">public</span> PageResult&lt;AlarmMainVO&gt; <span class="title function_">list</span><span class="params">(AlarmQueryDTO query)</span> &#123;</span><br><span class="line">        Page&lt;AlarmMain&gt; page = alarmMainMapper.selectPage(</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">Page</span>&lt;&gt;(query.getPageNum(), query.getPageSize()),</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">LambdaQueryWrapper</span>&lt;AlarmMain&gt;()</span><br><span class="line">                .eq(query.getAreaCode() != <span class="literal">null</span>, AlarmMain::getAreaCode, query.getAreaCode())</span><br><span class="line">                .eq(query.getAlarmLevel() != <span class="literal">null</span>, AlarmMain::getAlarmLevel, query.getAlarmLevel())</span><br><span class="line">                .ge(query.getStartTime() != <span class="literal">null</span>, AlarmMain::getAlarmTime, query.getStartTime())</span><br><span class="line">                .orderByDesc(AlarmMain::getAlarmTime)</span><br><span class="line">        );</span><br><span class="line">        <span class="keyword">return</span> PageResult.of(page);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 详情查询：关联详情表</span></span><br><span class="line">    <span class="keyword">public</span> AlarmDetailVO <span class="title function_">getDetail</span><span class="params">(Long alarmId)</span> &#123;</span><br><span class="line">        <span class="type">AlarmMain</span> <span class="variable">main</span> <span class="operator">=</span> alarmMainMapper.selectById(alarmId);</span><br><span class="line">        <span class="type">AlarmDetail</span> <span class="variable">detail</span> <span class="operator">=</span> detailMapper.selectByAlarmId(alarmId);</span><br><span class="line">        <span class="keyword">return</span> AlarmDetailVO.build(main, detail);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 完整查询：关联所有表</span></span><br><span class="line">    <span class="keyword">public</span> AlarmFullVO <span class="title function_">getFull</span><span class="params">(Long alarmId)</span> &#123;</span><br><span class="line">        <span class="type">AlarmMain</span> <span class="variable">main</span> <span class="operator">=</span> alarmMainMapper.selectById(alarmId);</span><br><span class="line">        <span class="type">AlarmDetail</span> <span class="variable">detail</span> <span class="operator">=</span> detailMapper.selectByAlarmId(alarmId);</span><br><span class="line">        <span class="type">AlarmExt</span> <span class="variable">ext</span> <span class="operator">=</span> extMapper.selectByAlarmId(alarmId);</span><br><span class="line">        <span class="keyword">return</span> AlarmFullVO.build(main, detail, ext);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="冷热分离"><a href="#冷热分离" class="headerlink" title="冷热分离"></a>冷热分离</h2><h3 id="按时间分离策略"><a href="#按时间分离策略" class="headerlink" title="按时间分离策略"></a>按时间分离策略</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">热数据：最近3个月的报警（频繁查询）</span><br><span class="line">冷数据：3个月前的报警（偶尔查询）</span><br><span class="line"></span><br><span class="line">方案1：按月分表</span><br><span class="line">  t_alarm_main_202301, t_alarm_main_202302, ...</span><br><span class="line"></span><br><span class="line">方案2：热表+冷表</span><br><span class="line">  t_alarm_main（热表，最近3个月）</span><br><span class="line">  t_alarm_main_history（冷表，3个月前）</span><br><span class="line"></span><br><span class="line">实际项目选择方案2：</span><br><span class="line">- 热表数据量可控（约500万行/3个月）</span><br><span class="line">- 冷表可以放在不同存储介质</span><br><span class="line">- 查询逻辑相对简单</span><br></pre></td></tr></table></figure>
+
+<h3 id="冷热分离实现"><a href="#冷热分离实现" class="headerlink" title="冷热分离实现"></a>冷热分离实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmQueryService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmMainMapper alarmMainMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmHistoryMapper historyMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 查询时自动路由</span></span><br><span class="line">    <span class="keyword">public</span> AlarmMain <span class="title function_">getById</span><span class="params">(Long alarmId)</span> &#123;</span><br><span class="line">        <span class="comment">// 先查热表</span></span><br><span class="line">        <span class="type">AlarmMain</span> <span class="variable">alarm</span> <span class="operator">=</span> alarmMainMapper.selectById(alarmId);</span><br><span class="line">        <span class="keyword">if</span> (alarm != <span class="literal">null</span>) <span class="keyword">return</span> alarm;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 热表没有 -&gt; 查冷表</span></span><br><span class="line">        <span class="keyword">return</span> historyMapper.selectById(alarmId);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 带时间范围查询</span></span><br><span class="line">    <span class="keyword">public</span> List&lt;AlarmMain&gt; <span class="title function_">getByTimeRange</span><span class="params">(LocalDateTime start, LocalDateTime end)</span> &#123;</span><br><span class="line">        <span class="type">LocalDateTime</span> <span class="variable">threeMonthsAgo</span> <span class="operator">=</span> LocalDateTime.now().minusMonths(<span class="number">3</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (end.isBefore(threeMonthsAgo)) &#123;</span><br><span class="line">            <span class="comment">// 全部在冷表</span></span><br><span class="line">            <span class="keyword">return</span> historyMapper.selectByTimeRange(start, end);</span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (start.isAfter(threeMonthsAgo)) &#123;</span><br><span class="line">            <span class="comment">// 全部在热表</span></span><br><span class="line">            <span class="keyword">return</span> alarmMainMapper.selectByTimeRange(start, end);</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">// 跨冷热表</span></span><br><span class="line">            List&lt;AlarmMain&gt; coldList = historyMapper.selectByTimeRange(start, threeMonthsAgo);</span><br><span class="line">            List&lt;AlarmMain&gt; hotList = alarmMainMapper.selectByTimeRange(threeMonthsAgo, end);</span><br><span class="line">            coldList.addAll(hotList);</span><br><span class="line">            <span class="keyword">return</span> coldList;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="数据归档"><a href="#数据归档" class="headerlink" title="数据归档"></a>数据归档</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmArchiveTask</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmMainMapper alarmMainMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmHistoryMapper historyMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 每天凌晨2点归档3个月前的数据</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 2 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">archive</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">LocalDateTime</span> <span class="variable">threshold</span> <span class="operator">=</span> LocalDateTime.now().minusMonths(<span class="number">3</span>);</span><br><span class="line">        <span class="type">int</span> <span class="variable">batchSize</span> <span class="operator">=</span> <span class="number">1000</span>;</span><br><span class="line">        <span class="type">int</span> <span class="variable">totalArchived</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">            <span class="comment">// 查询需要归档的数据</span></span><br><span class="line">            List&lt;AlarmMain&gt; alarms = alarmMainMapper.selectOldAlarms(threshold, batchSize);</span><br><span class="line">            <span class="keyword">if</span> (alarms.isEmpty()) <span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 写入冷表</span></span><br><span class="line">            historyMapper.batchInsert(alarms);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 删除热表数据</span></span><br><span class="line">            List&lt;Long&gt; ids = alarms.stream().map(AlarmMain::getId).collect(Collectors.toList());</span><br><span class="line">            alarmMainMapper.deleteBatchIds(ids);</span><br><span class="line"></span><br><span class="line">            totalArchived += alarms.size();</span><br><span class="line">            log.info(<span class="string">&quot;归档进度: &#123;&#125;&quot;</span>, totalArchived);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 控制归档速度，避免影响业务</span></span><br><span class="line">            <span class="keyword">try</span> &#123; Thread.sleep(<span class="number">100</span>); &#125; <span class="keyword">catch</span> (InterruptedException e) &#123; <span class="keyword">break</span>; &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        log.info(<span class="string">&quot;归档完成，共归档&#123;&#125;条数据&quot;</span>, totalArchived);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="大字段优化"><a href="#大字段优化" class="headerlink" title="大字段优化"></a>大字段优化</h2><h3 id="TEXT-BLOB字段拆分"><a href="#TEXT-BLOB字段拆分" class="headerlink" title="TEXT&#x2F;BLOB字段拆分"></a>TEXT&#x2F;BLOB字段拆分</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 拆分前：报警描述在主表</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_device_alarm (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    alarm_desc TEXT,           <span class="comment">-- 大字段</span></span><br><span class="line">    alarm_snapshot MEDIUMBLOB, <span class="comment">-- 大字段</span></span><br><span class="line">    <span class="comment">-- ... 其他字段</span></span><br><span class="line">);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 问题：</span></span><br><span class="line"><span class="comment">-- 1. InnoDB一行最大65535字节，TEXT可能溢出页</span></span><br><span class="line"><span class="comment">-- 2. 查询非TEXT字段时也可能加载TEXT数据</span></span><br><span class="line"><span class="comment">-- 3. 索引效率低</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 拆分后：大字段独立表</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_main (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    alarm_level TINYINT,</span><br><span class="line">    alarm_time DATETIME,</span><br><span class="line">    <span class="comment">-- 不包含TEXT/BLOB字段</span></span><br><span class="line">    INDEX idx_device_id (device_id)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB;</span><br><span class="line"></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_content (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    alarm_id <span class="type">BIGINT</span> <span class="keyword">NOT NULL</span>,</span><br><span class="line">    alarm_desc TEXT,</span><br><span class="line">    alarm_snapshot MEDIUMBLOB,</span><br><span class="line">    INDEX idx_alarm_id (alarm_id)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB;</span><br></pre></td></tr></table></figure>
+
+<h3 id="JSON字段优化"><a href="#JSON字段优化" class="headerlink" title="JSON字段优化"></a>JSON字段优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- MySQL 5.7+ JSON字段支持</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_main (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    alarm_code <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    alarm_level TINYINT,</span><br><span class="line">    <span class="comment">-- 经常查询的字段单独建列</span></span><br><span class="line">    status TINYINT,</span><br><span class="line">    area_code <span class="type">VARCHAR</span>(<span class="number">10</span>),</span><br><span class="line">    <span class="comment">-- 不常查询的扩展信息用JSON</span></span><br><span class="line">    extra JSON COMMENT <span class="string">&#x27;扩展信息: &#123;&quot;source&quot;:&quot;web&quot;,&quot;priority&quot;:2&#125;&#x27;</span>,</span><br><span class="line">    <span class="comment">-- JSON字段可以建虚拟列+索引</span></span><br><span class="line">    priority TINYINT GENERATED ALWAYS <span class="keyword">AS</span> (JSON_UNQUOTE(JSON_EXTRACT(extra, <span class="string">&#x27;$.priority&#x27;</span>))) VIRTUAL,</span><br><span class="line">    INDEX idx_priority (priority)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查询JSON字段</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_alarm_main <span class="keyword">WHERE</span> extra<span class="operator">-</span><span class="operator">&gt;&gt;</span><span class="string">&#x27;$.source&#x27;</span> <span class="operator">=</span> <span class="string">&#x27;web&#x27;</span>;</span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_alarm_main <span class="keyword">WHERE</span> priority <span class="operator">=</span> <span class="number">2</span>;  <span class="comment">-- 走虚拟列索引</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="索引优化"><a href="#索引优化" class="headerlink" title="索引优化"></a>索引优化</h2><h3 id="减少无用索引"><a href="#减少无用索引" class="headerlink" title="减少无用索引"></a>减少无用索引</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 查看索引使用情况</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> sys.schema_unused_indexes</span><br><span class="line"><span class="keyword">WHERE</span> object_schema <span class="operator">=</span> <span class="string">&#x27;mine_db&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看冗余索引</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> sys.schema_redundant_indexes</span><br><span class="line"><span class="keyword">WHERE</span> table_schema <span class="operator">=</span> <span class="string">&#x27;mine_db&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 删除无用索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_alarm_main <span class="keyword">DROP</span> INDEX idx_unused;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 实际项目发现的冗余索引：</span></span><br><span class="line"><span class="comment">-- INDEX idx_device_id (device_id)  -- 被联合索引包含</span></span><br><span class="line"><span class="comment">-- INDEX idx_device_level (device_id, alarm_level)  -- 保留</span></span><br><span class="line"><span class="comment">-- 只需保留联合索引</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="联合索引替代多个单列索引"><a href="#联合索引替代多个单列索引" class="headerlink" title="联合索引替代多个单列索引"></a>联合索引替代多个单列索引</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 多个单列索引（效率低）</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_device_id <span class="keyword">ON</span> t_alarm_main(device_id);</span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_status <span class="keyword">ON</span> t_alarm_main(status);</span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_alarm_time <span class="keyword">ON</span> t_alarm_main(alarm_time);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 联合索引（根据查询频率设计）</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_device_status_time <span class="keyword">ON</span> t_alarm_main(device_id, status, alarm_time);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 实际项目常用查询模式：</span></span><br><span class="line"><span class="comment">-- 1. 按设备ID+状态查询 -&gt; idx_device_status_time</span></span><br><span class="line"><span class="comment">-- 2. 按区域+级别查询   -&gt; idx_area_level</span></span><br><span class="line"><span class="comment">-- 3. 按时间范围查询     -&gt; idx_alarm_time</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-大表如何优化？"><a href="#1-大表如何优化？" class="headerlink" title="1. 大表如何优化？"></a>1. 大表如何优化？</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">垂直拆分（字段拆分）、冷热分离（时间维度）、分库分表（水平拆分）</span><br><span class="line">优先冷热分离和字段拆分，最后才考虑分库分表</span><br><span class="line"></span><br><span class="line">优化优先级：</span><br><span class="line">1. 优化SQL和索引  -&gt; 成本最低</span><br><span class="line">2. 字段拆分       -&gt; 解决行数据过大</span><br><span class="line">3. 冷热分离       -&gt; 解决数据量过大</span><br><span class="line">4. 读写分离       -&gt; 读多写少场景</span><br><span class="line">5. 分库分表       -&gt; 最后手段</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-冷热分离怎么实现？"><a href="#2-冷热分离怎么实现？" class="headerlink" title="2. 冷热分离怎么实现？"></a>2. 冷热分离怎么实现？</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">按时间维度，热数据放在线上表，冷数据归档到历史表</span><br><span class="line">查询时根据时间范围路由到不同表</span><br><span class="line">定时任务归档过期数据</span><br><span class="line"></span><br><span class="line">实现要点：</span><br><span class="line">1. 归档任务分批执行，避免长事务</span><br><span class="line">2. 跨冷热表查询需要合并结果</span><br><span class="line">3. 冷表可以放在不同存储介质（降低成本）</span><br><span class="line">4. 归档前后要验证数据一致性</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-TEXT字段如何优化？"><a href="#3-TEXT字段如何优化？" class="headerlink" title="3. TEXT字段如何优化？"></a>3. TEXT字段如何优化？</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">拆分到独立表，主表只存常用字段</span><br><span class="line">需要时通过关联查询获取</span><br><span class="line"></span><br><span class="line">优化步骤：</span><br><span class="line">1. 创建独立的大字段表</span><br><span class="line">2. 数据迁移（INSERT INTO ... SELECT）</span><br><span class="line">3. 验证数据一致性</span><br><span class="line">4. 应用层修改查询逻辑</span><br><span class="line">5. 删除原表大字段（ALTER TABLE DROP COLUMN）</span><br></pre></td></tr></table></figure>
+
+
+<h2 id="进阶内容补充"><a href="#进阶内容补充" class="headerlink" title="进阶内容补充"></a>进阶内容补充</h2><h3 id="冷热数据存储架构"><a href="#冷热数据存储架构" class="headerlink" title="冷热数据存储架构"></a>冷热数据存储架构</h3><p><strong>冷热数据存储架构设计：</strong></p>
+<ul>
+<li>+——————+       +——————+</li>
+<li>热数据存储       |       | 冷数据存储</li>
+<li>(SSD&#x2F;内存)       |       | (HDD&#x2F;对象存储)</li>
+<li>|       |</li>
+<li>+————-+ |       | +————-+</li>
+<li>| 最近3个月   | |       | | 3个月前     |</li>
+<li>| t_alarm_main| |       | | t_alarm_    |</li>
+<li>| 约500万行   | |       | | history     |</li>
+<li>| 查询频繁    | |       | | 约4500万行  |</li>
+<li>+————-+ |       | | 查询偶尔    |</li>
+<li>+——————+       | +————-+  |</li>
+<li>存储成本对比：</li>
+<li>SSD: 约2000元&#x2F;TB&#x2F;年</li>
+<li>HDD: 约500元&#x2F;TB&#x2F;年</li>
+<li>对象存储: 约100元&#x2F;TB&#x2F;年</li>
+<li>实际项目节省：</li>
+<li>4500万行冷数据从SSD迁移到HDD</li>
+<li>存储成本降低约75%</li>
+</ul>
+<h3 id="冷数据压缩存储"><a href="#冷数据压缩存储" class="headerlink" title="冷数据压缩存储"></a>冷数据压缩存储</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 冷表使用压缩行格式</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_history (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    alarm_code <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    alarm_level TINYINT,</span><br><span class="line">    alarm_time DATETIME,</span><br><span class="line">    status TINYINT,</span><br><span class="line">    <span class="comment">-- ... 其他字段</span></span><br><span class="line">    KEY idx_device_id (device_id),</span><br><span class="line">    KEY idx_alarm_time (alarm_time)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB ROW_FORMAT<span class="operator">=</span>COMPRESSED KEY_BLOCK_SIZE<span class="operator">=</span><span class="number">8</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 压缩效果：</span></span><br><span class="line"><span class="comment">-- 原始大小：约15GB</span></span><br><span class="line"><span class="comment">-- 压缩后：约6GB</span></span><br><span class="line"><span class="comment">-- 压缩比：约60%</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="归档任务监控"><a href="#归档任务监控" class="headerlink" title="归档任务监控"></a>归档任务监控</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ArchiveMonitor</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmMainMapper alarmMainMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmHistoryMapper historyMapper;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 3 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">checkArchiveConsistency</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 检查热表和冷表数据一致性</span></span><br><span class="line">        <span class="type">long</span> <span class="variable">hotCount</span> <span class="operator">=</span> alarmMainMapper.selectCount(</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">LambdaQueryWrapper</span>&lt;AlarmMain&gt;()</span><br><span class="line">                .lt(AlarmMain::getAlarmTime, LocalDateTime.now().minusMonths(<span class="number">3</span>))</span><br><span class="line">        );</span><br><span class="line">        <span class="keyword">if</span> (hotCount &gt; <span class="number">0</span>) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;热表存在&#123;&#125;条过期数据未归档&quot;</span>, hotCount);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="学习资源推荐"><a href="#学习资源推荐" class="headerlink" title="学习资源推荐"></a>学习资源推荐</h2><table>
+<thead>
+<tr>
+<th>资源</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL官方文档</td>
+<td>文档</td>
+<td>最权威的参考</td>
+</tr>
+<tr>
+<td>《高性能MySQL》</td>
+<td>书籍</td>
+<td>系统化学习</td>
+</tr>
+<tr>
+<td>《MySQL技术内幕:InnoDB存储引擎》</td>
+<td>书籍</td>
+<td>深入原理</td>
+</tr>
+<tr>
+<td>阿里云RDS最佳实践</td>
+<td>实战</td>
+<td>阿里云DBA经验</td>
+</tr>
+<tr>
+<td>美团技术博客</td>
+<td>实战</td>
+<td>互联网大厂实践</td>
+</tr>
+</tbody></table>
+<h3 id="学习路径"><a href="#学习路径" class="headerlink" title="学习路径"></a>学习路径</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">阶段1：基础概念理解（1-2周）</span><br><span class="line">  -- 重点：核心概念、基本操作</span><br><span class="line"></span><br><span class="line">阶段2：实战优化练习（2-3周）</span><br><span class="line">  -- 重点：结合慢查询日志，逐一优化</span><br><span class="line"></span><br><span class="line">阶段3：深入底层原理（持续）</span><br><span class="line">  -- 重点：源码分析、底层实现</span><br><span class="line"></span><br><span class="line">阶段4：架构设计提升（持续）</span><br><span class="line">  -- 重点：高可用、分库分表、读写分离</span><br></pre></td></tr></table></figure>
+
+<h2 id="冷热数据存储架构-1"><a href="#冷热数据存储架构-1" class="headerlink" title="冷热数据存储架构"></a>冷热数据存储架构</h2><p><strong>冷热数据存储架构设计：</strong></p>
+<ul>
+<li>+——————+       +——————+</li>
+<li>热数据存储       |       | 冷数据存储</li>
+<li>(SSD&#x2F;内存)       |       | (HDD&#x2F;对象存储)</li>
+<li>|       |</li>
+<li>+————-+ |       | +————-+</li>
+<li>| 最近3个月   | |       | | 3个月前     |</li>
+<li>| t_alarm_main| |       | | t_alarm_    |</li>
+<li>| 约500万行   | |       | | history     |</li>
+<li>| 查询频繁    | |       | | 约4500万行  |</li>
+<li>+————-+ |       | | 查询偶尔    |</li>
+<li>+——————+       | +————-+  |</li>
+<li>存储成本对比：</li>
+<li>SSD: 约2000元&#x2F;TB&#x2F;年</li>
+<li>HDD: 约500元&#x2F;TB&#x2F;年</li>
+<li>对象存储: 约100元&#x2F;TB&#x2F;年</li>
+<li>实际项目节省：</li>
+<li>4500万行冷数据从SSD迁移到HDD</li>
+<li>存储成本降低约75%</li>
+</ul>
+<h3 id="冷数据压缩存储-1"><a href="#冷数据压缩存储-1" class="headerlink" title="冷数据压缩存储"></a>冷数据压缩存储</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 冷表使用压缩行格式</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_history (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    alarm_code <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    alarm_level TINYINT,</span><br><span class="line">    alarm_time DATETIME,</span><br><span class="line">    status TINYINT,</span><br><span class="line">    KEY idx_device_id (device_id),</span><br><span class="line">    KEY idx_alarm_time (alarm_time)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB ROW_FORMAT<span class="operator">=</span>COMPRESSED KEY_BLOCK_SIZE<span class="operator">=</span><span class="number">8</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 压缩效果：</span></span><br><span class="line"><span class="comment">-- 原始大小：约15GB</span></span><br><span class="line"><span class="comment">-- 压缩后：约6GB</span></span><br><span class="line"><span class="comment">-- 压缩比：约60%</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="归档任务监控-1"><a href="#归档任务监控-1" class="headerlink" title="归档任务监控"></a>归档任务监控</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ArchiveMonitor</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmMainMapper alarmMainMapper;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 3 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">checkArchiveConsistency</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">hotCount</span> <span class="operator">=</span> alarmMainMapper.selectCount(</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">LambdaQueryWrapper</span>&lt;AlarmMain&gt;()</span><br><span class="line">                .lt(AlarmMain::getAlarmTime, LocalDateTime.now().minusMonths(<span class="number">3</span>))</span><br><span class="line">        );</span><br><span class="line">        <span class="keyword">if</span> (hotCount &gt; <span class="number">0</span>) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;热表存在&#123;&#125;条过期数据未归档&quot;</span>, hotCount);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+<h2 id="大字段优化进阶"><a href="#大字段优化进阶" class="headerlink" title="大字段优化进阶"></a>大字段优化进阶</h2><h3 id="JSON字段深度优化"><a href="#JSON字段深度优化" class="headerlink" title="JSON字段深度优化"></a>JSON字段深度优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 场景：设备运行参数存储为JSON</span></span><br><span class="line"><span class="comment">-- 原始设计：直接存JSON，无法索引</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_device_runtime (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    runtime_params JSON COMMENT <span class="string">&#x27;运行参数&#x27;</span></span><br><span class="line">);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化1：提取高频查询字段为虚拟列</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_runtime <span class="keyword">ADD</span> <span class="keyword">COLUMN</span></span><br><span class="line">    temperature <span class="type">DECIMAL</span>(<span class="number">6</span>,<span class="number">2</span>) GENERATED ALWAYS <span class="keyword">AS</span></span><br><span class="line">    (JSON_UNQUOTE(JSON_EXTRACT(runtime_params, <span class="string">&#x27;$.temperature&#x27;</span>))) VIRTUAL;</span><br><span class="line"></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_runtime <span class="keyword">ADD</span> <span class="keyword">COLUMN</span></span><br><span class="line">    vibration <span class="type">DECIMAL</span>(<span class="number">8</span>,<span class="number">4</span>) GENERATED ALWAYS <span class="keyword">AS</span></span><br><span class="line">    (JSON_UNQUOTE(JSON_EXTRACT(runtime_params, <span class="string">&#x27;$.vibration&#x27;</span>))) VIRTUAL;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 为虚拟列创建索引</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_temperature <span class="keyword">ON</span> t_device_runtime(temperature);</span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_vibration <span class="keyword">ON</span> t_device_runtime(vibration);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化2：MySQL 8.0+ 多值索引</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_tags <span class="keyword">ON</span> t_device_runtime(</span><br><span class="line">    (<span class="built_in">CAST</span>(runtime_params<span class="operator">-</span><span class="operator">&gt;</span><span class="string">&#x27;$.tags&#x27;</span> <span class="keyword">AS</span> <span class="type">CHAR</span>(<span class="number">32</span>) <span class="keyword">ARRAY</span>))</span><br><span class="line">);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查询优化</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_device_runtime <span class="keyword">WHERE</span> temperature <span class="operator">&gt;</span> <span class="number">80</span>;</span><br><span class="line"><span class="comment">-- 走虚拟列索引，不再全表扫描JSON</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="大字段压缩存储"><a href="#大字段压缩存储" class="headerlink" title="大字段压缩存储"></a>大字段压缩存储</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 传感器原始数据压缩存储</span></span><br><span class="line"><span class="comment">-- 方案1：表级压缩</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_sensor_data_archive (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    device_id <span class="type">VARCHAR</span>(<span class="number">32</span>),</span><br><span class="line">    sensor_value <span class="type">DECIMAL</span>(<span class="number">12</span>,<span class="number">4</span>),</span><br><span class="line">    collect_time DATETIME,</span><br><span class="line">    raw_data <span class="type">BLOB</span> COMMENT <span class="string">&#x27;原始二进制数据&#x27;</span></span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB ROW_FORMAT<span class="operator">=</span>COMPRESSED KEY_BLOCK_SIZE<span class="operator">=</span><span class="number">4</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 方案2：应用层压缩</span></span><br><span class="line"><span class="comment">-- Java代码压缩后存储</span></span><br><span class="line">public class DataCompressor &#123;</span><br><span class="line">    public <span class="keyword">static</span> byte[] compress(String data) throws IOException &#123;</span><br><span class="line">        ByteArrayOutputStream bos <span class="operator">=</span> <span class="keyword">new</span> ByteArrayOutputStream();</span><br><span class="line">        try (GZIPOutputStream gzip <span class="operator">=</span> <span class="keyword">new</span> GZIPOutputStream(bos)) &#123;</span><br><span class="line">            gzip.write(data.getBytes(StandardCharsets.UTF_8));</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> bos.toByteArray();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    public <span class="keyword">static</span> String decompress(byte[] compressed) throws IOException &#123;</span><br><span class="line">        ByteArrayInputStream bis <span class="operator">=</span> <span class="keyword">new</span> ByteArrayInputStream(compressed);</span><br><span class="line">        try (GZIPInputStream gzip <span class="operator">=</span> <span class="keyword">new</span> GZIPInputStream(bis)) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="keyword">new</span> String(gzip.readAllBytes(), StandardCharsets.UTF_8);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="数据生命周期管理"><a href="#数据生命周期管理" class="headerlink" title="数据生命周期管理"></a>数据生命周期管理</h2><p><strong>实际项目数据保留策略：</strong></p>
+<ul>
+<li>数据类型               | 热数据 | 温数据 | 冷数据</li>
+<li>设备报警               | 3个月  | 1年    | 3年</li>
+<li>人员轨迹               | 1个月  | 6个月  | 2年</li>
+<li>传感器数据             | 1周    | 3个月  | 1年</li>
+<li>设备巡检               | 6个月  | 2年    | 5年</li>
+<li>瓦斯监测               | 3个月  | 1年    | 5年</li>
+<li>通风数据               | 3个月  | 1年    | 3年</li>
+<li>供电负荷               | 3个月  | 2年    | 5年</li>
+<li>水文数据               | 6个月  | 3年    | 10年</li>
+<li>存储介质选择：</li>
+<li><ul>
+<li>热数据：SSD（高性能）</li>
+</ul>
+</li>
+<li><ul>
+<li>温数据：HDD（性价比）</li>
+</ul>
+</li>
+<li><ul>
+<li>冷数据：对象存储（低成本）</li>
+</ul>
+</li>
+<li>归档策略：</li>
+<li><ul>
+<li>每天凌晨2点自动归档</li>
+</ul>
+</li>
+<li><ul>
+<li>分批执行，每批1000条</li>
+</ul>
+</li>
+<li><ul>
+<li>归档后验证数据一致性</li>
+</ul>
+</li>
+<li><ul>
+<li>归档日志持久化存储</li>
+</ul>
+</li>
+</ul>
+<h2 id="学习资源推荐-1"><a href="#学习资源推荐-1" class="headerlink" title="学习资源推荐"></a>学习资源推荐</h2><table>
+<thead>
+<tr>
+<th>资源</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL官方文档</td>
+<td>文档</td>
+<td>最权威的参考</td>
+</tr>
+<tr>
+<td>《高性能MySQL》</td>
+<td>书籍</td>
+<td>第4章Schema优化</td>
+</tr>
+<tr>
+<td>《MySQL技术内幕:InnoDB存储引擎》</td>
+<td>书籍</td>
+<td>深入存储引擎</td>
+</tr>
+<tr>
+<td>阿里云RDS最佳实践</td>
+<td>实战</td>
+<td>大表优化经验</td>
+</tr>
+</tbody></table>
+<h3 id="学习路径-1"><a href="#学习路径-1" class="headerlink" title="学习路径"></a>学习路径</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">阶段1：理解大表问题的根因（1周）</span><br><span class="line">  -- 重点：行数据大小、页结构、IO成本</span><br><span class="line"></span><br><span class="line">阶段2：掌握字段拆分技术（2周）</span><br><span class="line">  -- 重点：垂直拆分、大字段处理、JSON优化</span><br><span class="line"></span><br><span class="line">阶段3：掌握冷热分离技术（2周）</span><br><span class="line">  -- 重点：归档策略、压缩存储、生命周期管理</span><br><span class="line"></span><br><span class="line">阶段4：综合实践（持续）</span><br><span class="line">  -- 重点：结合业务场景设计优化方案</span><br></pre></td></tr></table></figure>
+
+<h2 id="字段拆分的迁移方案"><a href="#字段拆分的迁移方案" class="headerlink" title="字段拆分的迁移方案"></a>字段拆分的迁移方案</h2><h3 id="在线迁移步骤"><a href="#在线迁移步骤" class="headerlink" title="在线迁移步骤"></a>在线迁移步骤</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">字段拆分在线迁移流程（零停机）：</span><br><span class="line"></span><br><span class="line">  步骤1：创建新表</span><br><span class="line">  +------------------+      +------------------+</span><br><span class="line">  | t_alarm_main     |      | t_alarm_detail   |</span><br><span class="line">  | (新建，空表)     |      | (新建，空表)     |</span><br><span class="line">  +------------------+      +------------------+</span><br><span class="line"></span><br><span class="line">  步骤2：双写阶段</span><br><span class="line">  +--------+     +------------------+</span><br><span class="line">  | 应用   |----&gt;| t_device_alarm   |  (原表，继续写)</span><br><span class="line">  |        |----&gt;| t_alarm_main     |  (新表，同时写)</span><br><span class="line">  |        |----&gt;| t_alarm_detail   |  (新表，同时写)</span><br><span class="line">  +--------+     +------------------+</span><br><span class="line"></span><br><span class="line">  步骤3：数据迁移</span><br><span class="line">  +------------------+      +------------------+</span><br><span class="line">  | t_device_alarm   |-----&gt;| t_alarm_main     |</span><br><span class="line">  | (原表数据)       | 拷贝 | t_alarm_detail   |</span><br><span class="line">  +------------------+      +------------------+</span><br><span class="line"></span><br><span class="line">  步骤4：切读</span><br><span class="line">  +--------+     +------------------+</span><br><span class="line">  | 应用   |----&gt;| t_alarm_main     |  (新表，读)</span><br><span class="line">  |        |----&gt;| t_alarm_detail   |  (新表，读)</span><br><span class="line">  |        |----&gt;| t_device_alarm   |  (原表，写)</span><br><span class="line">  +--------+     +------------------+</span><br><span class="line"></span><br><span class="line">  步骤5：切写+删除原表</span><br><span class="line">  +--------+     +------------------+</span><br><span class="line">  | 应用   |----&gt;| t_alarm_main     |  (新表，读写)</span><br><span class="line">  |        |----&gt;| t_alarm_detail   |  (新表，读写)</span><br><span class="line">  +--------+     +------------------+</span><br></pre></td></tr></table></figure>
+
+<h3 id="数据迁移脚本"><a href="#数据迁移脚本" class="headerlink" title="数据迁移脚本"></a>数据迁移脚本</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmMigrationTask</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> DeviceAlarmMapper oldMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmMainMapper mainMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmDetailMapper detailMapper;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 3 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">migrate</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">batchSize</span> <span class="operator">=</span> <span class="number">500</span>;</span><br><span class="line">        <span class="type">Long</span> <span class="variable">lastId</span> <span class="operator">=</span> <span class="number">0L</span>;</span><br><span class="line">        <span class="type">int</span> <span class="variable">totalMigrated</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">            List&lt;DeviceAlarm&gt; oldRecords = oldMapper.selectBatch(lastId, batchSize);</span><br><span class="line">            <span class="keyword">if</span> (oldRecords.isEmpty()) <span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">            <span class="keyword">for</span> (DeviceAlarm old : oldRecords) &#123;</span><br><span class="line">                <span class="comment">// 转换为主表数据</span></span><br><span class="line">                <span class="type">AlarmMain</span> <span class="variable">main</span> <span class="operator">=</span> convertToMain(old);</span><br><span class="line">                <span class="comment">// 转换为详情表数据</span></span><br><span class="line">                <span class="type">AlarmDetail</span> <span class="variable">detail</span> <span class="operator">=</span> convertToDetail(old);</span><br><span class="line"></span><br><span class="line">                <span class="comment">// 检查是否已迁移</span></span><br><span class="line">                <span class="keyword">if</span> (mainMapper.selectById(old.getId()) == <span class="literal">null</span>) &#123;</span><br><span class="line">                    mainMapper.insert(main);</span><br><span class="line">                    detailMapper.insert(detail);</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            lastId = oldRecords.get(oldRecords.size() - <span class="number">1</span>).getId();</span><br><span class="line">            totalMigrated += oldRecords.size();</span><br><span class="line">            log.info(<span class="string">&quot;迁移进度: &#123;&#125;, lastId: &#123;&#125;&quot;</span>, totalMigrated, lastId);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        log.info(<span class="string">&quot;迁移完成，共迁移&#123;&#125;条数据&quot;</span>, totalMigrated);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="冷热分离的查询路由"><a href="#冷热分离的查询路由" class="headerlink" title="冷热分离的查询路由"></a>冷热分离的查询路由</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlarmRouter</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmMainMapper hotMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmHistoryMapper coldMapper;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">LocalDateTime</span> <span class="variable">HOT_THRESHOLD</span> <span class="operator">=</span></span><br><span class="line">        LocalDateTime.now().minusMonths(<span class="number">3</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> List&lt;AlarmMain&gt; <span class="title function_">query</span><span class="params">(AlarmQueryDTO query)</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (query.getStartTime() != <span class="literal">null</span> &amp;&amp; query.getEndTime() != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">if</span> (query.getEndTime().isBefore(HOT_THRESHOLD)) &#123;</span><br><span class="line">                <span class="comment">// 全部冷数据</span></span><br><span class="line">                <span class="keyword">return</span> coldMapper.selectByCondition(query);</span><br><span class="line">            &#125; <span class="keyword">else</span> <span class="keyword">if</span> (query.getStartTime().isAfter(HOT_THRESHOLD)) &#123;</span><br><span class="line">                <span class="comment">// 全部热数据</span></span><br><span class="line">                <span class="keyword">return</span> hotMapper.selectByCondition(query);</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                <span class="comment">// 跨冷热</span></span><br><span class="line">                List&lt;AlarmMain&gt; coldList = coldMapper.selectByCondition(</span><br><span class="line">                    query.withEndTime(HOT_THRESHOLD));</span><br><span class="line">                List&lt;AlarmMain&gt; hotList = hotMapper.selectByCondition(</span><br><span class="line">                    query.withStartTime(HOT_THRESHOLD));</span><br><span class="line">                coldList.addAll(hotList);</span><br><span class="line">                <span class="keyword">return</span> coldList;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 默认查热表</span></span><br><span class="line">        <span class="keyword">return</span> hotMapper.selectByCondition(query);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="分页查询优化"><a href="#分页查询优化" class="headerlink" title="分页查询优化"></a>分页查询优化</h2><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 大表分页查询优化</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化前：深分页慢</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_alarm_main</span><br><span class="line"><span class="keyword">WHERE</span> area_code <span class="operator">=</span> <span class="string">&#x27;A01&#x27;</span> <span class="keyword">AND</span> alarm_level <span class="operator">&gt;=</span> <span class="number">3</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> alarm_time <span class="keyword">DESC</span></span><br><span class="line">LIMIT <span class="number">200000</span>, <span class="number">10</span>;</span><br><span class="line"><span class="comment">-- 扫描200010行</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化后：延迟关联</span></span><br><span class="line"><span class="keyword">SELECT</span> m.<span class="operator">*</span> <span class="keyword">FROM</span> t_alarm_main m</span><br><span class="line"><span class="keyword">INNER</span> <span class="keyword">JOIN</span> (</span><br><span class="line">    <span class="keyword">SELECT</span> id <span class="keyword">FROM</span> t_alarm_main</span><br><span class="line">    <span class="keyword">WHERE</span> area_code <span class="operator">=</span> <span class="string">&#x27;A01&#x27;</span> <span class="keyword">AND</span> alarm_level <span class="operator">&gt;=</span> <span class="number">3</span></span><br><span class="line">    <span class="keyword">ORDER</span> <span class="keyword">BY</span> alarm_time <span class="keyword">DESC</span></span><br><span class="line">    LIMIT <span class="number">200000</span>, <span class="number">10</span></span><br><span class="line">) t <span class="keyword">ON</span> m.id <span class="operator">=</span> t.id;</span><br><span class="line"><span class="comment">-- 子查询走覆盖索引，外层只回表10次</span></span><br></pre></td></tr></table></figure>
+
+
+<h2 id="归档策略对比"><a href="#归档策略对比" class="headerlink" title="归档策略对比"></a>归档策略对比</h2><table>
+<thead>
+<tr>
+<th>策略</th>
+<th>优点</th>
+<th>缺点</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>按时间归档</td>
+<td>简单直观</td>
+<td>跨月查询需合并</td>
+<td>有时间维度的数据</td>
+</tr>
+<tr>
+<td>按状态归档</td>
+<td>业务语义清晰</td>
+<td>状态变更需迁移</td>
+<td>状态明确的数据</td>
+</tr>
+<tr>
+<td>按大小归档</td>
+<td>自动触发</td>
+<td>不考虑业务含义</td>
+<td>日志类数据</td>
+</tr>
+<tr>
+<td>按访问频率</td>
+<td>精确分离</td>
+<td>监控成本高</td>
+<td>访问模式明确的数据</td>
+</tr>
+</tbody></table>
+<h3 id="归档SQL模板"><a href="#归档SQL模板" class="headerlink" title="归档SQL模板"></a>归档SQL模板</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 通用归档SQL模板</span></span><br><span class="line"><span class="comment">-- 步骤1：创建冷表（如不存在）</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> IF <span class="keyword">NOT</span> <span class="keyword">EXISTS</span> t_alarm_history <span class="keyword">LIKE</span> t_alarm_main;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤2：插入冷数据</span></span><br><span class="line"><span class="keyword">INSERT INTO</span> t_alarm_history</span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_alarm_main</span><br><span class="line"><span class="keyword">WHERE</span> alarm_time <span class="operator">&lt;</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">3</span> <span class="keyword">MONTH</span>)</span><br><span class="line"><span class="keyword">AND</span> id <span class="operator">&gt;</span> ?  <span class="comment">-- 从上次归档位置继续</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> id</span><br><span class="line">LIMIT <span class="number">1000</span>;  <span class="comment">-- 分批归档</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤3：验证数据一致性</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_alarm_history</span><br><span class="line"><span class="keyword">WHERE</span> alarm_time <span class="operator">&lt;</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">3</span> <span class="keyword">MONTH</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 步骤4：删除已归档的热数据</span></span><br><span class="line"><span class="keyword">DELETE</span> <span class="keyword">FROM</span> t_alarm_main</span><br><span class="line"><span class="keyword">WHERE</span> alarm_time <span class="operator">&lt;</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">3</span> <span class="keyword">MONTH</span>)</span><br><span class="line">LIMIT <span class="number">1000</span>;  <span class="comment">-- 分批删除</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="冷数据查询优化"><a href="#冷数据查询优化" class="headerlink" title="冷数据查询优化"></a>冷数据查询优化</h2><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 冷表查询优化</span></span><br><span class="line"><span class="comment">-- 1. 冷表也需要合理的索引</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_device_id <span class="keyword">ON</span> t_alarm_history(device_id);</span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_alarm_time <span class="keyword">ON</span> t_alarm_history(alarm_time);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 2. 冷表查询尽量带时间范围</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_alarm_history</span><br><span class="line"><span class="keyword">WHERE</span> alarm_time <span class="keyword">BETWEEN</span> <span class="string">&#x27;2023-01-01&#x27;</span> <span class="keyword">AND</span> <span class="string">&#x27;2023-03-31&#x27;</span></span><br><span class="line">  <span class="keyword">AND</span> device_id <span class="operator">=</span> <span class="string">&#x27;D20230001&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 3. 大范围查询使用分页</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_alarm_history</span><br><span class="line"><span class="keyword">WHERE</span> alarm_time <span class="operator">&gt;=</span> <span class="string">&#x27;2023-01-01&#x27;</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> alarm_time <span class="keyword">DESC</span></span><br><span class="line">LIMIT <span class="number">100</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 4. 冷表统计走汇总表</span></span><br><span class="line"><span class="comment">-- 创建月度统计汇总表</span></span><br><span class="line"><span class="keyword">CREATE TABLE</span> t_alarm_monthly_stats (</span><br><span class="line">    id <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">    stat_month <span class="type">VARCHAR</span>(<span class="number">7</span>) <span class="keyword">NOT NULL</span>,</span><br><span class="line">    area_code <span class="type">VARCHAR</span>(<span class="number">10</span>) <span class="keyword">NOT NULL</span>,</span><br><span class="line">    alarm_level TINYINT <span class="keyword">NOT NULL</span>,</span><br><span class="line">    alarm_count <span class="type">INT</span> <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="number">0</span>,</span><br><span class="line">    <span class="keyword">UNIQUE</span> KEY uk_month_area_level (stat_month, area_code, alarm_level)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB;</span><br></pre></td></tr></table></figure>
+
+<h2 id="总结回顾"><a href="#总结回顾" class="headerlink" title="总结回顾"></a>总结回顾</h2><p>大表优化不一定要分库分表。在实际项目中，核心认知是：<strong>字段拆分解决行数据过大，冷热分离解决数据量过大，两者组合能解决80%的大表问题</strong>——分库分表是最后的手段，冷热分离和字段拆分才是首选方案。通过垂直拆分82字段的报警表为主表+详情表+扩展表，查询性能提升15倍；通过冷热分离将3个月前数据归档，历史查询性能提升16倍；通过压缩存储，磁盘空间节省64%。这些优化的核心原则是：让热数据更小更快，让冷数据更省更稳。</p>
+<h2 id="归档与清理的定时任务设计"><a href="#归档与清理的定时任务设计" class="headerlink" title="归档与清理的定时任务设计"></a>归档与清理的定时任务设计</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="meta">@EnableScheduling</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ArchiveConfig</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmMainMapper alarmMainMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmHistoryMapper alarmHistoryMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmDetailMapper alarmDetailMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AlarmDetailHistoryMapper detailHistoryMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 每天凌晨2点归档主表</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 2 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">archiveMainTable</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">LocalDateTime</span> <span class="variable">threshold</span> <span class="operator">=</span> LocalDateTime.now().minusMonths(<span class="number">3</span>);</span><br><span class="line">        <span class="type">int</span> <span class="variable">batchSize</span> <span class="operator">=</span> <span class="number">500</span>;</span><br><span class="line">        <span class="type">int</span> <span class="variable">totalArchived</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">            List&lt;AlarmMain&gt; records = alarmMainMapper.selectOldRecords(threshold, batchSize);</span><br><span class="line">            <span class="keyword">if</span> (records.isEmpty()) <span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">            alarmHistoryMapper.batchInsert(records);</span><br><span class="line"></span><br><span class="line">            List&lt;Long&gt; ids = records.stream()</span><br><span class="line">                .map(AlarmMain::getId)</span><br><span class="line">                .collect(Collectors.toList());</span><br><span class="line">            alarmMainMapper.deleteBatchIds(ids);</span><br><span class="line"></span><br><span class="line">            totalArchived += records.size();</span><br><span class="line">            log.info(<span class="string">&quot;主表归档进度: &#123;&#125;&quot;</span>, totalArchived);</span><br><span class="line"></span><br><span class="line">            <span class="keyword">try</span> &#123; Thread.sleep(<span class="number">100</span>); &#125; <span class="keyword">catch</span> (InterruptedException e) &#123; <span class="keyword">break</span>; &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        log.info(<span class="string">&quot;主表归档完成，共归档&#123;&#125;条&quot;</span>, totalArchived);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 每天凌晨3点归档详情表</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 3 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">archiveDetailTable</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">LocalDateTime</span> <span class="variable">threshold</span> <span class="operator">=</span> LocalDateTime.now().minusMonths(<span class="number">3</span>);</span><br><span class="line">        <span class="comment">// 类似主表归档逻辑</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 每月1号清理超过保留期的冷数据</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 4 1 * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">purgeExpiredColdData</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">LocalDateTime</span> <span class="variable">expiryDate</span> <span class="operator">=</span> LocalDateTime.now().minusYears(<span class="number">3</span>);</span><br><span class="line">        <span class="type">int</span> <span class="variable">deleted</span> <span class="operator">=</span> alarmHistoryMapper.deleteExpiredData(expiryDate);</span><br><span class="line">        log.info(<span class="string">&quot;清理过期冷数据: &#123;&#125;条&quot;</span>, deleted);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="数据一致性校验"><a href="#数据一致性校验" class="headerlink" title="数据一致性校验"></a>数据一致性校验</h2><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 定期校验热表和冷表数据一致性</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 校验1：检查热表是否有过期数据</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">AS</span> expired_count</span><br><span class="line"><span class="keyword">FROM</span> t_alarm_main</span><br><span class="line"><span class="keyword">WHERE</span> alarm_time <span class="operator">&lt;</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">3</span> <span class="keyword">MONTH</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 校验2：检查冷表数据完整性</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">AS</span> history_count</span><br><span class="line"><span class="keyword">FROM</span> t_alarm_history</span><br><span class="line"><span class="keyword">WHERE</span> alarm_time <span class="operator">&gt;=</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">3</span> <span class="keyword">MONTH</span>)</span><br><span class="line">  <span class="keyword">AND</span> alarm_time <span class="operator">&lt;</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">6</span> <span class="keyword">MONTH</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 校验3：检查主表和详情表关联完整性</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">AS</span> orphan_detail</span><br><span class="line"><span class="keyword">FROM</span> t_alarm_detail d</span><br><span class="line"><span class="keyword">LEFT</span> <span class="keyword">JOIN</span> t_alarm_main m <span class="keyword">ON</span> d.alarm_id <span class="operator">=</span> m.id</span><br><span class="line"><span class="keyword">WHERE</span> m.id <span class="keyword">IS</span> <span class="keyword">NULL</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 校验4：检查归档前后数据量一致</span></span><br><span class="line"><span class="keyword">SELECT</span></span><br><span class="line">    (<span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_alarm_main) <span class="keyword">AS</span> hot_count,</span><br><span class="line">    (<span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_alarm_history) <span class="keyword">AS</span> cold_count,</span><br><span class="line">    (<span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_alarm_main) <span class="operator">+</span> (<span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_alarm_history) <span class="keyword">AS</span> total_count;</span><br></pre></td></tr></table></figure>
+
+<h2 id="扩展阅读"><a href="#扩展阅读" class="headerlink" title="扩展阅读"></a>扩展阅读</h2><table>
+<thead>
+<tr>
+<th>主题</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL分区表</td>
+<td>按时间自动分区管理</td>
+</tr>
+<tr>
+<td>MySQL压缩表</td>
+<td>ROW_FORMAT&#x3D;COMPRESSED详解</td>
+</tr>
+<tr>
+<td>归档到ClickHouse</td>
+<td>OLAP分析场景的冷数据方案</td>
+</tr>
+<tr>
+<td>归档到对象存储</td>
+<td>极低成本的历史数据存储</td>
+</tr>
+<tr>
+<td>TiDB HTAP</td>
+<td>热数据MySQL+冷数据TiDB</td>
+</tr>
+</tbody></table>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/08/13/e45952a73ca0/">MySQL主从复制与读写分离——原理与实战</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/09/17/d17918457053/">Nacos集群部署与数据持久化——生产环境高可用</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/MySQL/" class="tag" aria-label="标签: #MySQL">#MySQL</a>
+            
+                <a href="/tags/%E6%80%A7%E8%83%BD/" class="tag" aria-label="标签: #性能">#性能</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL%E6%B7%B1%E5%BA%A6/" aria-label="分类: MySQL深度">
+                        MySQL深度
+                        <span>(10)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

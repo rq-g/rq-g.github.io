@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MyBatis缓存机制——一级缓存与二级缓存深度剖析 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="MyBatis缓存机制——一级缓存与二级缓存深度剖析">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/02/19/280325b4a328/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言实际项目上线后遇到一个诡异问题：设备状态查询接口，第一次调用返回”在线”，第二次调用却返回”离线”。排查了两个小时，最终发现是MyBatis一级缓存在作怪——同一个SqlSession中，第一次查询缓存了设备状态，中间另一条线程修改了数据库状态，第二次查询命中了缓存返回旧数据。这次事故让我深入研究了MyB">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">MyBatis缓存机制——一级缓存与二级缓存深度剖析</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-02-19T14:05:38.000Z">2023-02-19</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/MyBatis%E6%BA%90%E7%A0%81/">MyBatis源码</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>实际项目上线后遇到一个诡异问题：设备状态查询接口，第一次调用返回”在线”，第二次调用却返回”离线”。排查了两个小时，最终发现是MyBatis一级缓存在作怪——同一个SqlSession中，第一次查询缓存了设备状态，中间另一条线程修改了数据库状态，第二次查询命中了缓存返回旧数据。这次事故让我深入研究了MyBatis的缓存机制，理清了一级缓存和二级缓存的边界和陷阱。</p>
+<p>实际项目有大量实时性要求高的场景：传感器数据秒级刷新、设备状态实时变更、告警信息即时推送。这些场景对数据一致性要求极高，而MyBatis的缓存机制在提升查询性能的同时，也带来了数据不一致的隐患。深入理解缓存源码后，我制定了实际项目的缓存策略：关闭二级缓存，一级缓存scope设为statement，用Redis实现业务级缓存。</p>
+<h2 id="一级缓存（Local-Cache）"><a href="#一级缓存（Local-Cache）" class="headerlink" title="一级缓存（Local Cache）"></a>一级缓存（Local Cache）</h2><h3 id="基本概念"><a href="#基本概念" class="headerlink" title="基本概念"></a>基本概念</h3><p>一级缓存是SqlSession级别的缓存，默认开启，无法关闭（只能缩小scope）。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                   一级缓存工作原理                               │</span><br><span class="line">│                                                               │</span><br><span class="line">│  SqlSession1                    SqlSession2                   │</span><br><span class="line">│  ┌──────────────┐              ┌──────────────┐              │</span><br><span class="line">│  │ Local Cache  │              │ Local Cache  │              │</span><br><span class="line">│  │  ┌────────┐  │              │  ┌────────┐  │              │</span><br><span class="line">│  │  │CacheKey│  │              │  │CacheKey│  │              │</span><br><span class="line">│  │  │→Result │  │              │  │→Result │  │              │</span><br><span class="line">│  │  └────────┘  │              │  └────────┘  │              │</span><br><span class="line">│  └──────┬───────┘              └──────┬───────┘              │</span><br><span class="line">│         ↓                             ↓                      │</span><br><span class="line">│  ┌──────────────┐              ┌──────────────┐              │</span><br><span class="line">│  │   数据库      │              │   数据库      │              │</span><br><span class="line">│  └──────────────┘              └──────────────┘              │</span><br><span class="line">│                                                               │</span><br><span class="line">│  每个SqlSession有独立的一级缓存，互不影响                        │</span><br><span class="line">│  同一个SqlSession中相同查询命中缓存                              │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="缓存结构源码"><a href="#缓存结构源码" class="headerlink" title="缓存结构源码"></a>缓存结构源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BaseExecutor中的本地缓存</span></span><br><span class="line"><span class="keyword">protected</span> PerpetualCache localCache;                <span class="comment">// 查询结果缓存</span></span><br><span class="line"><span class="keyword">protected</span> PerpetualCache localOutputParameterCache; <span class="comment">// 存储过程输出参数缓存</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// PerpetualCache本质是一个HashMap</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">PerpetualCache</span> <span class="keyword">implements</span> <span class="title class_">Cache</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String id;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;Object, Object&gt; cache = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">putObject</span><span class="params">(Object key, Object value)</span> &#123;</span><br><span class="line">        cache.put(key, value);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">getObject</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> cache.get(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">removeObject</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> cache.remove(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">clear</span><span class="params">()</span> &#123;</span><br><span class="line">        cache.clear();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">getSize</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> cache.size();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="CacheKey的生成规则"><a href="#CacheKey的生成规则" class="headerlink" title="CacheKey的生成规则"></a>CacheKey的生成规则</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BaseExecutor.createCacheKey()</span></span><br><span class="line"><span class="keyword">public</span> CacheKey <span class="title function_">createCacheKey</span><span class="params">(MappedStatement ms, Object parameterObject,</span></span><br><span class="line"><span class="params">        RowBounds rowBounds, BoundSql boundSql)</span> &#123;</span><br><span class="line">    <span class="type">CacheKey</span> <span class="variable">cacheKey</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">CacheKey</span>();</span><br><span class="line">    <span class="comment">// 1. MappedStatement的ID（Mapper全限定名+方法名）</span></span><br><span class="line">    cacheKey.update(ms.getId());</span><br><span class="line">    <span class="comment">// 2. RowBounds的偏移量和限制量</span></span><br><span class="line">    cacheKey.update(rowBounds.getOffset());</span><br><span class="line">    cacheKey.update(rowBounds.getLimit());</span><br><span class="line">    <span class="comment">// 3. SQL语句</span></span><br><span class="line">    cacheKey.update(boundSql.getSql());</span><br><span class="line">    <span class="comment">// 4. 参数值</span></span><br><span class="line">    List&lt;ParameterMapping&gt; parameterMappings = boundSql.getParameterMappings();</span><br><span class="line">    <span class="keyword">for</span> (ParameterMapping pm : parameterMappings) &#123;</span><br><span class="line">        <span class="keyword">if</span> (pm.getMode() != ParameterMode.OUT) &#123;</span><br><span class="line">            Object value;</span><br><span class="line">            <span class="type">String</span> <span class="variable">propertyName</span> <span class="operator">=</span> pm.getProperty();</span><br><span class="line">            <span class="keyword">if</span> (boundSql.hasAdditionalParameter(propertyName)) &#123;</span><br><span class="line">                value = boundSql.getAdditionalParameter(propertyName);</span><br><span class="line">            &#125; <span class="keyword">else</span> <span class="keyword">if</span> (parameterObject == <span class="literal">null</span>) &#123;</span><br><span class="line">                value = <span class="literal">null</span>;</span><br><span class="line">            &#125; <span class="keyword">else</span> <span class="keyword">if</span> (typeHandlerRegistry.hasTypeHandler(parameterObject.getClass())) &#123;</span><br><span class="line">                value = parameterObject;</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                <span class="type">MetaObject</span> <span class="variable">metaObject</span> <span class="operator">=</span> configuration.newMetaObject(parameterObject);</span><br><span class="line">                value = metaObject.getValue(propertyName);</span><br><span class="line">            &#125;</span><br><span class="line">            cacheKey.update(value);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 5. Environment的ID</span></span><br><span class="line">    <span class="keyword">if</span> (configuration.getEnvironment() != <span class="literal">null</span>) &#123;</span><br><span class="line">        cacheKey.update(configuration.getEnvironment().getId());</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> cacheKey;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// CacheKey的hashCode计算：</span></span><br><span class="line"><span class="comment">// CacheKey用update()不断累加属性值，计算出一个综合hash</span></span><br><span class="line"><span class="comment">// 只要ID/SQL/参数/分页/环境任一不同，CacheKey就不同</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="CacheKey组成要素"><a href="#CacheKey组成要素" class="headerlink" title="CacheKey组成要素"></a>CacheKey组成要素</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                   CacheKey 五大组成要素                        │</span><br><span class="line">│                                                               │</span><br><span class="line">│  1. MappedStatement ID                                       │</span><br><span class="line">│     → com.mine.mapper.DeviceMapper.selectById                │</span><br><span class="line">│                                                               │</span><br><span class="line">│  2. RowBounds                                                │</span><br><span class="line">│     → offset=0, limit=2147483647 (默认不分页)                 │</span><br><span class="line">│                                                               │</span><br><span class="line">│  3. SQL语句                                                   │</span><br><span class="line">│     → SELECT * FROM device WHERE id = ?                      │</span><br><span class="line">│                                                               │</span><br><span class="line">│  4. 参数值                                                    │</span><br><span class="line">│     → [1] (id=1)                                             │</span><br><span class="line">│                                                               │</span><br><span class="line">│  5. Environment ID                                           │</span><br><span class="line">│     → development / production                               │</span><br><span class="line">│                                                               │</span><br><span class="line">│  任一要素不同 → CacheKey不同 → 缓存不命中                     │</span><br><span class="line">│  注意：即使SQL相同但参数值不同，也不会命中缓存                   │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="一级缓存生效验证"><a href="#一级缓存生效验证" class="headerlink" title="一级缓存生效验证"></a>一级缓存生效验证</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 同一个SqlSession内，相同查询走缓存</span></span><br><span class="line"><span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession();</span><br><span class="line"><span class="type">DeviceMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> session.getMapper(DeviceMapper.class);</span><br><span class="line"></span><br><span class="line"><span class="type">Device</span> <span class="variable">device1</span> <span class="operator">=</span> mapper.selectById(<span class="number">1L</span>);  <span class="comment">// 查数据库</span></span><br><span class="line"><span class="type">Device</span> <span class="variable">device2</span> <span class="operator">=</span> mapper.selectById(<span class="number">1L</span>);  <span class="comment">// 命中一级缓存</span></span><br><span class="line">System.out.println(device1 == device2);  <span class="comment">// true，同一个对象引用！</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 不同SqlSession，缓存不共享</span></span><br><span class="line"><span class="type">SqlSession</span> <span class="variable">session2</span> <span class="operator">=</span> sqlSessionFactory.openSession();</span><br><span class="line"><span class="type">DeviceMapper</span> <span class="variable">mapper2</span> <span class="operator">=</span> session2.getMapper(DeviceMapper.class);</span><br><span class="line"><span class="type">Device</span> <span class="variable">device3</span> <span class="operator">=</span> mapper2.selectById(<span class="number">1L</span>);  <span class="comment">// 再次查数据库</span></span><br><span class="line">System.out.println(device1 == device3);   <span class="comment">// false</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="一级缓存清空时机"><a href="#一级缓存清空时机" class="headerlink" title="一级缓存清空时机"></a>一级缓存清空时机</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                   一级缓存清空时机                              │</span><br><span class="line">│                                                               │</span><br><span class="line">│  1. 执行INSERT/UPDATE/DELETE                                 │</span><br><span class="line">│     → BaseExecutor.update() → clearLocalCache()              │</span><br><span class="line">│     → 任何写操作都会清空整个一级缓存                            │</span><br><span class="line">│                                                               │</span><br><span class="line">│  2. 调用SqlSession.clearCache()                              │</span><br><span class="line">│     → 手动清空                                                │</span><br><span class="line">│                                                               │</span><br><span class="line">│  3. 调用SqlSession.close()                                   │</span><br><span class="line">│     → 关闭SqlSession，缓存自然消失                            │</span><br><span class="line">│                                                               │</span><br><span class="line">│  4. 调用SqlSession.commit()                                  │</span><br><span class="line">│     → 提交时清空一级缓存（防止脏数据传播到二级缓存）            │</span><br><span class="line">│                                                               │</span><br><span class="line">│  5. localCacheScope = STATEMENT                               │</span><br><span class="line">│     → 每次查询后立即清空（最安全的配置）                       │</span><br><span class="line">│     → 相当于关闭一级缓存                                      │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="一级缓存源码"><a href="#一级缓存源码" class="headerlink" title="一级缓存源码"></a>一级缓存源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BaseExecutor.query()</span></span><br><span class="line"><span class="keyword">public</span> &lt;E&gt; List&lt;E&gt; <span class="title function_">query</span><span class="params">(MappedStatement ms, Object parameter, </span></span><br><span class="line"><span class="params">        RowBounds rowBounds, ResultHandler resultHandler, </span></span><br><span class="line"><span class="params">        CacheKey key, BoundSql boundSql)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">    <span class="comment">// 检查一级缓存</span></span><br><span class="line">    List&lt;E&gt; list = localCache.getObject(key);</span><br><span class="line">    <span class="keyword">if</span> (list != <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="comment">// 命中一级缓存</span></span><br><span class="line">        handleLocallyCachedOutputParameters(ms, key, parameter, boundSql);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">// 缓存未命中，查数据库</span></span><br><span class="line">        list = queryFromDatabase(ms, parameter, rowBounds, </span><br><span class="line">            resultHandler, key, boundSql);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> list;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> &lt;E&gt; List&lt;E&gt; <span class="title function_">queryFromDatabase</span><span class="params">(MappedStatement ms, Object parameter,</span></span><br><span class="line"><span class="params">        RowBounds rowBounds, ResultHandler resultHandler, </span></span><br><span class="line"><span class="params">        CacheKey key, BoundSql boundSql)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">    List&lt;E&gt; list;</span><br><span class="line">    <span class="comment">// 占位符，防止递归查询</span></span><br><span class="line">    localCache.putObject(key, EXECUTION_PLACEHOLDER);</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        list = doQuery(ms, parameter, rowBounds, resultHandler, boundSql);</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        localCache.removeObject(key);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 写入一级缓存</span></span><br><span class="line">    localCache.putObject(key, list);</span><br><span class="line">    <span class="keyword">return</span> list;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 写操作清空缓存</span></span><br><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">int</span> <span class="title function_">update</span><span class="params">(MappedStatement ms, Object parameter)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">    clearLocalCache();  <span class="comment">// 清空一级缓存</span></span><br><span class="line">    <span class="keyword">return</span> doUpdate(ms, parameter);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="一级缓存导致的数据不一致"><a href="#一级缓存导致的数据不一致" class="headerlink" title="一级缓存导致的数据不一致"></a>一级缓存导致的数据不一致</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目真实场景：设备状态查询</span></span><br><span class="line"><span class="comment">// 同一个SqlSession中，先查后改再查</span></span><br><span class="line"><span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession();</span><br><span class="line"><span class="type">DeviceMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> session.getMapper(DeviceMapper.class);</span><br><span class="line"></span><br><span class="line"><span class="type">Device</span> <span class="variable">device1</span> <span class="operator">=</span> mapper.selectById(<span class="number">1L</span>);  <span class="comment">// 查数据库，status=ONLINE</span></span><br><span class="line"><span class="comment">// 此时另一条线程修改了数据库 status=OFFLINE</span></span><br><span class="line"><span class="type">Device</span> <span class="variable">device2</span> <span class="operator">=</span> mapper.selectById(<span class="number">1L</span>);  <span class="comment">// 命中缓存！status=ONLINE（脏数据）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 智慧矿山场景更危险：</span></span><br><span class="line"><span class="comment">// 1. 传感器告警判断用了旧缓存数据 → 漏报告警</span></span><br><span class="line"><span class="comment">// 2. 设备巡检用了旧缓存状态 → 误判设备正常</span></span><br><span class="line"><span class="comment">// 3. 人员定位用了旧缓存位置 → 安全管控失效</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>Spring整合MyBatis后，一级缓存基本不会出问题</strong>，因为Spring默认每次查询都创建新的SqlSession（通过SqlSessionTemplate代理）。但在同一个事务中，SqlSession会被复用，一级缓存仍可能命中。</p>
+<h2 id="二级缓存（Global-Cache）"><a href="#二级缓存（Global-Cache）" class="headerlink" title="二级缓存（Global Cache）"></a>二级缓存（Global Cache）</h2><h3 id="基本概念-1"><a href="#基本概念-1" class="headerlink" title="基本概念"></a>基本概念</h3><p>二级缓存是Mapper namespace级别的缓存，多个SqlSession共享，需要手动开启。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                   二级缓存工作原理                               │</span><br><span class="line">│                                                               │</span><br><span class="line">│  SqlSession1          SqlSession2          SqlSession3        │</span><br><span class="line">│      ↓                    ↓                    ↓              │</span><br><span class="line">│  ┌──────────────────────────────────────────────────────┐    │</span><br><span class="line">│  │              CachingExecutor                          │    │</span><br><span class="line">│  │         ┌──────────────────┐                          │    │</span><br><span class="line">│  │         │   二级缓存         │  ← namespace级别共享     │    │</span><br><span class="line">│  │         │  (TransactionalCache)                      │    │</span><br><span class="line">│  │         └──────────────────┘                          │    │</span><br><span class="line">│  │                   ↓ 未命中                              │    │</span><br><span class="line">│  │         ┌──────────────────┐                          │    │</span><br><span class="line">│  │         │   一级缓存         │  ← SqlSession级别       │    │</span><br><span class="line">│  │         │  (localCache)     │                          │    │</span><br><span class="line">│  │         └──────────────────┘                          │    │</span><br><span class="line">│  │                   ↓ 未命中                              │    │</span><br><span class="line">│  │              查询数据库                                  │    │</span><br><span class="line">│  └──────────────────────────────────────────────────────┘    │</span><br><span class="line">│                                                               │</span><br><span class="line">│  查询顺序：二级缓存 → 一级缓存 → 数据库                        │</span><br><span class="line">│  写入顺序：先写一级缓存 → commit时写二级缓存                    │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="开启二级缓存"><a href="#开启二级缓存" class="headerlink" title="开启二级缓存"></a>开启二级缓存</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 方式1：XML配置</span></span><br><span class="line"><span class="comment">// mybatis-config.xml</span></span><br><span class="line"><span class="comment">// &lt;settings&gt;</span></span><br><span class="line"><span class="comment">//     &lt;setting name=&quot;cacheEnabled&quot; value=&quot;true&quot;/&gt;</span></span><br><span class="line"><span class="comment">// &lt;/settings&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// Mapper XML中声明缓存</span></span><br><span class="line"><span class="comment">// &lt;mapper namespace=&quot;com.mine.mapper.DeviceMapper&quot;&gt;</span></span><br><span class="line"><span class="comment">//     &lt;cache/&gt;</span></span><br><span class="line"><span class="comment">//     &lt;!-- 或自定义缓存参数 --&gt;</span></span><br><span class="line"><span class="comment">//     &lt;cache</span></span><br><span class="line"><span class="comment">//         eviction=&quot;LRU&quot;           // 淘汰策略</span></span><br><span class="line"><span class="comment">//         flushInterval=&quot;60000&quot;    // 刷新间隔60秒</span></span><br><span class="line"><span class="comment">//         size=&quot;1024&quot;             // 缓存数量上限</span></span><br><span class="line"><span class="comment">//         readOnly=&quot;false&quot;/&gt;      // 是否只读</span></span><br><span class="line"><span class="comment">// &lt;/mapper&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 方式2：注解配置</span></span><br><span class="line"><span class="meta">@CacheNamespace(eviction = LruCache.class, flushInterval = 60000, size = 1024)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">DeviceMapper</span> &#123;</span><br><span class="line">    <span class="meta">@Select(&quot;SELECT * FROM device WHERE id = #&#123;id&#125;&quot;)</span></span><br><span class="line">    Device <span class="title function_">selectById</span><span class="params">(Long id)</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="缓存淘汰策略"><a href="#缓存淘汰策略" class="headerlink" title="缓存淘汰策略"></a>缓存淘汰策略</h3><table>
+<thead>
+<tr>
+<th>策略</th>
+<th>类</th>
+<th>说明</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>LRU</td>
+<td>LruCache</td>
+<td>最近最少使用</td>
+<td>通用，默认策略</td>
+</tr>
+<tr>
+<td>FIFO</td>
+<td>FifoCache</td>
+<td>先进先出</td>
+<td>按时间顺序淘汰</td>
+</tr>
+<tr>
+<td>SOFT</td>
+<td>SoftCache</td>
+<td>软引用，GC时回收</td>
+<td>内存敏感场景</td>
+</tr>
+<tr>
+<td>WEAK</td>
+<td>WeakCache</td>
+<td>弱引用，每次GC回收</td>
+<td>内存极度紧张</td>
+</tr>
+</tbody></table>
+<h3 id="二级缓存源码分析"><a href="#二级缓存源码分析" class="headerlink" title="二级缓存源码分析"></a>二级缓存源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// CachingExecutor.query()</span></span><br><span class="line"><span class="keyword">public</span> &lt;E&gt; List&lt;E&gt; <span class="title function_">query</span><span class="params">(MappedStatement ms, Object parameterObject,</span></span><br><span class="line"><span class="params">        RowBounds rowBounds, ResultHandler resultHandler, CacheKey key, </span></span><br><span class="line"><span class="params">        BoundSql boundSql)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">    <span class="comment">// 1. 获取二级缓存</span></span><br><span class="line">    <span class="type">Cache</span> <span class="variable">cache</span> <span class="operator">=</span> ms.getCache();</span><br><span class="line">    <span class="keyword">if</span> (cache != <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="comment">// 2. 检查是否需要刷新缓存（flushCache=true时）</span></span><br><span class="line">        flushCacheIfRequired(ms);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 检查是否使用缓存（useCache=true且resultHandler为null）</span></span><br><span class="line">        <span class="keyword">if</span> (ms.isUseCache() &amp;&amp; resultHandler == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="comment">// 4. 从二级缓存获取</span></span><br><span class="line">            List&lt;E&gt; list = (List&lt;E&gt;) cache.getObject(key);</span><br><span class="line">            <span class="keyword">if</span> (list == <span class="literal">null</span>) &#123;</span><br><span class="line">                <span class="comment">// 5. 缓存未命中，委托给BaseExecutor查数据库</span></span><br><span class="line">                list = delegate.query(ms, parameterObject, rowBounds, </span><br><span class="line">                    resultHandler, key, boundSql);</span><br><span class="line">                <span class="comment">// 6. 注意：不是直接写入二级缓存！</span></span><br><span class="line">                <span class="comment">// 而是先放入待提交队列</span></span><br><span class="line">                cache.putObject(key, list);</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> list;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> delegate.query(ms, parameterObject, rowBounds, </span><br><span class="line">        resultHandler, key, boundSql);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="TransactionalCacheManager-—-事务性缓存管理"><a href="#TransactionalCacheManager-—-事务性缓存管理" class="headerlink" title="TransactionalCacheManager — 事务性缓存管理"></a>TransactionalCacheManager — 事务性缓存管理</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 关键：二级缓存不是查询后立即写入，而是通过TransactionalCache管理</span></span><br><span class="line"><span class="comment">// 只有SqlSession关闭或提交时，才真正写入二级缓存</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">TransactionalCacheManager</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;Cache, TransactionalCache&gt; transactionalCaches = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">clear</span><span class="params">(Cache cache)</span> &#123;</span><br><span class="line">        getTransactionalCache(cache).clear();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">getObject</span><span class="params">(Cache cache, CacheKey key)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> getTransactionalCache(cache).getObject(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">putObject</span><span class="params">(Cache cache, CacheKey key, Object value)</span> &#123;</span><br><span class="line">        <span class="comment">// 不是直接写入Cache，而是写入TransactionalCache的待提交区</span></span><br><span class="line">        getTransactionalCache(cache).putObject(key, value);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">commit</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 提交时，将所有TransactionalCache的待提交数据写入真正的Cache</span></span><br><span class="line">        <span class="keyword">for</span> (TransactionalCache txCache : transactionalCaches.values()) &#123;</span><br><span class="line">            txCache.commit();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">rollback</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 回滚时，清空待提交数据，不写入真正的Cache</span></span><br><span class="line">        <span class="keyword">for</span> (TransactionalCache txCache : transactionalCaches.values()) &#123;</span><br><span class="line">            txCache.rollback();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// TransactionalCache — 事务性缓存装饰器</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">TransactionalCache</span> <span class="keyword">implements</span> <span class="title class_">Cache</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Cache delegate;              <span class="comment">// 真正的缓存</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> clearOnCommit;             <span class="comment">// 提交时是否清空</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;Object, Object&gt; entriesToAddOnCommit;  <span class="comment">// 待提交的数据</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Set&lt;Object&gt; entriesMissedInCache;          <span class="comment">// 缓存未命中的key</span></span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">getObject</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">        <span class="comment">// 先从真正的缓存取</span></span><br><span class="line">        <span class="type">Object</span> <span class="variable">object</span> <span class="operator">=</span> delegate.getObject(key);</span><br><span class="line">        <span class="keyword">if</span> (object == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="comment">// 缓存未命中，记录下来</span></span><br><span class="line">            entriesMissedInCache.add(key);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> object;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">putObject</span><span class="params">(Object key, Object object)</span> &#123;</span><br><span class="line">        <span class="comment">// 不是直接写入delegate，而是放入待提交区</span></span><br><span class="line">        entriesToAddOnCommit.put(key, object);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">commit</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (clearOnCommit) &#123;</span><br><span class="line">            delegate.clear();</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 将待提交的数据写入真正的缓存</span></span><br><span class="line">        <span class="keyword">for</span> (Map.Entry&lt;Object, Object&gt; entry : entriesToAddOnCommit.entrySet()) &#123;</span><br><span class="line">            delegate.putObject(entry.getKey(), entry.getValue());</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 回填缓存未命中的条目</span></span><br><span class="line">        <span class="keyword">for</span> (Object entry : entriesMissedInCache) &#123;</span><br><span class="line">            <span class="keyword">if</span> (!entriesToAddOnCommit.containsKey(entry)) &#123;</span><br><span class="line">                delegate.putObject(entry, <span class="literal">null</span>);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        resetState();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">rollback</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 回滚：清空待提交数据</span></span><br><span class="line">        resetState();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="二级缓存的写入时机图"><a href="#二级缓存的写入时机图" class="headerlink" title="二级缓存的写入时机图"></a>二级缓存的写入时机图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              二级缓存写入时机（事务视角）                         │</span><br><span class="line">│                                                               │</span><br><span class="line">│  SqlSession.openSession()                                     │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  查询 → 一级缓存未命中 → 查数据库                              │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  结果写入一级缓存(localCache)                                  │</span><br><span class="line">│  同时写入TransactionalCache的待提交区(entriesToAddOnCommit)    │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  ┌──────────────────────────────────────────────┐             │</span><br><span class="line">│  │ 此时二级缓存(delegate)中还看不到这条数据！       │             │</span><br><span class="line">│  │ 只有当前SqlSession的一级缓存能命中              │             │</span><br><span class="line">│  │ 其他SqlSession查询仍会查数据库                  │             │</span><br><span class="line">│  └──────────────────────────────────────────────┘             │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  SqlSession.commit()                                          │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  TransactionalCacheManager.commit()                           │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  将待提交区的数据写入真正的二级缓存(delegate)                    │</span><br><span class="line">│  清空一级缓存                                                  │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  ┌──────────────────────────────────────────────┐             │</span><br><span class="line">│  │ 此时其他SqlSession才能从二级缓存命中数据        │             │</span><br><span class="line">│  └──────────────────────────────────────────────┘             │</span><br><span class="line">│                                                               │</span><br><span class="line">│  如果SqlSession.rollback() → 待提交数据丢弃，不写入二级缓存    │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="二级缓存的问题"><a href="#二级缓存的问题" class="headerlink" title="二级缓存的问题"></a>二级缓存的问题</h3><h4 id="问题1：多表关联查询导致脏数据"><a href="#问题1：多表关联查询导致脏数据" class="headerlink" title="问题1：多表关联查询导致脏数据"></a>问题1：多表关联查询导致脏数据</h4><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// DeviceMapper namespace的缓存</span></span><br><span class="line"><span class="meta">@CacheNamespace</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">DeviceMapper</span> &#123;</span><br><span class="line">    <span class="meta">@Select(&quot;SELECT d.*, a.name as areaName FROM device d LEFT JOIN area a ON d.area_code = a.code&quot;)</span></span><br><span class="line">    List&lt;DeviceVO&gt; <span class="title function_">selectWithArea</span><span class="params">()</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// AreaMapper namespace的缓存</span></span><br><span class="line"><span class="meta">@CacheNamespace</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">AreaMapper</span> &#123;</span><br><span class="line">    <span class="meta">@Update(&quot;UPDATE area SET name=#&#123;name&#125; WHERE code=#&#123;code&#125;&quot;)</span></span><br><span class="line">    <span class="type">int</span> <span class="title function_">update</span><span class="params">(Area area)</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 问题：修改area后，DeviceMapper的缓存不会失效！</span></span><br><span class="line"><span class="comment">// 因为二级缓存是namespace级别的</span></span><br><span class="line"><span class="comment">// AreaMapper的修改只会清空AreaMapper的缓存</span></span><br><span class="line"><span class="comment">// DeviceMapper的缓存中仍然保存着旧的areaName</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 解决方案1：引用其他namespace的缓存</span></span><br><span class="line"><span class="comment">// &lt;cache-ref namespace=&quot;com.mine.mapper.AreaMapper&quot;/&gt;</span></span><br><span class="line"><span class="comment">// 但这样两个namespace共享缓存，一损俱损</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 解决方案2：关联查询不使用二级缓存</span></span><br><span class="line"><span class="meta">@Options(useCache = false)</span></span><br><span class="line"><span class="meta">@Select(&quot;SELECT d.*, a.name as areaName FROM device d LEFT JOIN area a ON d.area_code = a.code&quot;)</span></span><br><span class="line">List&lt;DeviceVO&gt; <span class="title function_">selectWithArea</span><span class="params">()</span>;</span><br></pre></td></tr></table></figure>
+
+<h4 id="问题2：序列化问题"><a href="#问题2：序列化问题" class="headerlink" title="问题2：序列化问题"></a>问题2：序列化问题</h4><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 二级缓存默认readOnly=false，需要实体类实现Serializable</span></span><br><span class="line"><span class="comment">// 因为缓存需要深拷贝（序列化方式）</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@Entity</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">Device</span> <span class="keyword">implements</span> <span class="title class_">Serializable</span> &#123;  <span class="comment">// 必须实现！</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">serialVersionUID</span> <span class="operator">=</span> <span class="number">1L</span>;</span><br><span class="line">    <span class="keyword">private</span> Long id;</span><br><span class="line">    <span class="keyword">private</span> String deviceName;</span><br><span class="line">    <span class="keyword">private</span> String status;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// readOnly=true时：返回同一个对象引用（不安全，可能被修改）</span></span><br><span class="line"><span class="comment">// readOnly=false时：返回序列化后的副本（安全，但有序列化开销）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 实际项目踩坑：</span></span><br><span class="line"><span class="comment">// Device未实现Serializable → 运行时NotSerializableException</span></span><br></pre></td></tr></table></figure>
+
+<h4 id="问题3：分布式环境下缓存不一致"><a href="#问题3：分布式环境下缓存不一致" class="headerlink" title="问题3：分布式环境下缓存不一致"></a>问题3：分布式环境下缓存不一致</h4><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│           分布式环境下二级缓存不一致问题                         │</span><br><span class="line">│                                                               │</span><br><span class="line">│  实例A                    实例B                    实例C        │</span><br><span class="line">│  ┌──────────┐            ┌──────────┐            ┌──────────┐│</span><br><span class="line">│  │二级缓存A  │            │二级缓存B  │            │二级缓存C  ││</span><br><span class="line">│  │device:1  │            │device:1  │            │device:1  ││</span><br><span class="line">│  │status=   │            │status=   │            │status=   ││</span><br><span class="line">│  │ONLINE    │            │OFFLINE   │            │ONLINE    ││</span><br><span class="line">│  └──────────┘            └──────────┘            └──────────┘│</span><br><span class="line">│                                                               │</span><br><span class="line">│  实例A修改数据 → 实例A缓存失效 → 实例B/C缓存未失效（脏数据）  │</span><br><span class="line">│                                                               │</span><br><span class="line">│  结论：分布式环境下不要使用MyBatis二级缓存，用Redis替代        │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h2 id="一级缓存-vs-二级缓存"><a href="#一级缓存-vs-二级缓存" class="headerlink" title="一级缓存 vs 二级缓存"></a>一级缓存 vs 二级缓存</h2><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>一级缓存</th>
+<th>二级缓存</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>作用范围</td>
+<td>SqlSession</td>
+<td>Mapper namespace</td>
+</tr>
+<tr>
+<td>默认状态</td>
+<td>开启，不可关闭</td>
+<td>关闭，需手动开启</td>
+</tr>
+<tr>
+<td>共享范围</td>
+<td>单个SqlSession</td>
+<td>多个SqlSession</td>
+</tr>
+<tr>
+<td>数据结构</td>
+<td>HashMap</td>
+<td>自定义（可接入Redis）</td>
+</tr>
+<tr>
+<td>写入时机</td>
+<td>查询后立即写入</td>
+<td>SqlSession关闭&#x2F;提交时写入</td>
+</tr>
+<tr>
+<td>失效时机</td>
+<td>DML操作、close、commit</td>
+<td>DML操作（同namespace）</td>
+</tr>
+<tr>
+<td>实现类</td>
+<td>PerpetualCache(HashMap)</td>
+<td>TransactionalCache装饰器</td>
+</tr>
+<tr>
+<td>线程安全</td>
+<td>是（SqlSession线程不共享）</td>
+<td>需要保证</td>
+</tr>
+<tr>
+<td>Spring整合</td>
+<td>基本无感（每次新建SqlSession）</td>
+<td>生产环境慎用</td>
+</tr>
+<tr>
+<td>实际使用</td>
+<td>基本透明</td>
+<td>实际项目不使用</td>
+</tr>
+</tbody></table>
+<h2 id="生产环境的缓存策略"><a href="#生产环境的缓存策略" class="headerlink" title="生产环境的缓存策略"></a>生产环境的缓存策略</h2><h3 id="推荐方案：关闭二级缓存，使用Redis"><a href="#推荐方案：关闭二级缓存，使用Redis" class="headerlink" title="推荐方案：关闭二级缓存，使用Redis"></a>推荐方案：关闭二级缓存，使用Redis</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># mybatis配置 — 实际项目生产环境</span></span><br><span class="line"><span class="attr">mybatis:</span></span><br><span class="line">  <span class="attr">configuration:</span></span><br><span class="line">    <span class="attr">cache-enabled:</span> <span class="literal">false</span>  <span class="comment"># 关闭二级缓存</span></span><br><span class="line">    <span class="attr">local-cache-scope:</span> <span class="string">statement</span>  <span class="comment"># 一级缓存范围设为statement</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// local-cache-scope: statement</span></span><br><span class="line"><span class="comment">// 每次查询后清空一级缓存，避免脏数据</span></span><br><span class="line"><span class="comment">// 配合Redis实现业务级缓存</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> DeviceMapper deviceMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 设备信息缓存（变更频率低）</span></span><br><span class="line">    <span class="keyword">public</span> Device <span class="title function_">getById</span><span class="params">(Long id)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:&quot;</span> + id;</span><br><span class="line">        <span class="type">Device</span> <span class="variable">cached</span> <span class="operator">=</span> (Device) redisTemplate.opsForValue().get(key);</span><br><span class="line">        <span class="keyword">if</span> (cached != <span class="literal">null</span>) <span class="keyword">return</span> cached;</span><br><span class="line"></span><br><span class="line">        <span class="type">Device</span> <span class="variable">device</span> <span class="operator">=</span> deviceMapper.selectById(id);</span><br><span class="line">        <span class="keyword">if</span> (device != <span class="literal">null</span>) &#123;</span><br><span class="line">            redisTemplate.opsForValue().set(key, device, <span class="number">30</span>, TimeUnit.MINUTES);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> device;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 主动失效</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">update</span><span class="params">(Device device)</span> &#123;</span><br><span class="line">        deviceMapper.updateById(device);</span><br><span class="line">        redisTemplate.delete(<span class="string">&quot;device:&quot;</span> + device.getId());</span><br><span class="line">        <span class="comment">// 同时清除关联缓存</span></span><br><span class="line">        redisTemplate.delete(<span class="string">&quot;device:list:&quot;</span> + device.getAreaCode());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 传感器数据不缓存（实时性要求高）</span></span><br><span class="line">    <span class="keyword">public</span> List&lt;SensorData&gt; <span class="title function_">getLatestData</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> sensorDataMapper.selectLatest(deviceId);</span><br><span class="line">        <span class="comment">// 不走任何缓存，直接查数据库</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="Redis缓存策略对照表"><a href="#Redis缓存策略对照表" class="headerlink" title="Redis缓存策略对照表"></a>Redis缓存策略对照表</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│           实际项目 Redis 缓存策略                           │</span><br><span class="line">├──────────────┬─────────────┬──────────┬─────────────────────┤</span><br><span class="line">│  数据类型     │ 缓存策略     │ 过期时间  │ 说明                │</span><br><span class="line">├──────────────┼─────────────┼──────────┼─────────────────────┤</span><br><span class="line">│  设备信息     │ 读写缓存     │ 30min    │ 变更时主动失效       │</span><br><span class="line">│  区域信息     │ 读写缓存     │ 1hour    │ 几乎不变            │</span><br><span class="line">│  字典数据     │ 只读缓存     │ 2hour    │ 极少变更            │</span><br><span class="line">│  系统配置     │ 只读缓存     │ 30min    │ 变更时发布事件       │</span><br><span class="line">│  传感器数据   │ 不缓存       │ -        │ 实时性要求高         │</span><br><span class="line">│  告警记录     │ 不缓存       │ -        │ 实时性要求高         │</span><br><span class="line">│  人员定位     │ 不缓存       │ -        │ 实时性要求高         │</span><br><span class="line">│  统计报表     │ 读写缓存     │ 5min     │ 允许短时间延迟       │</span><br><span class="line">│  设备状态     │ 短期缓存     │ 10s      │ 状态变更频繁         │</span><br><span class="line">└──────────────┴─────────────┴──────────┴─────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="特殊场景：只读表可以使用二级缓存"><a href="#特殊场景：只读表可以使用二级缓存" class="headerlink" title="特殊场景：只读表可以使用二级缓存"></a>特殊场景：只读表可以使用二级缓存</h3><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">&lt;!-- 字典表、配置表等几乎不修改的表可以使用二级缓存 --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">mapper</span> <span class="attr">namespace</span>=<span class="string">&quot;com.mine.mapper.DictMapper&quot;</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">cache</span> <span class="attr">eviction</span>=<span class="string">&quot;LRU&quot;</span> <span class="attr">flushInterval</span>=<span class="string">&quot;300000&quot;</span> <span class="attr">size</span>=<span class="string">&quot;512&quot;</span> <span class="attr">readOnly</span>=<span class="string">&quot;true&quot;</span>/&gt;</span></span><br><span class="line">    <span class="comment">&lt;!-- 5分钟自动刷新，只读模式性能更好 --&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">mapper</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="自定义Redis缓存实现"><a href="#自定义Redis缓存实现" class="headerlink" title="自定义Redis缓存实现"></a>自定义Redis缓存实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：MyBatis二级缓存接入Redis</span></span><br><span class="line"><span class="comment">// 注意：仅用于只读表，核心业务表仍用Redis手动缓存</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RedisCache</span> <span class="keyword">implements</span> <span class="title class_">Cache</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String id;</span><br><span class="line">    <span class="keyword">private</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="title function_">RedisCache</span><span class="params">(String id)</span> &#123;</span><br><span class="line">        <span class="built_in">this</span>.id = id;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> RedisTemplate&lt;String, Object&gt; <span class="title function_">getRedisTemplate</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (redisTemplate == <span class="literal">null</span>) &#123;</span><br><span class="line">            redisTemplate = SpringContextHolder.getBean(<span class="string">&quot;redisTemplate&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">getId</span><span class="params">()</span> &#123; <span class="keyword">return</span> id; &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">putObject</span><span class="params">(Object key, Object value)</span> &#123;</span><br><span class="line">        getRedisTemplate().opsForValue().set(</span><br><span class="line">            <span class="string">&quot;mybatis:cache:&quot;</span> + id + <span class="string">&quot;:&quot;</span> + key.hashCode(), </span><br><span class="line">            value, <span class="number">30</span>, TimeUnit.MINUTES);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">getObject</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> getRedisTemplate().opsForValue().get(</span><br><span class="line">            <span class="string">&quot;mybatis:cache:&quot;</span> + id + <span class="string">&quot;:&quot;</span> + key.hashCode());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">removeObject</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> getRedisTemplate().delete(</span><br><span class="line">            <span class="string">&quot;mybatis:cache:&quot;</span> + id + <span class="string">&quot;:&quot;</span> + key.hashCode());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">clear</span><span class="params">()</span> &#123;</span><br><span class="line">        Set&lt;String&gt; keys = getRedisTemplate().keys(<span class="string">&quot;mybatis:cache:&quot;</span> + id + <span class="string">&quot;:*&quot;</span>);</span><br><span class="line">        <span class="keyword">if</span> (keys != <span class="literal">null</span> &amp;&amp; !keys.isEmpty()) &#123;</span><br><span class="line">            getRedisTemplate().delete(keys);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">getSize</span><span class="params">()</span> &#123;</span><br><span class="line">        Set&lt;String&gt; keys = getRedisTemplate().keys(<span class="string">&quot;mybatis:cache:&quot;</span> + id + <span class="string">&quot;:*&quot;</span>);</span><br><span class="line">        <span class="keyword">return</span> keys != <span class="literal">null</span> ? keys.size() : <span class="number">0</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-一级缓存和二级缓存的区别？"><a href="#1-一级缓存和二级缓存的区别？" class="headerlink" title="1. 一级缓存和二级缓存的区别？"></a>1. 一级缓存和二级缓存的区别？</h3><p>一级缓存SqlSession级别，默认开启不可关闭；二级缓存namespace级别，默认关闭需手动开启。一级缓存在BaseExecutor中用HashMap实现，查询后立即写入；二级缓存在CachingExecutor中用TransactionalCache装饰器管理，SqlSession提交后才真正写入。Spring整合后，每次查询新建SqlSession，一级缓存基本不命中。</p>
+<h3 id="2-为什么生产环境不建议使用二级缓存？"><a href="#2-为什么生产环境不建议使用二级缓存？" class="headerlink" title="2. 为什么生产环境不建议使用二级缓存？"></a>2. 为什么生产环境不建议使用二级缓存？</h3><p>三个硬伤：1.多表关联查询时namespace隔离导致缓存不一致；2.分布式环境下各节点缓存独立无法同步；3.序列化问题增加复杂度。用Redis替代更可靠，可控性更强。</p>
+<h3 id="3-Spring整合MyBatis后一级缓存还有效吗？"><a href="#3-Spring整合MyBatis后一级缓存还有效吗？" class="headerlink" title="3. Spring整合MyBatis后一级缓存还有效吗？"></a>3. Spring整合MyBatis后一级缓存还有效吗？</h3><p>有效，但Spring通过SqlSessionTemplate管理SqlSession，默认每次查询使用新的SqlSession，一级缓存基本不会命中。如果需要在同一事务中复用SqlSession（@Transactional），一级缓存才会生效。设置localCacheScope&#x3D;STATEMENT可以完全消除一级缓存的影响。</p>
+<h3 id="4-CacheKey是如何生成的？"><a href="#4-CacheKey是如何生成的？" class="headerlink" title="4. CacheKey是如何生成的？"></a>4. CacheKey是如何生成的？</h3><p>由五部分组成：MappedStatement ID + RowBounds(offset,limit) + SQL语句 + 参数值 + Environment ID。任一部分不同则CacheKey不同。参数值的获取和DefaultParameterHandler相同，通过MetaObject反射取值。</p>
+<h2 id="缓存装饰器体系"><a href="#缓存装饰器体系" class="headerlink" title="缓存装饰器体系"></a>缓存装饰器体系</h2><h3 id="Cache接口与装饰器链"><a href="#Cache接口与装饰器链" class="headerlink" title="Cache接口与装饰器链"></a>Cache接口与装饰器链</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              MyBatis Cache 装饰器体系                           │</span><br><span class="line">│                                                               │</span><br><span class="line">│  Cache（接口）                                                 │</span><br><span class="line">│    ├── PerpetualCache       → 基础实现（HashMap）             │</span><br><span class="line">│    └── 装饰器（依次包装）                                      │</span><br><span class="line">│         ├── LruCache        → LRU淘汰策略                     │</span><br><span class="line">│         ├── FifoCache       → FIFO淘汰策略                    │</span><br><span class="line">│         ├── SoftCache       → 软引用装饰器                    │</span><br><span class="line">│         ├── WeakCache       → 弱引用装饰器                    │</span><br><span class="line">│         ├── LoggingCache    → 缓存命中率日志                  │</span><br><span class="line">│         ├── SynchronizedCache → 线程安全装饰器                │</span><br><span class="line">│         ├── BlockingCache   → 阻塞缓存（防缓存击穿）          │</span><br><span class="line">│         ├── ScheduledCache  → 定时刷新缓存                   │</span><br><span class="line">│         └── TransactionalCache → 事务性缓存                   │</span><br><span class="line">│                                                               │</span><br><span class="line">│  装饰器构建顺序（由CacheBuilder决定）：                        │</span><br><span class="line">│  PerpetualCache                                               │</span><br><span class="line">│    → SynchronizedCache (线程安全)                              │</span><br><span class="line">│    → LoggingCache (日志)                                      │</span><br><span class="line">│    → LruCache/FifoCache/SoftCache/WeakCache (淘汰策略)        │</span><br><span class="line">│    → ScheduledCache (定时刷新)                                │</span><br><span class="line">│                                                               │</span><br><span class="line">│  最终结构：                                                   │</span><br><span class="line">│  ScheduledCache                                               │</span><br><span class="line">│    → LruCache                                                 │</span><br><span class="line">│      → LoggingCache                                           │</span><br><span class="line">│        → SynchronizedCache                                    │</span><br><span class="line">│          → PerpetualCache (HashMap)                           │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="CacheBuilder源码"><a href="#CacheBuilder源码" class="headerlink" title="CacheBuilder源码"></a>CacheBuilder源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// CacheBuilder — 缓存构建器</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CacheBuilder</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String id;</span><br><span class="line">    <span class="keyword">private</span> Class&lt;? <span class="keyword">extends</span> <span class="title class_">Cache</span>&gt; cacheImplementation = PerpetualCache.class;</span><br><span class="line">    <span class="keyword">private</span> Class&lt;? <span class="keyword">extends</span> <span class="title class_">Cache</span>&gt; eviction = LruCache.class;</span><br><span class="line">    <span class="keyword">private</span> Long flushInterval;</span><br><span class="line">    <span class="keyword">private</span> Integer size;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="variable">readWrite</span> <span class="operator">=</span> <span class="literal">true</span>;  <span class="comment">// readOnly=false → readWrite=true</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> blocking;</span><br><span class="line">    <span class="keyword">private</span> Properties properties;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> Cache <span class="title function_">build</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 设置默认实现</span></span><br><span class="line">        setCacheImplementations();</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 2. 创建基础Cache</span></span><br><span class="line">        <span class="type">Cache</span> <span class="variable">cache</span> <span class="operator">=</span> newBaseCacheInstance(cacheImplementation, id);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 3. 设置属性</span></span><br><span class="line">        setCacheProperties(cache);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 4. 依次包装装饰器</span></span><br><span class="line">        <span class="comment">// 4.1 如果是自定义Cache实现，跳过标准装饰器</span></span><br><span class="line">        <span class="keyword">if</span> (PerpetualCache.class.equals(cache.getClass())) &#123;</span><br><span class="line">            <span class="comment">// 标准装饰器链</span></span><br><span class="line">            <span class="keyword">for</span> (Class&lt;? <span class="keyword">extends</span> <span class="title class_">Cache</span>&gt; decorator : decorators) &#123;</span><br><span class="line">                cache = newCacheDecoratorInstance(decorator, cache);</span><br><span class="line">                setCacheProperties(cache);</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="comment">// 淘汰策略装饰器</span></span><br><span class="line">            cache = newCacheDecoratorInstance(eviction, cache);</span><br><span class="line">            setCacheProperties(cache);</span><br><span class="line">            <span class="comment">// LruCache内部将最老条目移到标准Cache</span></span><br><span class="line">            <span class="keyword">if</span> (size != <span class="literal">null</span>) &#123;</span><br><span class="line">                ((LruCache) cache).setSize(size);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 4.2 LoggingCache</span></span><br><span class="line">        cache = <span class="keyword">new</span> <span class="title class_">LoggingCache</span>(cache);</span><br><span class="line">        <span class="comment">// 4.3 SynchronizedCache</span></span><br><span class="line">        cache = <span class="keyword">new</span> <span class="title class_">SynchronizedCache</span>(cache);</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">return</span> cache;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="LoggingCache命中率统计"><a href="#LoggingCache命中率统计" class="headerlink" title="LoggingCache命中率统计"></a>LoggingCache命中率统计</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// LoggingCache — 缓存命中率统计</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LoggingCache</span> <span class="keyword">implements</span> <span class="title class_">Cache</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Cache delegate;</span><br><span class="line">    <span class="keyword">protected</span> <span class="type">int</span> <span class="variable">requests</span> <span class="operator">=</span> <span class="number">0</span>;    <span class="comment">// 总请求数</span></span><br><span class="line">    <span class="keyword">protected</span> <span class="type">int</span> <span class="variable">hits</span> <span class="operator">=</span> <span class="number">0</span>;        <span class="comment">// 命中数</span></span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">getObject</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">        requests++;</span><br><span class="line">        <span class="keyword">final</span> <span class="type">Object</span> <span class="variable">value</span> <span class="operator">=</span> delegate.getObject(key);</span><br><span class="line">        <span class="keyword">if</span> (value != <span class="literal">null</span>) &#123;</span><br><span class="line">            hits++;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 每次访问打印命中率</span></span><br><span class="line">        <span class="keyword">if</span> (requests % <span class="number">100</span> == <span class="number">0</span>) &#123;</span><br><span class="line">            <span class="type">double</span> <span class="variable">ratio</span> <span class="operator">=</span> (<span class="type">double</span>) hits / requests;</span><br><span class="line">            log.debug(<span class="string">&quot;Cache Hit Ratio [&quot;</span> + getId() + <span class="string">&quot;]: &quot;</span> + ratio);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> value;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">double</span> <span class="title function_">getHitRatio</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> (<span class="type">double</span>) hits / requests;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Spring整合MyBatis缓存行为"><a href="#Spring整合MyBatis缓存行为" class="headerlink" title="Spring整合MyBatis缓存行为"></a>Spring整合MyBatis缓存行为</h2><h3 id="SqlSessionTemplate的缓存行为"><a href="#SqlSessionTemplate的缓存行为" class="headerlink" title="SqlSessionTemplate的缓存行为"></a>SqlSessionTemplate的缓存行为</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│        Spring整合后一级缓存行为分析                              │</span><br><span class="line">│                                                               │</span><br><span class="line">│  场景1：无@Transactional                                      │</span><br><span class="line">│  ┌────────────────────────────────────────────────────────┐  │</span><br><span class="line">│  │ method1() &#123;                                            │  │</span><br><span class="line">│  │   deviceMapper.selectById(1L);  → 新SqlSession         │  │</span><br><span class="line">│  │   deviceMapper.selectById(1L);  → 又一个新SqlSession   │  │</span><br><span class="line">│  │   // 一级缓存不命中（不同SqlSession）                    │  │</span><br><span class="line">│  │ &#125;                                                      │  │</span><br><span class="line">│  └────────────────────────────────────────────────────────┘  │</span><br><span class="line">│                                                               │</span><br><span class="line">│  场景2：有@Transactional                                      │</span><br><span class="line">│  ┌────────────────────────────────────────────────────────┐  │</span><br><span class="line">│  │ @Transactional                                         │  │</span><br><span class="line">│  │ method2() &#123;                                            │  │</span><br><span class="line">│  │   deviceMapper.selectById(1L);  → 同一SqlSession       │  │</span><br><span class="line">│  │   deviceMapper.selectById(1L);  → 同一SqlSession       │  │</span><br><span class="line">│  │   // 一级缓存命中！（同一事务复用SqlSession）             │  │</span><br><span class="line">│  │ &#125;                                                      │  │</span><br><span class="line">│  └────────────────────────────────────────────────────────┘  │</span><br><span class="line">│                                                               │</span><br><span class="line">│  场景3：localCacheScope=STATEMENT                             │</span><br><span class="line">│  ┌────────────────────────────────────────────────────────┐  │</span><br><span class="line">│  │ @Transactional                                         │  │</span><br><span class="line">│  │ method3() &#123;                                            │  │</span><br><span class="line">│  │   deviceMapper.selectById(1L);  → 查询后清空缓存       │  │</span><br><span class="line">│  │   deviceMapper.selectById(1L);  → 再次查数据库         │  │</span><br><span class="line">│  │   // 一级缓存不命中（scope=statement，每次清空）         │  │</span><br><span class="line">│  │ &#125;                                                      │  │</span><br><span class="line">│  └────────────────────────────────────────────────────────┘  │</span><br><span class="line">│                                                               │</span><br><span class="line">│  实际项目选择：localCacheScope=STATEMENT                  │</span><br><span class="line">│  原因：实时性要求高，宁可多查一次也不返回脏数据                │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h2 id="缓存与事务的交互"><a href="#缓存与事务的交互" class="headerlink" title="缓存与事务的交互"></a>缓存与事务的交互</h2><h3 id="事务提交对缓存的影响"><a href="#事务提交对缓存的影响" class="headerlink" title="事务提交对缓存的影响"></a>事务提交对缓存的影响</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│          事务提交对一级/二级缓存的影响                          │</span><br><span class="line">│                                                               │</span><br><span class="line">│  操作             一级缓存        二级缓存                     │</span><br><span class="line">│  ───────────────────────────────────────────────              │</span><br><span class="line">│  SELECT           写入            写入待提交区                 │</span><br><span class="line">│  INSERT/UPDATE    清空            清空(同namespace)            │</span><br><span class="line">│  DELETE           清空            清空(同namespace)            │</span><br><span class="line">│  commit()         清空            待提交区→正式写入            │</span><br><span class="line">│  rollback()       清空            待提交区→丢弃               │</span><br><span class="line">│  close()          释放            不影响                       │</span><br><span class="line">│                                                               │</span><br><span class="line">│  关键时序：                                                   │</span><br><span class="line">│  1. 查询A → 一级缓存有 → 二级缓存待提交区有                   │</span><br><span class="line">│  2. 另一个SqlSession查询A → 二级缓存没有（还未commit）         │</span><br><span class="line">│  3. 第一个SqlSession.commit() → 待提交区数据写入二级缓存       │</span><br><span class="line">│  4. 另一个SqlSession查询A → 二级缓存命中                      │</span><br><span class="line">│                                                               │</span><br><span class="line">│  这就是为什么二级缓存需要TransactionalCache：                  │</span><br><span class="line">│  防止未提交事务的脏数据被其他SqlSession读到                    │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h2 id="多数据源缓存策略"><a href="#多数据源缓存策略" class="headerlink" title="多数据源缓存策略"></a>多数据源缓存策略</h2><h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="缓存监控方案"><a href="#缓存监控方案" class="headerlink" title="缓存监控方案"></a>缓存监控方案</h2><h3 id="缓存命中率统计"><a href="#缓存命中率统计" class="headerlink" title="缓存命中率统计"></a>缓存命中率统计</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：Redis缓存命中率统计</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CacheMonitor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">AtomicLong</span> <span class="variable">hitCount</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">AtomicLong</span>(<span class="number">0</span>);</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">AtomicLong</span> <span class="variable">missCount</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">AtomicLong</span>(<span class="number">0</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">recordHit</span><span class="params">()</span> &#123;</span><br><span class="line">        hitCount.incrementAndGet();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">recordMiss</span><span class="params">()</span> &#123;</span><br><span class="line">        missCount.incrementAndGet();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Scheduled(fixedRate = 60000)</span>  <span class="comment">// 每分钟统计一次</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">report</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">hits</span> <span class="operator">=</span> hitCount.getAndSet(<span class="number">0</span>);</span><br><span class="line">        <span class="type">long</span> <span class="variable">misses</span> <span class="operator">=</span> missCount.getAndSet(<span class="number">0</span>);</span><br><span class="line">        <span class="type">long</span> <span class="variable">total</span> <span class="operator">=</span> hits + misses;</span><br><span class="line">        <span class="type">double</span> <span class="variable">ratio</span> <span class="operator">=</span> total &gt; <span class="number">0</span> ? (<span class="type">double</span>) hits / total : <span class="number">0</span>;</span><br><span class="line">        </span><br><span class="line">        log.info(<span class="string">&quot;[缓存统计] 命中=&#123;&#125;, 未命中=&#123;&#125;, 命中率=&#123;:.2%&#125;&quot;</span>, hits, misses, ratio);</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">if</span> (ratio &lt; <span class="number">0.5</span> &amp;&amp; total &gt; <span class="number">100</span>) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;[缓存告警] 命中率低于50%，请检查缓存策略！&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h1><hr>
+<p>MyBatis缓存机制看似简单，实则暗藏玄机。实际项目对数据实时性要求极高，任何缓存导致的数据延迟都可能造成安全风险。核心认知是：<strong>一级缓存是SqlSession级别的默认行为，Spring整合后基本无感；二级缓存是namespace级别的全局缓存，TransactionalCache管理事务性写入，生产环境慎用</strong>。真正可靠的缓存方案是Redis + 主动失效，而不是依赖MyBatis内置缓存。设置localCacheScope&#x3D;STATEMENT关闭一级缓存影响，用Redis按数据特性制定不同的缓存策略，这是实际项目的最终选择。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/02/19/df5adc227b62/">SpringBoot自定义Starter实战——从使用者到框架扩展者</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/02/26/68590f710d06/">SpringBoot自动配置源码——SPI与条件注解的魔法</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/MyBatis/" class="tag" aria-label="标签: #MyBatis">#MyBatis</a>
+            
+                <a href="/tags/Redis/" class="tag" aria-label="标签: #Redis">#Redis</a>
+            
+                <a href="/tags/%E6%BA%90%E7%A0%81/" class="tag" aria-label="标签: #源码">#源码</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/MyBatis%E6%BA%90%E7%A0%81/" aria-label="分类: MyBatis源码">
+                        MyBatis源码
+                        <span>(6)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

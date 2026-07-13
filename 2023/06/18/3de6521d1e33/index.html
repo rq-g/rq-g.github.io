@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>Nacos服务注册发现原理——心跳与健康检查 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="Nacos服务注册发现原理——心跳与健康检查">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/06/18/3de6521d1e33/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言在实际场景中，微服务架构涉及矿车调度服务、设备监控服务、人员定位服务、瓦斯预警服务等十几个核心服务。项目从单体架构转向微服务后，第一个要解决的就是服务注册发现。选了Nacos作为注册中心和配置中心，但初期只停留在”引入依赖就能用”的层面。2023年深入Nacos原理后，终于理解了心跳机制、健康检查、配置刷">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">Nacos服务注册发现原理——心跳与健康检查</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-06-18T08:30:42.000Z">2023-06-18</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>在实际场景中，微服务架构涉及矿车调度服务、设备监控服务、人员定位服务、瓦斯预警服务等十几个核心服务。项目从单体架构转向微服务后，第一个要解决的就是服务注册发现。选了Nacos作为注册中心和配置中心，但初期只停留在”引入依赖就能用”的层面。2023年深入Nacos原理后，终于理解了心跳机制、健康检查、配置刷新的底层逻辑，才能在矿车调度服务频繁掉线、设备监控服务偶发不可达等生产问题中精准定位和解决。</p>
+<hr>
+<h2 id="Nacos核心架构"><a href="#Nacos核心架构" class="headerlink" title="Nacos核心架构"></a>Nacos核心架构</h2><h3 id="架构总览"><a href="#架构总览" class="headerlink" title="架构总览"></a>架构总览</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                      智慧矿山微服务集群                        │</span><br><span class="line">├──────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                              │</span><br><span class="line">│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │</span><br><span class="line">│  │  矿车调度服务  │  │  设备监控服务  │  │  瓦斯预警服务  │       │</span><br><span class="line">│  │  (Provider)  │  │  (Provider)  │  │  (Consumer)  │       │</span><br><span class="line">│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘       │</span><br><span class="line">│         │                 │                  │               │</span><br><span class="line">│         │    注册+心跳     │   注册+心跳      │  订阅+发现    │</span><br><span class="line">│         ▼                 ▼                  ▼               │</span><br><span class="line">│  ┌──────────────────────────────────────────────────┐       │</span><br><span class="line">│  │                 Nacos Server 集群                  │       │</span><br><span class="line">│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │       │</span><br><span class="line">│  │  │ Nacos-1  │  │ Nacos-2  │  │ Nacos-3  │       │       │</span><br><span class="line">│  │  │ (Leader) │  │(Follower)│  │(Follower)│       │       │</span><br><span class="line">│  │  └────┬─────┘  └────┬─────┘  └────┬─────┘       │       │</span><br><span class="line">│  │       └──────────────┼──────────────┘            │       │</span><br><span class="line">│  │                      ▼                           │       │</span><br><span class="line">│  │              ┌──────────────┐                    │       │</span><br><span class="line">│  │              │  MySQL 持久化  │                    │       │</span><br><span class="line">│  │              └──────────────┘                    │       │</span><br><span class="line">│  └──────────────────────────────────────────────────┘       │</span><br><span class="line">│                                                              │</span><br><span class="line">│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │</span><br><span class="line">│  │  人员定位服务  │  │  告警推送服务  │  │  数据采集服务  │       │</span><br><span class="line">│  │  (Provider)  │  │  (Consumer)  │  │  (Provider)  │       │</span><br><span class="line">│  └──────────────┘  └──────────────┘  └──────────────┘       │</span><br><span class="line">│                                                              │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="Nacos内部模块架构"><a href="#Nacos内部模块架构" class="headerlink" title="Nacos内部模块架构"></a>Nacos内部模块架构</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                      Nacos Server 内部模块架构                     │</span><br><span class="line">├──────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                  │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────────┐    │</span><br><span class="line">│  │                    ConfigService                         │    │</span><br><span class="line">│  │  ┌────────────┐  ┌─────────────┐  ┌────────────────┐   │    │</span><br><span class="line">│  │  │ 配置读写    │  │ 配置变更推送 │  │ 配置历史管理    │   │    │</span><br><span class="line">│  │  └────────────┘  └─────────────┘  └────────────────┘   │    │</span><br><span class="line">│  └─────────────────────────────────────────────────────────┘    │</span><br><span class="line">│                                                                  │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────────┐    │</span><br><span class="line">│  │                   NamingService                          │    │</span><br><span class="line">│  │  ┌────────────┐  ┌─────────────┐  ┌────────────────┐   │    │</span><br><span class="line">│  │  │ 实例注册    │  │ 心跳检测     │  │ 服务发现/Push  │   │    │</span><br><span class="line">│  │  └────────────┘  └─────────────┘  └────────────────┘   │    │</span><br><span class="line">│  └─────────────────────────────────────────────────────────┘    │</span><br><span class="line">│                                                                  │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────────┐    │</span><br><span class="line">│  │                   ConsistencyProtocol                    │    │</span><br><span class="line">│  │  ┌──────────────────┐  ┌───────────────────────────┐   │    │</span><br><span class="line">│  │  │ Distro(AP临时实例)│  │ Raft(CP持久实例)          │   │    │</span><br><span class="line">│  │  └──────────────────┘  └───────────────────────────┘   │    │</span><br><span class="line">│  └─────────────────────────────────────────────────────────┘    │</span><br><span class="line">│                                                                  │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────────┐    │</span><br><span class="line">│  │                    持久化层                               │    │</span><br><span class="line">│  │  ┌────────────┐  ┌─────────────┐  ┌────────────────┐   │    │</span><br><span class="line">│  │  │ 内嵌Derby   │  │ 外置MySQL   │  │ 本地文件系统    │   │    │</span><br><span class="line">│  │  └────────────┘  └─────────────┘  └────────────────┘   │    │</span><br><span class="line">│  └─────────────────────────────────────────────────────────┘    │</span><br><span class="line">│                                                                  │</span><br><span class="line">└──────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="核心角色对比"><a href="#核心角色对比" class="headerlink" title="核心角色对比"></a>核心角色对比</h3><table>
+<thead>
+<tr>
+<th>角色</th>
+<th>职责</th>
+<th>实际项目实例</th>
+<th>关键方法</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Provider（服务提供者）</strong></td>
+<td>注册服务、发送心跳</td>
+<td>矿车调度服务注册到Nacos，定时发送心跳</td>
+<td>registerInstance()、sendBeat()</td>
+</tr>
+<tr>
+<td><strong>Consumer（服务消费者）</strong></td>
+<td>订阅服务、发现实例</td>
+<td>瓦斯预警服务订阅设备监控服务实例列表</td>
+<td>subscribe()、getInstances()</td>
+</tr>
+<tr>
+<td><strong>Nacos Server</strong></td>
+<td>注册中心 + 配置中心</td>
+<td>管理所有矿山微服务的注册信息和配置</td>
+<td>处理注册&#x2F;心跳&#x2F;推送请求</td>
+</tr>
+</tbody></table>
+<h3 id="Nacos-Server存储模型"><a href="#Nacos-Server存储模型" class="headerlink" title="Nacos Server存储模型"></a>Nacos Server存储模型</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line">Nacos Server 存储模型：</span><br><span class="line"></span><br><span class="line">┌─────────────────────────────────────────┐</span><br><span class="line">│              Namespace（命名空间）         │</span><br><span class="line">│  ┌───────────────────────────────────┐  │</span><br><span class="line">│  │         Group（分组）               │  │</span><br><span class="line">│  │  ┌─────────────────────────────┐  │  │</span><br><span class="line">│  │  │    Service（服务）            │  │  │</span><br><span class="line">│  │  │  ┌─────────────────────┐    │  │  │</span><br><span class="line">│  │  │  │  Cluster（集群）     │    │  │  │</span><br><span class="line">│  │  │  │  ┌───────────────┐  │    │  │  │</span><br><span class="line">│  │  │  │  │ Instance      │  │    │  │  │</span><br><span class="line">│  │  │  │  │  ip:port      │  │    │  │  │</span><br><span class="line">│  │  │  │  │  weight       │  │    │  │  │</span><br><span class="line">│  │  │  │  │  healthy      │  │    │  │  │</span><br><span class="line">│  │  │  │  │  ephemeral    │  │    │  │  │</span><br><span class="line">│  │  │  │  └───────────────┘  │    │  │  │</span><br><span class="line">│  │  │  └─────────────────────┘    │  │  │</span><br><span class="line">│  │  └─────────────────────────────┘  │  │</span><br><span class="line">│  └───────────────────────────────────┘  │</span><br><span class="line">└─────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">存储内容：</span><br><span class="line">- 服务列表 + 健康状态</span><br><span class="line">- 配置数据 + 版本管理</span><br><span class="line">- 元数据信息（权重、集群名等）</span><br><span class="line"></span><br><span class="line">实际项目Namespace规划：</span><br><span class="line">- namespace: mine-dev    → 开发环境</span><br><span class="line">- namespace: mine-test   → 测试环境</span><br><span class="line">- namespace: mine-prod   → 生产环境</span><br><span class="line"></span><br><span class="line">Group划分：</span><br><span class="line">- MINE_CORE_GROUP   → 核心业务服务（矿车调度、设备监控）</span><br><span class="line">- MINE_SAFETY_GROUP → 安全相关服务（瓦斯预警、通风控制）</span><br><span class="line">- MINE_BASIC_GROUP  → 基础服务（认证、配置）</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="服务注册原理"><a href="#服务注册原理" class="headerlink" title="服务注册原理"></a>服务注册原理</h2><h3 id="临时实例-vs-持久实例"><a href="#临时实例-vs-持久实例" class="headerlink" title="临时实例 vs 持久实例"></a>临时实例 vs 持久实例</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│                    实例类型对比                           │</span><br><span class="line">├─────────────────────┬────────────────────────────────────┤</span><br><span class="line">│    临时实例           │         持久实例                   │</span><br><span class="line">│   (ephemeral)        │       (persistent)                │</span><br><span class="line">├─────────────────────┼────────────────────────────────────┤</span><br><span class="line">│ 客户端心跳保活        │ 服务端主动探测                     │</span><br><span class="line">│ 不心跳则剔除          │ 永远不剔除                        │</span><br><span class="line">│ AP模式（Distro协议）  │ CP模式（Raft协议）                 │</span><br><span class="line">│ 微服务实例            │ 数据库等基础设施                   │</span><br><span class="line">│ 默认类型              │ 需手动设置                        │</span><br><span class="line">│ Nacos 1.x:HTTP心跳   │ TCP/HTTP探测                      │</span><br><span class="line">│ Nacos 2.x:gRPC保活   │ TCP/HTTP探测                      │</span><br><span class="line">└─────────────────────┴────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">实际项目配置：</span><br><span class="line"># 矿车调度服务 - 临时实例（自动上下线）</span><br><span class="line">spring.cloud.nacos.discovery.ephemeral=true</span><br><span class="line"></span><br><span class="line"># MySQL数据库 - 持久实例（服务端探测）</span><br><span class="line">spring.cloud.nacos.discovery.ephemeral=false</span><br></pre></td></tr></table></figure>
+
+<h3 id="注册流程源码分析"><a href="#注册流程源码分析" class="headerlink" title="注册流程源码分析"></a>注册流程源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 1. 服务启动时自动注册</span></span><br><span class="line"><span class="comment">// NacosAutoRegistration → NacosServiceRegistry.register()</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">register</span><span class="params">(Registration registration)</span> &#123;</span><br><span class="line">    <span class="type">NamingService</span> <span class="variable">namingService</span> <span class="operator">=</span> namingService();</span><br><span class="line">    <span class="type">String</span> <span class="variable">serviceId</span> <span class="operator">=</span> registration.getServiceId();</span><br><span class="line">    <span class="type">Instance</span> <span class="variable">instance</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Instance</span>();</span><br><span class="line">    instance.setIp(ip);</span><br><span class="line">    instance.setPort(port);</span><br><span class="line">    instance.setWeight(weight);</span><br><span class="line">    instance.setClusterName(clusterName);</span><br><span class="line">    instance.setEphemeral(ephemeral);  <span class="comment">// 临时实例</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 注册元数据</span></span><br><span class="line">    Map&lt;String, String&gt; metadata = registration.getMetadata();</span><br><span class="line">    instance.setMetadata(metadata);</span><br><span class="line"></span><br><span class="line">    namingService.registerInstance(serviceId, group, instance);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 2. registerInstance核心逻辑</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">registerInstance</span><span class="params">(String serviceName, String groupName, Instance instance)</span> &#123;</span><br><span class="line">    <span class="comment">// 临时实例：使用gRPC长连接注册</span></span><br><span class="line">    <span class="keyword">if</span> (instance.isEphemeral()) &#123;</span><br><span class="line">        <span class="comment">// 注册到Nacos Server</span></span><br><span class="line">        serverProxy.registerService(serviceName, groupName, instance);</span><br><span class="line">        <span class="comment">// 启动心跳任务</span></span><br><span class="line">        beatReactor.addBeatInfo(serviceName, instance);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">// 持久实例：使用HTTP注册</span></span><br><span class="line">        serverProxy.registerServiceForPersistent(serviceName, groupName, instance);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 3. Nacos 2.x gRPC注册流程</span></span><br><span class="line"><span class="comment">// Nacos 2.x 使用GrpcConnection替代HTTP连接</span></span><br><span class="line"><span class="comment">// 注册流程：</span></span><br><span class="line"><span class="comment">// a. 建立gRPC连接 → ConnectionManager</span></span><br><span class="line"><span class="comment">// b. 发送InstanceRequest → GrpcConnection.request()</span></span><br><span class="line"><span class="comment">// c. 服务端处理 → InstanceRequestHandler.handle()</span></span><br><span class="line"><span class="comment">// d. 返回InstanceResponse</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="注册流程时序图"><a href="#注册流程时序图" class="headerlink" title="注册流程时序图"></a>注册流程时序图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">矿车调度服务               Nacos Client              Nacos Server</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │  1. Spring启动           │                          │</span><br><span class="line">    │─────────────────────────&gt;│                          │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  2. 构建Instance          │</span><br><span class="line">    │                         │  (ip/port/weight/         │</span><br><span class="line">    │                         │   ephemeral/metadata)     │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  3. gRPC注册请求          │</span><br><span class="line">    │                         │─────────────────────────&gt;│</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  4. 存储实例信息          │</span><br><span class="line">    │                         │          ┌───────────────│</span><br><span class="line">    │                         │          │ 写入内存+磁盘  │</span><br><span class="line">    │                         │          └───────────────│</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  5. 注册成功响应          │</span><br><span class="line">    │                         │&lt;─────────────────────────│</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  6. 启动心跳任务          │</span><br><span class="line">    │                         │  (BeatReactor)           │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  7. 定时发送心跳(5s)      │</span><br><span class="line">    │                         │─────────────────────────&gt;│</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  8. Nacos Server推送      │</span><br><span class="line">    │                         │&lt;─────────────────────────│</span><br><span class="line">    │                         │  (实例变化通知)           │</span><br><span class="line">    │                         │                          │</span><br></pre></td></tr></table></figure>
+
+<h3 id="心跳机制源码分析"><a href="#心跳机制源码分析" class="headerlink" title="心跳机制源码分析"></a>心跳机制源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 临时实例通过心跳保活（Nacos 1.x方式）</span></span><br><span class="line"><span class="comment">// BeatReactor.BeatTask.run()</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">run</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="comment">// 发送心跳</span></span><br><span class="line">    <span class="type">JSONObject</span> <span class="variable">result</span> <span class="operator">=</span> serverProxy.sendBeat(beatInfo);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 检查心跳结果</span></span><br><span class="line">    <span class="type">long</span> <span class="variable">interval</span> <span class="operator">=</span> result.getIntValue(<span class="string">&quot;clientBeatInterval&quot;</span>);</span><br><span class="line">    <span class="keyword">if</span> (interval &gt; <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="comment">// 更新心跳间隔</span></span><br><span class="line">        beatInfo.setPeriod(interval);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 安排下一次心跳</span></span><br><span class="line">    executorService.schedule(<span class="keyword">new</span> <span class="title class_">BeatTask</span>(beatInfo), beatInfo.getPeriod(), TimeUnit.MILLISECONDS);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 默认心跳间隔：5秒</span></span><br><span class="line"><span class="comment">// Nacos Server 15秒未收到心跳 → 标记不健康</span></span><br><span class="line"><span class="comment">// Nacos Server 30秒未收到心跳 → 剔除实例</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// Nacos Server端心跳处理</span></span><br><span class="line"><span class="comment">// InstanceController.beat()</span></span><br><span class="line"><span class="keyword">public</span> JSONObject <span class="title function_">beat</span><span class="params">(HttpServletRequest request)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 解析心跳信息</span></span><br><span class="line">    <span class="type">String</span> <span class="variable">serviceName</span> <span class="operator">=</span> WebUtils.required(request, <span class="string">&quot;serviceName&quot;</span>);</span><br><span class="line">    <span class="type">String</span> <span class="variable">ip</span> <span class="operator">=</span> WebUtils.required(request, <span class="string">&quot;ip&quot;</span>);</span><br><span class="line">    <span class="type">int</span> <span class="variable">port</span> <span class="operator">=</span> Integer.parseInt(WebUtils.required(request, <span class="string">&quot;port&quot;</span>));</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 2. 查找实例</span></span><br><span class="line">    <span class="type">Instance</span> <span class="variable">instance</span> <span class="operator">=</span> serviceManager.getInstance(serviceName, ip, port);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 3. 更新心跳时间</span></span><br><span class="line">    instance.setLastBeat(System.currentTimeMillis());</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 4. 如果实例不健康，恢复健康状态</span></span><br><span class="line">    <span class="keyword">if</span> (!instance.isHealthy()) &#123;</span><br><span class="line">        instance.setHealthy(<span class="literal">true</span>);</span><br><span class="line">        <span class="comment">// 通知订阅者</span></span><br><span class="line">        serviceManager.serviceChanged(serviceName);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 5. 返回心跳间隔</span></span><br><span class="line">    <span class="type">JSONObject</span> <span class="variable">result</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">JSONObject</span>();</span><br><span class="line">    result.put(<span class="string">&quot;clientBeatInterval&quot;</span>, instance.getInstanceHeartBeatInterval());</span><br><span class="line">    <span class="keyword">return</span> result;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="心跳时间线"><a href="#心跳时间线" class="headerlink" title="心跳时间线"></a>心跳时间线</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">时间轴（秒）  0    5    10   15   20   25   30</span><br><span class="line">             │    │    │    │    │    │    │</span><br><span class="line">心跳发送     ♥    ♥    ♥                     ← 正常心跳</span><br><span class="line">             │    │    │    │    │    │    │</span><br><span class="line">服务端状态   健康  健康  健康  不健康  不健康  不健康  剔除</span><br><span class="line">             │    │    │    │    │    │    │</span><br><span class="line">                                ↑              ↑</span><br><span class="line">                           15秒无心跳       30秒无心跳</span><br><span class="line">                           标记不健康       从列表剔除</span><br><span class="line"></span><br><span class="line">智慧矿山实战经验：</span><br><span class="line">- 正常情况：矿车调度服务每5秒发一次心跳，状态始终healthy</span><br><span class="line">- 网络抖动：偶发丢包导致1-2次心跳丢失，15秒内恢复不影响</span><br><span class="line">- 节点故障：矿车调度服务宕机，15秒标记不健康，30秒剔除</span><br><span class="line">- 线程阻塞：Full GC导致心跳线程暂停，可能被误判不健康</span><br></pre></td></tr></table></figure>
+
+<h3 id="gRPC长连接（Nacos-2-0-）"><a href="#gRPC长连接（Nacos-2-0-）" class="headerlink" title="gRPC长连接（Nacos 2.0+）"></a>gRPC长连接（Nacos 2.0+）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Nacos 2.0+使用gRPC长连接替代心跳</span></span><br><span class="line"><span class="comment">// 优点：</span></span><br><span class="line"><span class="comment">// 1. 连接断开立即感知，不需要等15秒</span></span><br><span class="line"><span class="comment">// 2. 减少心跳请求，降低Server压力</span></span><br><span class="line"><span class="comment">// 3. 支持双向流，配置推送更实时</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 连接建立：</span></span><br><span class="line"><span class="comment">// Client → gRPC Connect → Server</span></span><br><span class="line"><span class="comment">// Server → ConnectionEvent → Client</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 连接保活：</span></span><br><span class="line"><span class="comment">// Client → Ping → Server (每20秒)</span></span><br><span class="line"><span class="comment">// Server → Pong → Client</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 连接断开：</span></span><br><span class="line"><span class="comment">// Server检测到连接断开 → 标记不健康 → 20秒后剔除</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// ConnectionManager核心逻辑</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ConnectionManager</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 连接检测任务</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">checkTask</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">for</span> (Connection connection : connections.values()) &#123;</span><br><span class="line">            <span class="type">long</span> <span class="variable">lastActiveTime</span> <span class="operator">=</span> connection.getLastActiveTime();</span><br><span class="line">            <span class="type">long</span> <span class="variable">now</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 超过20秒无活动</span></span><br><span class="line">            <span class="keyword">if</span> (now - lastActiveTime &gt; <span class="number">20000</span>) &#123;</span><br><span class="line">                <span class="comment">// 标记不健康</span></span><br><span class="line">                connection.setHealthy(<span class="literal">false</span>);</span><br><span class="line">                <span class="comment">// 通知服务变更</span></span><br><span class="line">                notifyServiceChanged(connection);</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 超过30秒无活动，剔除</span></span><br><span class="line">            <span class="keyword">if</span> (now - lastActiveTime &gt; <span class="number">30000</span>) &#123;</span><br><span class="line">                connections.remove(connection.getId());</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="Nacos-1-x-vs-2-x-通信机制对比"><a href="#Nacos-1-x-vs-2-x-通信机制对比" class="headerlink" title="Nacos 1.x vs 2.x 通信机制对比"></a>Nacos 1.x vs 2.x 通信机制对比</h3><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Nacos 1.x</th>
+<th>Nacos 2.x</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>注册通信</td>
+<td>HTTP短连接</td>
+<td>gRPC长连接</td>
+</tr>
+<tr>
+<td>心跳机制</td>
+<td>客户端定时HTTP心跳</td>
+<td>gRPC连接保活Ping</td>
+</tr>
+<tr>
+<td>配置监听</td>
+<td>HTTP长轮询(29s)</td>
+<td>gRPC双向流推送</td>
+</tr>
+<tr>
+<td>感知速度</td>
+<td>15-30秒</td>
+<td>即时（连接断开即感知）</td>
+</tr>
+<tr>
+<td>Server压力</td>
+<td>大量心跳HTTP请求</td>
+<td>长连接，请求量少</td>
+</tr>
+<tr>
+<td>端口</td>
+<td>8848（HTTP）</td>
+<td>8848（HTTP）+ 9848（gRPC客户端）+ 9849（gRPC内部）</td>
+</tr>
+<tr>
+<td>连接管理</td>
+<td>无状态</td>
+<td>ConnectionManager管理</td>
+</tr>
+<tr>
+<td>安全性</td>
+<td>基础鉴权</td>
+<td>gRPC TLS + 鉴权</td>
+</tr>
+</tbody></table>
+<h3 id="Distro协议（AP模式）"><a href="#Distro协议（AP模式）" class="headerlink" title="Distro协议（AP模式）"></a>Distro协议（AP模式）</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              Distro 协议（临时实例使用的AP协议）               │</span><br><span class="line">├──────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                              │</span><br><span class="line">│  核心思想：每个Nacos节点负责一部分数据的写入，                 │</span><br><span class="line">│  然后异步复制到其他节点                                       │</span><br><span class="line">│                                                              │</span><br><span class="line">│  ┌──────────┐    异步复制    ┌──────────┐                   │</span><br><span class="line">│  │ Nacos-1  │──────────────&gt;│ Nacos-2  │                   │</span><br><span class="line">│  │ 负责hash │               │ 负责hash │                   │</span><br><span class="line">│  │ slot 1-3 │               │ slot 4-6 │                   │</span><br><span class="line">│  └──────────┘               └──────────┘                   │</span><br><span class="line">│       │                           │                         │</span><br><span class="line">│       │         异步复制           │                         │</span><br><span class="line">│       └──────────────────────────&gt;│                         │</span><br><span class="line">│                                                              │</span><br><span class="line">│  写入流程：                                                  │</span><br><span class="line">│  1. 客户端请求 → 任一Nacos节点                               │</span><br><span class="line">│  2. 该节点判断是否负责该数据的hash slot                       │</span><br><span class="line">│  3. 如果负责 → 直接写入 + 异步复制                           │</span><br><span class="line">│  4. 如果不负责 → 转发到负责的节点                             │</span><br><span class="line">│                                                              │</span><br><span class="line">│  一致性保证：                                                │</span><br><span class="line">│  - 最终一致：异步复制，短暂不一致                             │</span><br><span class="line">│  - 可用性优先：任何节点都能处理读请求                         │</span><br><span class="line">│  - 适合微服务场景：实例上下线允许短暂延迟                     │</span><br><span class="line">│                                                              │</span><br><span class="line">│  实际项目：矿车调度服务注册到Nacos-1，                    │</span><br><span class="line">│  Nacos-1异步复制到Nacos-2/Nacos-3，                          │</span><br><span class="line">│  瓦斯预警服务从Nacos-2查询，可能短暂看不到最新实例            │</span><br><span class="line">│                                                              │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="服务发现原理"><a href="#服务发现原理" class="headerlink" title="服务发现原理"></a>服务发现原理</h2><h3 id="订阅机制源码分析"><a href="#订阅机制源码分析" class="headerlink" title="订阅机制源码分析"></a>订阅机制源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 消费者订阅服务列表</span></span><br><span class="line"><span class="comment">// NacosDiscoveryClient.getInstances()</span></span><br><span class="line"><span class="keyword">public</span> List&lt;ServiceInstance&gt; <span class="title function_">getInstances</span><span class="params">(String serviceId)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 从本地缓存获取</span></span><br><span class="line">    Map&lt;String, ServiceInstance&gt; instances = serviceInstances.get(serviceId);</span><br><span class="line">    <span class="keyword">if</span> (instances == <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="keyword">synchronized</span> (<span class="built_in">this</span>) &#123;</span><br><span class="line">            instances = serviceInstances.get(serviceId);</span><br><span class="line">            <span class="keyword">if</span> (instances == <span class="literal">null</span>) &#123;</span><br><span class="line">                <span class="comment">// 2. 首次从Nacos Server拉取</span></span><br><span class="line">                instances = loadInstancesFromNacos(serviceId);</span><br><span class="line">                serviceInstances.put(serviceId, instances);</span><br><span class="line"></span><br><span class="line">                <span class="comment">// 3. 注册订阅监听器</span></span><br><span class="line">                subscribeEventListener(serviceId);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(instances.values());</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 订阅监听：当服务列表变化时，Nacos Server主动推送</span></span><br><span class="line"><span class="comment">// 推送机制（Nacos 2.0+）：gRPC双向流</span></span><br><span class="line"><span class="comment">// 推送机制（Nacos 1.x）：UDP推送 + HTTP长轮询</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// Nacos 2.x gRPC订阅流程源码</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">NamingGrpcClientProxy</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 订阅服务</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">subscribe</span><span class="params">(String serviceName, String groupName, EventListener listener)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 发送SubscribeRequest</span></span><br><span class="line">        <span class="type">SubscribeRequest</span> <span class="variable">request</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">SubscribeRequest</span>();</span><br><span class="line">        request.setServiceName(serviceName);</span><br><span class="line">        request.setGroupName(groupName);</span><br><span class="line">        request.setSubscribe(<span class="literal">true</span>);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. Server端注册推送监听</span></span><br><span class="line">        grpcClient.request(request);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 本地注册EventListener</span></span><br><span class="line">        eventListeners.put(serviceName, listener);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 服务端推送回调</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">onServerPush</span><span class="params">(NotifySubscriberRequest request)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">serviceName</span> <span class="operator">=</span> request.getServiceName();</span><br><span class="line">        <span class="type">EventListener</span> <span class="variable">listener</span> <span class="operator">=</span> eventListeners.get(serviceName);</span><br><span class="line">        <span class="keyword">if</span> (listener != <span class="literal">null</span>) &#123;</span><br><span class="line">            listener.onEvent(<span class="keyword">new</span> <span class="title class_">ServiceChangedEvent</span>(serviceName));</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="服务发现流程图"><a href="#服务发现流程图" class="headerlink" title="服务发现流程图"></a>服务发现流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">瓦斯预警服务              Nacos Client              Nacos Server</span><br><span class="line">(Consumer)                                           │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │  1. 调用设备监控服务     │                          │</span><br><span class="line">    │─────────────────────────&gt;│                          │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  2. 查本地缓存            │</span><br><span class="line">    │                         │  (未命中)                 │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  3. 请求服务列表          │</span><br><span class="line">    │                         │─────────────────────────&gt;│</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  4. 返回实例列表          │</span><br><span class="line">    │                         │&lt;─────────────────────────│</span><br><span class="line">    │                         │  [device-svc:10.0.1.1]   │</span><br><span class="line">    │                         │  [device-svc:10.0.1.2]   │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  5. 注册Push监听          │</span><br><span class="line">    │                         │─────────────────────────&gt;│</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │  6. 返回服务实例         │                          │</span><br><span class="line">    │&lt;─────────────────────────│                          │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  7. 实例变化推送          │</span><br><span class="line">    │                         │&lt;─────────────────────────│</span><br><span class="line">    │                         │  (新实例上线/下线)        │</span><br><span class="line">    │                         │                          │</span><br><span class="line">    │                         │  8. 更新本地缓存          │</span><br><span class="line">    │                         │                          │</span><br></pre></td></tr></table></figure>
+
+<h3 id="本地缓存机制"><a href="#本地缓存机制" class="headerlink" title="本地缓存机制"></a>本地缓存机制</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 消费者本地缓存服务列表，避免每次都请求Nacos Server</span></span><br><span class="line"><span class="comment">// 缓存文件：$&#123;user.home&#125;/nacos/naming/$&#123;namespace&#125;/$&#123;group&#125;/$&#123;serviceName&#125;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 优点：</span></span><br><span class="line"><span class="comment">// 1. 减少Nacos Server压力</span></span><br><span class="line"><span class="comment">// 2. Nacos Server不可用时，仍能从缓存获取服务列表</span></span><br><span class="line"><span class="comment">// 3. 启动时优先从本地缓存加载</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 配置</span></span><br><span class="line">spring.cloud.nacos.discovery.naming-load-cache-at-start=<span class="literal">true</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// FailoverReactor源码 - 故障降级处理</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">FailoverReactor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 磁盘缓存目录</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">FAILOVER_DIR</span> <span class="operator">=</span> <span class="string">&quot;failover&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 加载磁盘缓存</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">loadCacheFromDisk</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">File</span> <span class="variable">dir</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">File</span>(failoverDir);</span><br><span class="line">        <span class="keyword">if</span> (!dir.exists()) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">for</span> (File file : dir.listFiles()) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">serviceName</span> <span class="operator">=</span> file.getName();</span><br><span class="line">            <span class="type">String</span> <span class="variable">content</span> <span class="operator">=</span> FileUtils.readFile(file);</span><br><span class="line">            <span class="comment">// 解析为ServiceInfo并放入缓存</span></span><br><span class="line">            <span class="type">ServiceInfo</span> <span class="variable">info</span> <span class="operator">=</span> JacksonUtils.toObj(content, ServiceInfo.class);</span><br><span class="line">            failoverMap.put(serviceName, info);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 写入磁盘缓存</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">saveCacheToDisk</span><span class="params">(ServiceInfo info)</span> &#123;</span><br><span class="line">        <span class="type">File</span> <span class="variable">file</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">File</span>(failoverDir, info.getName());</span><br><span class="line">        FileUtils.writeFile(file, JacksonUtils.toJson(info));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="本地缓存策略"><a href="#本地缓存策略" class="headerlink" title="本地缓存策略"></a>本地缓存策略</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────┐</span><br><span class="line">│            消费者本地缓存策略                 │</span><br><span class="line">├─────────────────────────────────────────────┤</span><br><span class="line">│                                             │</span><br><span class="line">│  1. 首次请求 → 从Nacos Server拉取            │</span><br><span class="line">│     └── 写入内存缓存 + 磁盘文件              │</span><br><span class="line">│                                             │</span><br><span class="line">│  2. 后续请求 → 直接读内存缓存                │</span><br><span class="line">│     └── 订阅Push更新内存缓存                 │</span><br><span class="line">│                                             │</span><br><span class="line">│  3. 服务重启 → 优先加载磁盘缓存              │</span><br><span class="line">│     └── 然后异步从Server更新                 │</span><br><span class="line">│                                             │</span><br><span class="line">│  4. Nacos不可用 → 降级读磁盘缓存             │</span><br><span class="line">│     └── 保证服务间仍能调用                    │</span><br><span class="line">│                                             │</span><br><span class="line">│  5. 缓存过期 → 定期全量拉取                  │</span><br><span class="line">│     └── 默认间隔6秒（可配置）                 │</span><br><span class="line">│                                             │</span><br><span class="line">└─────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<h3 id="推送机制对比"><a href="#推送机制对比" class="headerlink" title="推送机制对比"></a>推送机制对比</h3><table>
+<thead>
+<tr>
+<th>推送方式</th>
+<th>Nacos 1.x</th>
+<th>Nacos 2.x</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>协议</td>
+<td>UDP推送</td>
+<td>gRPC双向流</td>
+</tr>
+<tr>
+<td>可靠性</td>
+<td>UDP不可靠，可能丢包</td>
+<td>gRPC可靠传输</td>
+</tr>
+<tr>
+<td>实时性</td>
+<td>较好，但UDP可能丢失</td>
+<td>极好，连接保活</td>
+</tr>
+<tr>
+<td>补偿机制</td>
+<td>HTTP长轮询兜底</td>
+<td>自动重连+重试</td>
+</tr>
+<tr>
+<td>防火墙友好</td>
+<td>UDP常被拦截</td>
+<td>TCP协议友好</td>
+</tr>
+<tr>
+<td>Server负载</td>
+<td>UDP轻量但不可靠</td>
+<td>长连接占用资源</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="配置中心原理"><a href="#配置中心原理" class="headerlink" title="配置中心原理"></a>配置中心原理</h2><h3 id="配置获取源码分析"><a href="#配置获取源码分析" class="headerlink" title="配置获取源码分析"></a>配置获取源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// NacosConfigService.getConfig()</span></span><br><span class="line"><span class="keyword">public</span> String <span class="title function_">getConfig</span><span class="params">(String dataId, String group, <span class="type">long</span> timeoutMs)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 先从本地缓存/文件获取</span></span><br><span class="line">    <span class="type">String</span> <span class="variable">content</span> <span class="operator">=</span> getLocalConfig(dataId, group);</span><br><span class="line">    <span class="keyword">if</span> (content != <span class="literal">null</span>) <span class="keyword">return</span> content;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 2. 从Nacos Server获取</span></span><br><span class="line">    content = getConfigFromServer(dataId, group, timeoutMs);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 3. 保存到本地缓存</span></span><br><span class="line">    saveLocalConfig(dataId, group, content);</span><br><span class="line">    <span class="keyword">return</span> content;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// Nacos 2.x gRPC配置监听</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">GrpcConfigClientProxy</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 监听配置变更</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">listenConfig</span><span class="params">(String dataId, String group, Listener listener)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 发送ConfigBatchListenRequest</span></span><br><span class="line">        <span class="type">ConfigBatchListenRequest</span> <span class="variable">request</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ConfigBatchListenRequest</span>();</span><br><span class="line">        request.addListenConfig(dataId, group, lastMd5);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. gRPC双向流：Server端配置变更后主动推送</span></span><br><span class="line">        <span class="comment">// 3. Client端计算md5差异，拉取新配置</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 处理配置变更推送</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">onConfigChange</span><span class="params">(ConfigChangeNotifyRequest request)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">dataId</span> <span class="operator">=</span> request.getDataId();</span><br><span class="line">        <span class="type">String</span> <span class="variable">group</span> <span class="operator">=</span> request.getGroup();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 比较md5，如果有变化则拉取新配置</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">newMd5</span> <span class="operator">=</span> request.getMd5();</span><br><span class="line">        <span class="keyword">if</span> (!newMd5.equals(configCache.getMd5(dataId, group))) &#123;</span><br><span class="line">            <span class="comment">// 拉取新配置</span></span><br><span class="line">            <span class="type">String</span> <span class="variable">content</span> <span class="operator">=</span> getConfigFromServer(dataId, group, <span class="number">3000L</span>);</span><br><span class="line">            <span class="comment">// 通知监听器</span></span><br><span class="line">            listener.onReceive(content);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="配置监听与动态刷新"><a href="#配置监听与动态刷新" class="headerlink" title="配置监听与动态刷新"></a>配置监听与动态刷新</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Nacos 2.0+：gRPC长连接监听配置变更</span></span><br><span class="line"><span class="comment">// Nacos 1.x：HTTP长轮询（Long Polling）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 长轮询原理：</span></span><br><span class="line"><span class="comment">// Client → 请求配置变更（带md5，超时30秒）</span></span><br><span class="line"><span class="comment">// Server → 配置未变 → 挂起29秒 → 返回304</span></span><br><span class="line"><span class="comment">// Server → 配置已变 → 立即返回新配置</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// SpringBoot动态刷新</span></span><br><span class="line"><span class="meta">@RefreshScope</span>  <span class="comment">// 标记需要动态刷新的Bean</span></span><br><span class="line"><span class="meta">@RestController</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ConfigController</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;app.config.max-size:100&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> maxSize;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@GetMapping(&quot;/config&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">getConfig</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> maxSize;  <span class="comment">// Nacos配置变更后自动刷新</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// @ConfigurationProperties自动刷新</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@ConfigurationProperties(prefix = &quot;app.config&quot;)</span></span><br><span class="line"><span class="meta">@RefreshScope</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AppConfig</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> maxSize;</span><br><span class="line">    <span class="keyword">private</span> String name;</span><br><span class="line">    <span class="comment">// getter/setter</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="配置刷新流程"><a href="#配置刷新流程" class="headerlink" title="配置刷新流程"></a>配置刷新流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">  矿山运维人员           Nacos Console            Nacos Server          微服务应用</span><br><span class="line">      │                      │                        │                     │</span><br><span class="line">      │  1. 修改配置          │                        │                     │</span><br><span class="line">      │─────────────────────&gt;│                        │                     │</span><br><span class="line">      │                      │                        │                     │</span><br><span class="line">      │                      │  2. 保存配置            │                     │</span><br><span class="line">      │                      │───────────────────────&gt;│                     │</span><br><span class="line">      │                      │                        │                     │</span><br><span class="line">      │                      │                        │  3. gRPC推送变更     │</span><br><span class="line">      │                      │                        │────────────────────&gt;│</span><br><span class="line">      │                      │                        │                     │</span><br><span class="line">      │                      │                        │  4. 计算md5差异      │</span><br><span class="line">      │                      │                        │&lt;────────────────────│</span><br><span class="line">      │                      │                        │                     │</span><br><span class="line">      │                      │                        │  5. 返回新配置       │</span><br><span class="line">      │                      │                        │────────────────────&gt;│</span><br><span class="line">      │                      │                        │                     │</span><br><span class="line">      │                      │                        │     6. 刷新@RefreshScope Bean</span><br><span class="line">      │                      │                        │     7. 触发@RefreshScope销毁重建</span><br><span class="line">      │                      │                        │                     │</span><br><span class="line"></span><br><span class="line">@RefreshScope原理：</span><br><span class="line">1. 配置变更 → Nacos推送 → Spring Cloud收到EnvironmentChangeEvent</span><br><span class="line">2. RefreshEventListener处理事件 → RefreshScope.refreshAll()</span><br><span class="line">3. RefreshScope销毁旧Bean → 下次getBean()时重新创建</span><br><span class="line">4. 新Bean注入最新配置值</span><br></pre></td></tr></table></figure>
+
+<h3 id="配置最佳实践"><a href="#配置最佳实践" class="headerlink" title="配置最佳实践"></a>配置最佳实践</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 命名规范</span></span><br><span class="line"><span class="comment"># dataId = $&#123;prefix&#125;-$&#123;profile&#125;.$&#123;file-extension&#125;</span></span><br><span class="line"><span class="comment"># 例：mine-device-service-dev.yaml</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 配置优先级（高到低）</span></span><br><span class="line"><span class="comment"># 1. mine-device-service-dev.yaml  （环境专属）</span></span><br><span class="line"><span class="comment"># 2. mine-device-service.yaml      （共享配置）</span></span><br><span class="line"><span class="comment"># 3. application-dev.yaml          （全局环境配置）</span></span><br><span class="line"><span class="comment"># 4. application.yaml              （全局配置）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Nacos配置</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">cloud:</span></span><br><span class="line">    <span class="attr">nacos:</span></span><br><span class="line">      <span class="attr">config:</span></span><br><span class="line">        <span class="attr">server-addr:</span> <span class="string">localhost:8848</span></span><br><span class="line">        <span class="attr">namespace:</span> <span class="string">mine-dev</span></span><br><span class="line">        <span class="attr">group:</span> <span class="string">MINE_GROUP</span></span><br><span class="line">        <span class="attr">file-extension:</span> <span class="string">yaml</span></span><br><span class="line">        <span class="attr">shared-configs:</span>           <span class="comment"># 共享配置</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">data-id:</span> <span class="string">common.yaml</span></span><br><span class="line">            <span class="attr">group:</span> <span class="string">MINE_GROUP</span></span><br><span class="line">            <span class="attr">refresh:</span> <span class="literal">true</span></span><br><span class="line">        <span class="attr">extension-configs:</span>        <span class="comment"># 扩展配置</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">data-id:</span> <span class="string">redis.yaml</span></span><br><span class="line">            <span class="attr">group:</span> <span class="string">MINE_GROUP</span></span><br><span class="line">            <span class="attr">refresh:</span> <span class="literal">true</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">data-id:</span> <span class="string">rocketmq.yaml</span></span><br><span class="line">            <span class="attr">group:</span> <span class="string">MINE_GROUP</span></span><br><span class="line">            <span class="attr">refresh:</span> <span class="literal">true</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="配置优先级详解"><a href="#配置优先级详解" class="headerlink" title="配置优先级详解"></a>配置优先级详解</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    配置优先级（高→低）                         │</span><br><span class="line">├──────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                              │</span><br><span class="line">│  1. 命令行参数（--spring.xxx=yyy）         ← 最高            │</span><br><span class="line">│  2. JVM系统属性（-Dspring.xxx=yyy）                          │</span><br><span class="line">│  3. Nacos: $&#123;prefix&#125;-$&#123;profile&#125;.$&#123;file-ext&#125;                  │</span><br><span class="line">│  4. Nacos: $&#123;prefix&#125;.$&#123;file-ext&#125;                             │</span><br><span class="line">│  5. Nacos: extension-configs（按声明顺序）                    │</span><br><span class="line">│  6. Nacos: shared-configs（按声明顺序）                       │</span><br><span class="line">│  7. application-$&#123;profile&#125;.yaml                              │</span><br><span class="line">│  8. application.yaml                        ← 最低            │</span><br><span class="line">│                                                              │</span><br><span class="line">│  实际项目配置组织：                                       │</span><br><span class="line">│  ├── mine-car-service-dev.yaml    → 矿车调度服务专属配置      │</span><br><span class="line">│  ├── mine-car-service.yaml        → 矿车调度服务通用配置      │</span><br><span class="line">│  ├── common.yaml (shared)         → 所有服务共享（Redis等）   │</span><br><span class="line">│  ├── rocketmq.yaml (extension)    → MQ配置                   │</span><br><span class="line">│  └── application-dev.yaml         → 全局开发环境配置          │</span><br><span class="line">│                                                              │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="SpringCloud整合Nacos实战"><a href="#SpringCloud整合Nacos实战" class="headerlink" title="SpringCloud整合Nacos实战"></a>SpringCloud整合Nacos实战</h2><h3 id="依赖配置"><a href="#依赖配置" class="headerlink" title="依赖配置"></a>依赖配置</h3><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="tag">&lt;<span class="name">dependency</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>com.alibaba.cloud<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>spring-cloud-starter-alibaba-nacos-discovery<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">dependency</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">dependency</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>com.alibaba.cloud<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>spring-cloud-starter-alibaba-nacos-config<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">dependency</span>&gt;</span></span><br><span class="line"><span class="comment">&lt;!-- SpringCloud 2020+需要额外引入bootstrap --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">dependency</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>org.springframework.cloud<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>spring-cloud-starter-bootstrap<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">dependency</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="Bootstrap配置"><a href="#Bootstrap配置" class="headerlink" title="Bootstrap配置"></a>Bootstrap配置</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># bootstrap.yaml（Nacos配置必须在bootstrap中）</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">application:</span></span><br><span class="line">    <span class="attr">name:</span> <span class="string">mine-device-service</span></span><br><span class="line">  <span class="attr">cloud:</span></span><br><span class="line">    <span class="attr">nacos:</span></span><br><span class="line">      <span class="attr">discovery:</span></span><br><span class="line">        <span class="attr">server-addr:</span> <span class="string">nacos.mine.local:8848</span></span><br><span class="line">        <span class="attr">namespace:</span> <span class="string">mine-prod</span></span><br><span class="line">        <span class="attr">group:</span> <span class="string">MINE_GROUP</span></span><br><span class="line">        <span class="attr">cluster-name:</span> <span class="string">BJ-DC</span>          <span class="comment"># 集群名（同机房优先）</span></span><br><span class="line">        <span class="attr">weight:</span> <span class="number">1</span>                     <span class="comment"># 权重</span></span><br><span class="line">        <span class="attr">ephemeral:</span> <span class="literal">true</span>               <span class="comment"># 临时实例</span></span><br><span class="line">      <span class="attr">config:</span></span><br><span class="line">        <span class="attr">server-addr:</span> <span class="string">nacos.mine.local:8848</span></span><br><span class="line">        <span class="attr">namespace:</span> <span class="string">mine-prod</span></span><br><span class="line">        <span class="attr">group:</span> <span class="string">MINE_GROUP</span></span><br><span class="line">        <span class="attr">file-extension:</span> <span class="string">yaml</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="服务调用方式对比"><a href="#服务调用方式对比" class="headerlink" title="服务调用方式对比"></a>服务调用方式对比</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 方式1：RestTemplate + @LoadBalanced</span></span><br><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RestConfig</span> &#123;</span><br><span class="line">    <span class="meta">@Bean</span></span><br><span class="line">    <span class="meta">@LoadBalanced</span>  <span class="comment">// 负载均衡</span></span><br><span class="line">    <span class="keyword">public</span> RestTemplate <span class="title function_">restTemplate</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">RestTemplate</span>();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MineCarService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RestTemplate restTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> Device <span class="title function_">getDevice</span><span class="params">(Long deviceId)</span> &#123;</span><br><span class="line">        <span class="comment">// 使用服务名替代IP:Port</span></span><br><span class="line">        <span class="keyword">return</span> restTemplate.getForObject(</span><br><span class="line">            <span class="string">&quot;http://mine-device-service/device/&quot;</span> + deviceId, Device.class);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方式2：OpenFeign（推荐）</span></span><br><span class="line"><span class="meta">@FeignClient(name = &quot;mine-device-service&quot;, fallback = DeviceClientFallback.class)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">DeviceClient</span> &#123;</span><br><span class="line">    <span class="meta">@GetMapping(&quot;/device/&#123;id&#125;&quot;)</span></span><br><span class="line">    Device <span class="title function_">getById</span><span class="params">(<span class="meta">@PathVariable(&quot;id&quot;)</span> Long id)</span>;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@GetMapping(&quot;/device/list&quot;)</span></span><br><span class="line">    Result&lt;List&lt;Device&gt;&gt; <span class="title function_">listByArea</span><span class="params">(<span class="meta">@RequestParam(&quot;areaCode&quot;)</span> String areaCode)</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceClientFallback</span> <span class="keyword">implements</span> <span class="title class_">DeviceClient</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Device <span class="title function_">getById</span><span class="params">(Long id)</span> &#123;</span><br><span class="line">        log.warn(<span class="string">&quot;设备监控服务降级: deviceId=&#123;&#125;&quot;</span>, id);</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">Device</span>(id, <span class="string">&quot;服务不可用&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Result&lt;List&lt;Device&gt;&gt; <span class="title function_">listByArea</span><span class="params">(String areaCode)</span> &#123;</span><br><span class="line">        log.warn(<span class="string">&quot;设备监控服务降级: areaCode=&#123;&#125;&quot;</span>, areaCode);</span><br><span class="line">        <span class="keyword">return</span> Result.fail(<span class="string">&quot;设备服务暂不可用&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方式3：WebClient（响应式）</span></span><br><span class="line"><span class="meta">@Bean</span></span><br><span class="line"><span class="meta">@LoadBalanced</span></span><br><span class="line"><span class="keyword">public</span> WebClient.Builder <span class="title function_">webClientBuilder</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> WebClient.builder();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="服务调用方式对比表"><a href="#服务调用方式对比表" class="headerlink" title="服务调用方式对比表"></a>服务调用方式对比表</h3><table>
+<thead>
+<tr>
+<th>方式</th>
+<th>特点</th>
+<th>适用场景</th>
+<th>实际项目应用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>RestTemplate + @LoadBalanced</td>
+<td>简单直接</td>
+<td>简单调用</td>
+<td>巡检数据上报</td>
+</tr>
+<tr>
+<td>OpenFeign（推荐）</td>
+<td>声明式、支持降级</td>
+<td>常规服务调用</td>
+<td>设备监控调用、矿车调度调用</td>
+</tr>
+<tr>
+<td>WebClient</td>
+<td>响应式、非阻塞</td>
+<td>高并发、响应式</td>
+<td>传感器数据流处理</td>
+</tr>
+</tbody></table>
+<h3 id="负载均衡策略对比"><a href="#负载均衡策略对比" class="headerlink" title="负载均衡策略对比"></a>负载均衡策略对比</h3><table>
+<thead>
+<tr>
+<th>策略</th>
+<th>算法</th>
+<th>适用场景</th>
+<th>实际项目应用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>NacosRule</td>
+<td>同集群优先+权重随机</td>
+<td>多机房部署</td>
+<td>矿区A的矿车服务优先调矿区A的设备服务</td>
+</tr>
+<tr>
+<td>RoundRobinRule</td>
+<td>轮询</td>
+<td>实例性能相近</td>
+<td>均衡分配请求</td>
+</tr>
+<tr>
+<td>RandomRule</td>
+<td>随机</td>
+<td>简单场景</td>
+<td>不推荐生产使用</td>
+</tr>
+<tr>
+<td>WeightedResponseTimeRule</td>
+<td>响应时间权重</td>
+<td>实例性能差异大</td>
+<td>根据服务响应时间自动调节权重</td>
+</tr>
+<tr>
+<td>BestAvailableRule</td>
+<td>最少并发请求</td>
+<td>避免热点</td>
+<td>矿车调度请求分配</td>
+</tr>
+</tbody></table>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 负载均衡配置</span></span><br><span class="line"><span class="attr">mine-device-service:</span></span><br><span class="line">  <span class="attr">ribbon:</span></span><br><span class="line">    <span class="attr">NFLoadBalancerRuleClassName:</span> <span class="string">com.alibaba.cloud.nacos.ribbon.NacosRule</span></span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="Nacos集群部署"><a href="#Nacos集群部署" class="headerlink" title="Nacos集群部署"></a>Nacos集群部署</h2><h3 id="集群架构图"><a href="#集群架构图" class="headerlink" title="集群架构图"></a>集群架构图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">         ┌── Nginx (VIP) ──┐</span><br><span class="line">         │   192.168.1.200  │</span><br><span class="line">         └────────┬─────────┘</span><br><span class="line">                  │</span><br><span class="line">    ┌─────────────┼─────────────┐</span><br><span class="line">    ▼             ▼             ▼</span><br><span class="line">┌────────┐  ┌────────┐  ┌────────┐</span><br><span class="line">│Nacos-1 │  │Nacos-2 │  │Nacos-3 │</span><br><span class="line">│.1.100  │  │.1.101  │  │.1.102  │</span><br><span class="line">└───┬────┘  └───┬────┘  └───┬────┘</span><br><span class="line">    │           │           │</span><br><span class="line">    └───────────┼───────────┘</span><br><span class="line">                ▼</span><br><span class="line">        ┌──────────────┐</span><br><span class="line">        │   MySQL主从   │</span><br><span class="line">        │  .1.200:3306 │</span><br><span class="line">        └──────────────┘</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># cluster.conf（3个节点）</span></span><br><span class="line"><span class="number">192.168</span><span class="number">.1</span><span class="number">.1</span><span class="string">:8848</span></span><br><span class="line"><span class="number">192.168</span><span class="number">.1</span><span class="number">.2</span><span class="string">:8848</span></span><br><span class="line"><span class="number">192.168</span><span class="number">.1</span><span class="number">.3</span><span class="string">:8848</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># application.properties</span></span><br><span class="line"><span class="string">nacos.inetutils.ip-address=192.168.1.1</span></span><br><span class="line"><span class="string">spring.datasource.platform=mysql</span></span><br><span class="line"><span class="string">db.num=1</span></span><br><span class="line"><span class="string">db.url.0=jdbc:mysql://localhost:3306/nacos?characterEncoding=utf8</span></span><br><span class="line"><span class="string">db.user.0=nacos</span></span><br><span class="line"><span class="string">db.password.0=nacos</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Nginx负载均衡</span></span><br><span class="line"><span class="string">upstream</span> <span class="string">nacos</span> &#123;</span><br><span class="line">    <span class="string">server</span> <span class="number">192.168</span><span class="number">.1</span><span class="number">.1</span><span class="string">:8848;</span></span><br><span class="line">    <span class="string">server</span> <span class="number">192.168</span><span class="number">.1</span><span class="number">.2</span><span class="string">:8848;</span></span><br><span class="line">    <span class="string">server</span> <span class="number">192.168</span><span class="number">.1</span><span class="number">.3</span><span class="string">:8848;</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="健康检查机制深度分析"><a href="#健康检查机制深度分析" class="headerlink" title="健康检查机制深度分析"></a>健康检查机制深度分析</h2><h3 id="健康检查策略对比"><a href="#健康检查策略对比" class="headerlink" title="健康检查策略对比"></a>健康检查策略对比</h3><table>
+<thead>
+<tr>
+<th>检查方式</th>
+<th>临时实例</th>
+<th>持久实例</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>检查发起方</td>
+<td>客户端（心跳&#x2F;gRPC）</td>
+<td>服务端（TCP&#x2F;HTTP探测）</td>
+</tr>
+<tr>
+<td>检查间隔</td>
+<td>心跳5秒 &#x2F; gRPC Ping 20秒</td>
+<td>TCP探测20秒</td>
+</tr>
+<tr>
+<td>不健康判定</td>
+<td>15秒无心跳</td>
+<td>探测失败</td>
+</tr>
+<tr>
+<td>剔除策略</td>
+<td>30秒无心跳自动剔除</td>
+<td>不剔除，仅标记不健康</td>
+</tr>
+<tr>
+<td>保护机制</td>
+<td>保护阈值（防雪崩）</td>
+<td>无</td>
+</tr>
+<tr>
+<td>一致性协议</td>
+<td>Distro(AP)</td>
+<td>Raft(CP)</td>
+</tr>
+<tr>
+<td>适用场景</td>
+<td>微服务实例</td>
+<td>数据库&#x2F;中间件</td>
+</tr>
+</tbody></table>
+<h3 id="持久实例健康检查源码"><a href="#持久实例健康检查源码" class="headerlink" title="持久实例健康检查源码"></a>持久实例健康检查源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 持久实例使用服务端主动探测</span></span><br><span class="line"><span class="comment">// HealthCheckProcessorV2</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// TCP探测</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">checkByTcp</span><span class="params">(Instance instance)</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> (<span class="type">Socket</span> <span class="variable">socket</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Socket</span>()) &#123;</span><br><span class="line">        socket.connect(</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">InetSocketAddress</span>(instance.getIp(), instance.getPort()),</span><br><span class="line">            <span class="number">2000</span>  <span class="comment">// 2秒连接超时</span></span><br><span class="line">        );</span><br><span class="line">        <span class="comment">// 连接成功 → 健康</span></span><br><span class="line">        instance.setHealthy(<span class="literal">true</span>);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (IOException e) &#123;</span><br><span class="line">        <span class="comment">// 连接失败 → 不健康</span></span><br><span class="line">        instance.setHealthy(<span class="literal">false</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// HTTP探测</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">checkByHttp</span><span class="params">(Instance instance)</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        ResponseEntity&lt;String&gt; response = restTemplate.getForEntity(</span><br><span class="line">            <span class="string">&quot;http://&quot;</span> + instance.getIp() + <span class="string">&quot;:&quot;</span> + instance.getPort() + <span class="string">&quot;/actuator/health&quot;</span>,</span><br><span class="line">            String.class</span><br><span class="line">        );</span><br><span class="line">        instance.setHealthy(response.getStatusCode().is2xxSuccessful());</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">        instance.setHealthy(<span class="literal">false</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="保护阈值机制"><a href="#保护阈值机制" class="headerlink" title="保护阈值机制"></a>保护阈值机制</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">保护阈值（Protect Threshold）：</span><br><span class="line"></span><br><span class="line">当健康实例数 / 总实例数 &lt; 保护阈值时，认为全部实例健康</span><br><span class="line"></span><br><span class="line">为什么需要？</span><br><span class="line">  矿车调度服务3个实例，2个不健康，1个健康</span><br><span class="line">  如果不加保护：所有流量打到1个实例 → 雪崩</span><br><span class="line">  加了保护：认为3个都健康，流量分散 → 牺牲一致性保可用性</span><br><span class="line"></span><br><span class="line">┌──────────────────────────────────────────────┐</span><br><span class="line">│           保护阈值效果示意                      │</span><br><span class="line">├──────────────────────────────────────────────┤</span><br><span class="line">│                                              │</span><br><span class="line">│  保护阈值=0.5，3个实例                         │</span><br><span class="line">│                                              │</span><br><span class="line">│  正常：3/3=1.0 &gt; 0.5 → 正常路由到健康实例       │</span><br><span class="line">│  ⬤ ⬤ ⬤  (全部健康)                           │</span><br><span class="line">│                                              │</span><br><span class="line">│  故障：1/3=0.33 &lt; 0.5 → 触发保护              │</span><br><span class="line">│  ⬤ ○ ○  (1个健康)                            │</span><br><span class="line">│  → 认为全部健康，流量分散到3个实例              │</span><br><span class="line">│  → 牺牲一致性（可能调用到不健康实例）保可用性     │</span><br><span class="line">│                                              │</span><br><span class="line">└──────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">智慧矿山保护阈值配置建议：</span><br><span class="line">- 核心安全服务（瓦斯预警）：0.0（不设保护，宁可报错不可静默失败）</span><br><span class="line">- 一般业务服务（矿车调度）：0.3-0.5</span><br><span class="line">- 非核心服务（数据报表）：0.5-0.7</span><br></pre></td></tr></table></figure>
+
+<h3 id="健康检查完整流程图"><a href="#健康检查完整流程图" class="headerlink" title="健康检查完整流程图"></a>健康检查完整流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    健康检查完整流程                                 │</span><br><span class="line">├──────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                  │</span><br><span class="line">│  临时实例（ephemeral=true）：                                     │</span><br><span class="line">│                                                                  │</span><br><span class="line">│  ┌──────────┐     心跳/gRPC Ping      ┌──────────┐              │</span><br><span class="line">│  │  Client  │────────────────────────&gt;│  Server  │              │</span><br><span class="line">│  │          │                          │          │              │</span><br><span class="line">│  │          │    15秒无心跳/连接断开     │ 标记不健康 │              │</span><br><span class="line">│  │          │────────────────────────&gt;│          │              │</span><br><span class="line">│  │          │                          │          │              │</span><br><span class="line">│  │          │    30秒无心跳/连接断开     │ 剔除实例  │              │</span><br><span class="line">│  │          │────────────────────────&gt;│          │              │</span><br><span class="line">│  └──────────┘                          └──────────┘              │</span><br><span class="line">│                                                                  │</span><br><span class="line">│  持久实例（ephemeral=false）：                                    │</span><br><span class="line">│                                                                  │</span><br><span class="line">│  ┌──────────┐                          ┌──────────┐              │</span><br><span class="line">│  │  Server  │──TCP/HTTP探测(20秒)──────&gt;│  Client  │              │</span><br><span class="line">│  │          │&lt;──探测结果───────────────│          │              │</span><br><span class="line">│  │          │                          │          │              │</span><br><span class="line">│  │          │    探测成功 → 标记健康     │          │              │</span><br><span class="line">│  │          │    探测失败 → 标记不健康   │          │              │</span><br><span class="line">│  │          │    永远不剔除              │          │              │</span><br><span class="line">│  └──────────┘                          └──────────┘              │</span><br><span class="line">│                                                                  │</span><br><span class="line">└──────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-Nacos和Eureka的区别？"><a href="#1-Nacos和Eureka的区别？" class="headerlink" title="1. Nacos和Eureka的区别？"></a>1. Nacos和Eureka的区别？</h3><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Nacos</th>
+<th>Eureka</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>配置中心</td>
+<td>支持</td>
+<td>不支持</td>
+</tr>
+<tr>
+<td>健康检查</td>
+<td>心跳+主动探测</td>
+<td>心跳</td>
+</tr>
+<tr>
+<td>实例类型</td>
+<td>临时+持久</td>
+<td>只有临时</td>
+</tr>
+<tr>
+<td>一致性</td>
+<td>CP+AP</td>
+<td>AP</td>
+</tr>
+<tr>
+<td>雪崩保护</td>
+<td>支持（保护阈值）</td>
+<td>支持（自我保护）</td>
+</tr>
+<tr>
+<td>维护状态</td>
+<td>活跃</td>
+<td>停止维护</td>
+</tr>
+<tr>
+<td>访问协议</td>
+<td>HTTP+gRPC</td>
+<td>HTTP</td>
+</tr>
+<tr>
+<td>消息推送</td>
+<td>gRPC双向流</td>
+<td>HTTP长轮询</td>
+</tr>
+<tr>
+<td>命名空间</td>
+<td>支持</td>
+<td>不支持</td>
+</tr>
+<tr>
+<td>分组管理</td>
+<td>支持</td>
+<td>不支持</td>
+</tr>
+<tr>
+<td>权重路由</td>
+<td>支持</td>
+<td>不支持</td>
+</tr>
+</tbody></table>
+<h3 id="2-Nacos如何保证配置实时性？"><a href="#2-Nacos如何保证配置实时性？" class="headerlink" title="2. Nacos如何保证配置实时性？"></a>2. Nacos如何保证配置实时性？</h3><p>Nacos 2.0+使用gRPC长连接，配置变更后Server主动推送给Client。Nacos 1.x使用HTTP长轮询，Client定时请求Server检测配置变更。推送+md5校验确保配置实时且不遗漏。</p>
+<h3 id="3-临时实例和持久实例的区别？"><a href="#3-临时实例和持久实例的区别？" class="headerlink" title="3. 临时实例和持久实例的区别？"></a>3. 临时实例和持久实例的区别？</h3><p>临时实例由客户端心跳保活，不心跳则剔除；持久实例由Server主动探测（TCP&#x2F;HTTP），不会自动剔除。微服务实例用临时，数据库等基础设施用持久。</p>
+<h3 id="4-Nacos-2-x的gRPC端口有什么作用？"><a href="#4-Nacos-2-x的gRPC端口有什么作用？" class="headerlink" title="4. Nacos 2.x的gRPC端口有什么作用？"></a>4. Nacos 2.x的gRPC端口有什么作用？</h3><p>8848是HTTP端口，9848是gRPC客户端请求端口（8848+1000），9849是gRPC服务端内部通信端口（8848+1001）。防火墙必须开放这三个端口。</p>
+<h3 id="5-保护阈值的作用？"><a href="#5-保护阈值的作用？" class="headerlink" title="5. 保护阈值的作用？"></a>5. 保护阈值的作用？</h3><p>当健康实例比例低于阈值时，将不健康实例也返回给消费者，牺牲一致性保证可用性，防止所有流量涌向少量健康实例导致雪崩。</p>
+<h3 id="6-Distro协议和Raft协议的区别？"><a href="#6-Distro协议和Raft协议的区别？" class="headerlink" title="6. Distro协议和Raft协议的区别？"></a>6. Distro协议和Raft协议的区别？</h3><p>Distro是AP协议，用于临时实例，每个节点负责部分数据并异步复制；Raft是CP协议，用于持久实例，Leader处理写入并同步到多数节点。临时实例追求可用性，持久实例追求一致性。</p>
+<hr>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>Nacos是智慧矿山微服务的基础设施。2023年深入原理后，核心认知是：<strong>临时实例靠心跳&#x2F;gRPC保活，持久实例靠Server探测；配置变更通过gRPC推送实时生效；同集群优先+权重随机实现负载均衡</strong>。理解了这些，微服务架构的服务治理就有了根基。在实际场景中，正是基于对Nacos原理的深入理解，我们才能在矿车调度服务掉线、设备监控服务不可达、配置变更不生效等生产问题中快速定位和解决。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/06/11/1360b6e3509a/">MySQL分页优化实战——深分页的性能陷阱与解决方案</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/06/18/0bfa9eb470bc/">接口性能优化实战——从2秒到50毫秒的蜕变</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/" class="tag" aria-label="标签: #分布式">#分布式</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/%E5%BE%AE%E6%9C%8D%E5%8A%A1/" aria-label="分类: 微服务">
+                        微服务
+                        <span>(5)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

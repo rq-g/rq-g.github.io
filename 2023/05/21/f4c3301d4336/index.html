@@ -1,0 +1,1568 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>JVM垃圾收集器详解——从Serial到ZGC的演进 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="JVM垃圾收集器详解——从Serial到ZGC的演进">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/05/21/f4c3301d4336/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言实际项目的设备采集服务（device-service）上线三个月后，每到夜班巡检高峰期就会出现3~5秒的服务卡顿。运维同事反馈日志中出现了大量FullGC记录，单次停顿高达4.2秒。当时团队对JVM垃圾收集器的认知仅停留在”默认配置能跑就行”，完全不清楚Serial、Parallel、CMS、G1、ZGC">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">JVM垃圾收集器详解——从Serial到ZGC的演进</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-05-21T13:27:11.000Z">2023-05-21</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/JVM/">JVM</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>实际项目的设备采集服务（device-service）上线三个月后，每到夜班巡检高峰期就会出现3~5秒的服务卡顿。运维同事反馈日志中出现了大量 Full GC 记录，单次停顿高达 4.2 秒。当时团队对 JVM 垃圾收集器的认知仅停留在”默认配置能跑就行”，完全不清楚 Serial、Parallel、CMS、G1、ZGC 之间的差异，更不知道如何根据业务场景选择和调优。2023 年系统学习 JVM 垃圾收集器后，终于能根据实际项目各服务的业务特征（实时性、吞吐量、内存规模）选择合适的 GC 策略并精确调优，最终将设备采集服务的 GC 停顿从 350ms 降至 20ms 以内，Full GC 频率从每日 3 次降至连续 60 天 0 次。</p>
+<p>本文以实际项目为实战背景，从垃圾收集器的基础理论出发，逐一剖析 Serial、ParNew、Parallel Scavenge、CMS、G1、ZGC 六大收集器的原理、参数、调优实战，最后结合项目中的 15 个真实问题，给出完整的选型与调优方案。</p>
+<hr>
+<h2 id="一、垃圾收集基础理论"><a href="#一、垃圾收集基础理论" class="headerlink" title="一、垃圾收集基础理论"></a>一、垃圾收集基础理论</h2><h3 id="1-1-为什么要了解垃圾收集"><a href="#1-1-为什么要了解垃圾收集" class="headerlink" title="1.1 为什么要了解垃圾收集"></a>1.1 为什么要了解垃圾收集</h3><p>在实际场景中，不同服务对 GC 的要求截然不同：</p>
+<table>
+<thead>
+<tr>
+<th>服务</th>
+<th>业务特征</th>
+<th>GC诉求</th>
+<th>堆规模</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>safety-service（安全监控）</td>
+<td>实时告警推送，延迟敏感</td>
+<td>低停顿优先</td>
+<td>4GB</td>
+</tr>
+<tr>
+<td>device-service（设备采集）</td>
+<td>高频数据写入，吞吐量敏感</td>
+<td>高吞吐优先</td>
+<td>4GB</td>
+</tr>
+<tr>
+<td>order-service（生产调度）</td>
+<td>事务密集，对象存活率高</td>
+<td>平衡吞吐与停顿</td>
+<td>6GB</td>
+</tr>
+<tr>
+<td>report-service（报表统计）</td>
+<td>批量计算，离线生成</td>
+<td>吞吐量优先</td>
+<td>8GB</td>
+</tr>
+<tr>
+<td>user-service（用户权限）</td>
+<td>请求量小，对象存活率低</td>
+<td>默认即可</td>
+<td>2GB</td>
+</tr>
+</tbody></table>
+<p><strong>不了解 GC 的代价</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">实际项目 device-service 上线初期的 GC 灾难时间线：</span><br><span class="line"></span><br><span class="line">Day 1   : 上线，默认 Parallel GC，堆 2GB</span><br><span class="line">Day 7   : 夜班高峰期，Young GC 频繁（每 8 秒一次），每次 50ms</span><br><span class="line">Day 15  : 老年代使用率达 85%，触发 Full GC，停顿 1.5 秒</span><br><span class="line">Day 22  : 大对象（设备历史数据数组）频繁分配，Full GC 频率升至每日 2 次</span><br><span class="line">Day 30  : Full GC 停顿飙升至 4.2 秒，安全告警推送超时，矿井值班人员未收到告警</span><br><span class="line">Day 31  : 紧急切换为 G1 GC + 堆扩至 4GB，Full GC 消失</span><br></pre></td></tr></table></figure>
+
+<h3 id="1-2-JVM-内存分代模型"><a href="#1-2-JVM-内存分代模型" class="headerlink" title="1.2 JVM 内存分代模型"></a>1.2 JVM 内存分代模型</h3><p><strong>JVM 堆内存</strong></p>
+<ul>
+<li>+—————————–+  +—————————–+</li>
+<li>|        新生代 (Young)        |  |        老年代 (Old)         |</li>
+<li>|                             |  |                             |</li>
+<li>|  +———+  +———-+ |  |                             |</li>
+<li>|  |  Eden   |  | Survivor | |  |   长期存活对象              |</li>
+<li>|  |         |  |  (From)  | |  |   大对象                    |</li>
+<li>|  | 新对象  |  |          | |  |   动态年龄晋升对象          |</li>
+<li>|  | 分配区  |  +———-+ |  |                             |</li>
+<li>|  |         |  +———-+ |  |                             |</li>
+<li>|  |         |  | Survivor | |  |                             |</li>
+<li>|  |         |  |  (To)    | |  |                             |</li>
+<li>|  +———+  +———-+ |  |                             |</li>
+<li>+—————————–+  +—————————–+</li>
+<li>默认比例：Eden : Survivor0 : Survivor1 &#x3D; 8 : 1 : 1</li>
+<li>新生代:老年代 &#x3D; 1 : 2（-XX:NewRatio&#x3D;2）</li>
+</ul>
+<p><strong>对象晋升流程</strong>：</p>
+<p><strong>新对象分配</strong></p>
+<ul>
+<li>|</li>
+<li>v</li>
+<li>+——–+     GC存活     +———-+    GC存活     +———-+</li>
+<li>Eden  | ————-&gt; | Survivor | ————-&gt; | Survivor</li>
+<li>|   年龄+1       |  (From)  |   年龄+1      |   (To)</li>
+<li>+——–+                +———-+               +———-+</li>
+<li>年龄 &gt;&#x3D; 阈值(默认15) 或 Survivor 空间不足</li>
+<li>-XX:MaxTenuringThreshold&#x3D;15</li>
+<li>v                                                    |</li>
+<li>+——–+                                               |</li>
+<li>|  Old   | &lt;———————————————+</li>
+<li>|  老年代 |   晋升</li>
+<li>实际项目 device-service 的对象年龄分布：</li>
+<li><ul>
+<li>80% 的设备采集数据对象在 Eden 区即为垃圾（朝生夕灭）</li>
+</ul>
+</li>
+<li><ul>
+<li>15% 的对象在 Survivor 区经历 1-3 次 GC 后晋升</li>
+</ul>
+</li>
+<li><ul>
+<li>5% 的对象为长期存活对象（设备配置缓存等）</li>
+</ul>
+</li>
+</ul>
+<h3 id="1-3-GC-评估指标"><a href="#1-3-GC-评估指标" class="headerlink" title="1.3 GC 评估指标"></a>1.3 GC 评估指标</h3><p><strong>三大核心指标</strong>：</p>
+<p><strong>GC 评估三角</strong></p>
+<ul>
+<li>吞吐量</li>
+<li>&#x2F;   \</li>
+<li>&#x2F;     \</li>
+<li>&#x2F;  不可  \</li>
+<li>&#x2F;  兼得   \</li>
+<li>&#x2F;           \</li>
+<li>停顿时间 ——- 内存占用</li>
+<li>吞吐量 &#x3D; 应用运行时间 &#x2F; (应用运行时间 + GC时间)</li>
+<li>停顿时间 &#x3D; STW (Stop The World) 持续时间</li>
+<li>内存占用 &#x3D; GC 自身数据结构占用的堆外内存</li>
+<li>实际项目各服务的指标优先级：</li>
+<li>服务           | 优先指标   | 原因</li>
+<li>—————|———–|——————————-</li>
+<li>safety-service| 停顿时间   | 告警推送延迟可能导致安全事故</li>
+<li>device-service| 吞吐量     | 每秒写入 5000+ 设备数据点</li>
+<li>order-service | 平衡       | 事务需要吞吐，交互需要低停顿</li>
+<li>report-service| 吞吐量     | 离线计算，用户无感知</li>
+</ul>
+<h3 id="1-4-垃圾收集算法"><a href="#1-4-垃圾收集算法" class="headerlink" title="1.4 垃圾收集算法"></a>1.4 垃圾收集算法</h3><table>
+<thead>
+<tr>
+<th>算法</th>
+<th>原理</th>
+<th>优点</th>
+<th>缺点</th>
+<th>适用区域</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>标记-清除</td>
+<td>标记存活对象，清除未标记对象</td>
+<td>实现简单，不需要移动对象</td>
+<td>内存碎片，分配效率低</td>
+<td>CMS</td>
+</tr>
+<tr>
+<td>标记-复制</td>
+<td>将存活对象复制到另一半空间</td>
+<td>无碎片，分配快（指针碰撞）</td>
+<td>空间利用率仅 50%</td>
+<td>新生代（Serial&#x2F;ParNew&#x2F;Parallel）</td>
+</tr>
+<tr>
+<td>标记-整理</td>
+<td>标记后将存活对象向一端移动</td>
+<td>无碎片，空间利用率高</td>
+<td>移动对象开销大</td>
+<td>老年代（Serial Old&#x2F;Parallel Old）</td>
+</tr>
+</tbody></table>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">标记-清除算法示意图：</span><br><span class="line"></span><br><span class="line">标记前：                    清除后：</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br><span class="line">| O | X | O | X | O |      | O |   | O |   | O |</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br><span class="line">| X | O | X | O | X |      |   | O |   | O |   |</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br><span class="line">O=存活  X=垃圾              碎片化严重</span><br><span class="line"></span><br><span class="line">标记-复制算法示意图：</span><br><span class="line"></span><br><span class="line">复制前（From空间）：         复制后（To空间）：</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br><span class="line">| O | X | O | X | O |      | O | O | O | O | O |  连续排列</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br><span class="line">| X | O | X | O | X |      |   |   |   |   |   |  空闲空间</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br><span class="line">From空间                    To空间</span><br><span class="line"></span><br><span class="line">标记-整理算法示意图：</span><br><span class="line"></span><br><span class="line">整理前：                    整理后：</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br><span class="line">| O | X | O | X | O |      | O | O | O | O | O |  连续排列</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br><span class="line">| X | O | X | O | X |      |   |   |   |   |   |  空闲空间</span><br><span class="line">+---+---+---+---+---+      +---+---+---+---+---+</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="二、垃圾收集器全览"><a href="#二、垃圾收集器全览" class="headerlink" title="二、垃圾收集器全览"></a>二、垃圾收集器全览</h2><h3 id="2-1-收集器组合关系"><a href="#2-1-收集器组合关系" class="headerlink" title="2.1 收集器组合关系"></a>2.1 收集器组合关系</h3><p><strong>(并发整理)</strong></p>
+<ul>
+<li>+——————-+     +——————-+     +——————-+</li>
+<li>新生代收集器     |     |    老年代收集器     |     |    整代收集器</li>
+<li>+——————-+     +——————-+     +——————-+</li>
+<li>|     |                   |     |</li>
+<li>Serial           |—&gt;-|  Serial Old       |     |</li>
+<li>(标记-复制)       |     |  (标记-整理)       |     |</li>
+<li>|     |                   |     |</li>
+<li>+——————-+     +——————-+     |                   |</li>
+<li>+——————-+     +——————-+     |                   |</li>
+<li>|     |                   |     |</li>
+<li>ParNew           |—&gt;-|  CMS              |     |</li>
+<li>(标记-复制)       |     |  (标记-清除)       |     |</li>
+<li>|     |                   |     |</li>
+<li>+——————-+     +——————-+     |                   |</li>
+<li>+——————-+     +——————-+     +——————-+</li>
+<li>|     |                   |     |</li>
+<li>Parallel Scavenge|—&gt;-|  Parallel Old     |     |  G1</li>
+<li>(标记-复制)       |     |  (标记-整理)       |     |  (标记-整理+复制)</li>
+<li>|     |                   |     |</li>
+<li>+——————-+     +——————-+     +——————-+</li>
+<li>ZGC</li>
+<li>连线说明：—-&gt; 表示可以组合使用</li>
+<li>JDK8 默认组合：Parallel Scavenge + Parallel Old</li>
+<li>JDK9+ 默认组合：G1</li>
+</ul>
+<h3 id="2-2-收集器演进时间线"><a href="#2-2-收集器演进时间线" class="headerlink" title="2.2 收集器演进时间线"></a>2.2 收集器演进时间线</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">1999  Serial          JDK 1.2    单线程收集，客户端默认</span><br><span class="line">  |</span><br><span class="line">2002  Parallel        JDK 1.4.2  多线程吞吐量优先</span><br><span class="line">  |</span><br><span class="line">2005  CMS             JDK 5      首次并发收集，低停顿</span><br><span class="line">  |</span><br><span class="line">2009  G1              JDK 7u4    分Region收集，可预测停顿</span><br><span class="line">  |</span><br><span class="line">2017  ZGC(实验)       JDK 11     亚毫秒级停顿</span><br><span class="line">  |</span><br><span class="line">2019  ZGC(增强)       JDK 14     支持 Windows/macOS</span><br><span class="line">  |</span><br><span class="line">2020  ZGC(生产)       JDK 15     正式生产可用</span><br><span class="line">  |</span><br><span class="line">2021  ZGC(分代)       JDK 16+    停顿 &lt; 0.1ms，分代ZGC实验</span><br><span class="line">  |</span><br><span class="line">2023  Generational ZGC JDK 21   分代ZGC正式发布</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="三、Serial-收集器"><a href="#三、Serial-收集器" class="headerlink" title="三、Serial 收集器"></a>三、Serial 收集器</h2><h3 id="3-1-工作原理"><a href="#3-1-工作原理" class="headerlink" title="3.1 工作原理"></a>3.1 工作原理</h3><p>Serial 是最基础的垃圾收集器，使用单线程完成垃圾收集工作。在收集期间，必须暂停所有用户线程（STW）。</p>
+<p><strong>Serial 收集器工作流程：</strong></p>
+<ol>
+<li>单线程收集，无多线程同步开销</li>
+<li>STW 期间所有用户线程暂停</li>
+<li>实现简单，内存占用最少</li>
+<li>适合客户端模式、小堆内存场景</li>
+</ol>
+<h3 id="3-2-核心参数"><a href="#3-2-核心参数" class="headerlink" title="3.2 核心参数"></a>3.2 核心参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 启用 Serial 收集器</span></span><br><span class="line">-XX:+UseSerialGC</span><br><span class="line"></span><br><span class="line"><span class="comment"># 新生代大小控制</span></span><br><span class="line">-Xmn256m                    <span class="comment"># 新生代大小</span></span><br><span class="line">-XX:NewRatio=2              <span class="comment"># 新生代:老年代 = 1:2</span></span><br><span class="line">-XX:SurvivorRatio=8         <span class="comment"># Eden:Survivor = 8:1</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 晋升阈值</span></span><br><span class="line">-XX:MaxTenuringThreshold=15 <span class="comment"># 对象晋升老年代的年龄阈值</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="3-3-实际项目中的使用场景"><a href="#3-3-实际项目中的使用场景" class="headerlink" title="3.3 实际项目中的使用场景"></a>3.3 实际项目中的使用场景</h3><p>实际项目的 <code>user-service</code>（用户权限服务）是一个轻量级服务，堆内存仅 2GB，QPS 不到 100，GC 停顿对业务几乎无影响。该服务曾短暂使用 Serial 收集器进行验证。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># user-service 的 Serial GC 配置（测试阶段）</span></span><br><span class="line">java -Xms2g -Xmx2g \</span><br><span class="line">     -Xmn768m \</span><br><span class="line">     -XX:+UseSerialGC \</span><br><span class="line">     -XX:SurvivorRatio=8 \</span><br><span class="line">     -XX:MaxTenuringThreshold=15 \</span><br><span class="line">     -XX:+PrintGCDetails \</span><br><span class="line">     -XX:+PrintGCDateStamps \</span><br><span class="line">     -Xloggc:/data/logs/user-service-gc.log \</span><br><span class="line">     -jar user-service.jar</span><br></pre></td></tr></table></figure>
+
+<p><strong>Serial GC 日志示例</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">2023-05-10T14:23:15.123+0800: [GC (Allocation Failure) [DefNew: 559104K-&gt;69888K(629120K), 0.0345210 secs] 559104K-&gt;104857K(2027264K), 0.0346210 secs] [Times: user=0.03 sys=0.01, real=0.03 secs]</span><br><span class="line"></span><br><span class="line">解读：</span><br><span class="line">- DefNew：Serial 新生代收集器</span><br><span class="line">- 559104K-&gt;69888K(629120K)：Eden+Survivor 从 559MB 降至 69MB，总空间 629MB</span><br><span class="line">- 0.0345210 secs：新生代收集耗时 34ms</span><br><span class="line">- 559104K-&gt;104857K(2027264K)：整个堆从 559MB 降至 104MB，总空间 2027MB</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-4-适用场景总结"><a href="#3-4-适用场景总结" class="headerlink" title="3.4 适用场景总结"></a>3.4 适用场景总结</h3><table>
+<thead>
+<tr>
+<th>场景</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>客户端应用</td>
+<td>桌面工具、IDE 插件等</td>
+</tr>
+<tr>
+<td>堆内存 &lt; 200MB</td>
+<td>小内存场景多线程优势不明显</td>
+</tr>
+<tr>
+<td>单核 CPU</td>
+<td>无多核并行条件</td>
+</tr>
+<tr>
+<td>微服务中极轻量服务</td>
+<td>如智慧矿山的 user-service（2GB 堆）</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="四、ParNew-收集器"><a href="#四、ParNew-收集器" class="headerlink" title="四、ParNew 收集器"></a>四、ParNew 收集器</h2><h3 id="4-1-工作原理"><a href="#4-1-工作原理" class="headerlink" title="4.1 工作原理"></a>4.1 工作原理</h3><p>ParNew 是 Serial 的多线程版本，使用多个 GC 线程并行完成新生代收集。它存在的唯一意义就是配合 CMS 使用——CMS 只能搭配 ParNew 或 Serial 作为新生代收集器。</p>
+<p><strong>ParNew 收集器工作流程：</strong></p>
+<ul>
+<li>CPU Core 0:  [&#x3D;&#x3D;&#x3D;&#x3D;GC Thread 0&#x3D;&#x3D;&#x3D;&#x3D;]</li>
+<li>CPU Core 1:  [&#x3D;&#x3D;&#x3D;&#x3D;GC Thread 1&#x3D;&#x3D;&#x3D;&#x3D;]</li>
+<li>CPU Core 2:  [&#x3D;&#x3D;&#x3D;&#x3D;GC Thread 2&#x3D;&#x3D;&#x3D;&#x3D;]</li>
+<li>CPU Core 3:  [&#x3D;&#x3D;&#x3D;&#x3D;GC Thread 3&#x3D;&#x3D;&#x3D;&#x3D;]</li>
+<li>用户线程:    [暂停……………暂停结束]</li>
+<li>对比 Serial：</li>
+<li>CPU Core 0:  [&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;GC Thread&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;]    单线程，耗时更长</li>
+<li>用户线程:    [暂停………………………暂停结束]</li>
+<li>ParNew 的优势：</li>
+<li>GC线程数 &#x3D; CPU核数（默认）或 -XX:ParallelGCThreads</li>
+<li>多个GC线程并行扫描和复制，大幅缩短STW时间</li>
+<li>但仍需STW，只是时间比Serial短</li>
+</ul>
+<h3 id="4-2-核心参数"><a href="#4-2-核心参数" class="headerlink" title="4.2 核心参数"></a>4.2 核心参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 启用 ParNew + CMS 组合</span></span><br><span class="line">-XX:+UseConcMarkSweepGC        <span class="comment"># 自动启用 ParNew 作为新生代收集器</span></span><br><span class="line">-XX:+UseParNewGC               <span class="comment"># 仅启用 ParNew（JDK9 后已废弃单独使用）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 线程数控制</span></span><br><span class="line">-XX:ParallelGCThreads=4        <span class="comment"># GC 线程数</span></span><br><span class="line"><span class="comment"># 默认值：CPU核数 &lt;= 8 时为 CPU核数</span></span><br><span class="line"><span class="comment">#         CPU核数 &gt; 8 时为 3 + (5 * CPU核数 / 8)</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 新生代大小</span></span><br><span class="line">-XX:NewSize=1g                 <span class="comment"># 新生代初始大小</span></span><br><span class="line">-XX:MaxNewSize=1g              <span class="comment"># 新生代最大大小</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="4-3-实际项目中的使用"><a href="#4-3-实际项目中的使用" class="headerlink" title="4.3 实际项目中的使用"></a>4.3 实际项目中的使用</h3><p>智慧矿山的 <code>safety-service</code>（安全监控服务）在 2023 年 3 月之前使用 ParNew + CMS 组合，以保证低停顿：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># safety-service 的 ParNew + CMS 配置</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:NewSize=1536m \</span><br><span class="line">     -XX:+UseConcMarkSweepGC \</span><br><span class="line">     -XX:ParallelGCThreads=8 \</span><br><span class="line">     -XX:SurvivorRatio=8 \</span><br><span class="line">     -XX:MaxTenuringThreshold=6 \</span><br><span class="line">     -XX:CMSInitiatingOccupancyFraction=70 \</span><br><span class="line">     -XX:+UseCMSCompactAtFullCollection \</span><br><span class="line">     -XX:CMSFullGCsBeforeCompaction=5 \</span><br><span class="line">     -XX:+PrintGCDetails \</span><br><span class="line">     -XX:+PrintGCDateStamps \</span><br><span class="line">     -XX:+PrintGCApplicationStoppedTime \</span><br><span class="line">     -Xloggc:/data/logs/safety-service-gc.log \</span><br><span class="line">     -jar safety-service.jar</span><br></pre></td></tr></table></figure>
+
+<p><strong>ParNew GC 日志示例</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">2023-05-10T14:23:15.456+0800: [GC (Allocation Failure) [ParNew: 1376256K-&gt;149299K(1536000K), 0.0215670 secs] 1376256K-&gt;285412K(4096000K), 0.0216780 secs] [Times: user=0.08 sys=0.02, real=0.02 secs]</span><br><span class="line"></span><br><span class="line">解读：</span><br><span class="line">- ParNew：多线程新生代收集器</span><br><span class="line">- 1376256K-&gt;149299K(1536000K)：新生代从 1.3GB 降至 149MB</span><br><span class="line">- 0.0215670 secs：ParNew 耗时 21ms（比同堆大小 Serial 快 3-4 倍）</span><br><span class="line">- user=0.08 &gt; real=0.02：多线程并行，CPU 时间 &gt; 实际时间</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="五、Parallel-Scavenge-收集器"><a href="#五、Parallel-Scavenge-收集器" class="headerlink" title="五、Parallel Scavenge 收集器"></a>五、Parallel Scavenge 收集器</h2><h3 id="5-1-工作原理"><a href="#5-1-工作原理" class="headerlink" title="5.1 工作原理"></a>5.1 工作原理</h3><p>Parallel Scavenge 与 ParNew 类似，也是新生代多线程收集器，但它的设计目标是”吞吐量优先”。它自带自适应调节策略（Ergonomics），能根据目标吞吐量和停顿时间自动调整新生代大小、Eden 与 Survivor 比例、晋升年龄等参数。</p>
+<p><strong>Parallel Scavenge 的自适应调节（ERG）流程：</strong></p>
+<ul>
+<li>+—————-+     +————————+     +——————+</li>
+<li>MaxGCPauseMillis|—-&gt;|  ERG 自适应调节引擎     |—-&gt;| 自动调整参数：</li>
+<li>GCTimeRatio    |     |                        |     | - 新生代大小</li>
+<li>+—————-+     |  根据 GC 统计信息       |     | - Eden:Survivor  |</li>
+<li>动态调整内存布局        |     | - 晋升年龄</li>
+<li>+————————+     | - 老年代大小      |</li>
+<li>吞吐量计算公式：</li>
+<li>吞吐量 &#x3D; 应用运行时间 &#x2F; (应用运行时间 + GC时间)</li>
+<li>&#x3D; 1 &#x2F; (1 + GCTimeRatio)</li>
+<li>GCTimeRatio&#x3D;99 → 吞吐量目标 &#x3D; 1&#x2F;(1+99) &#x3D; 99%</li>
+<li>GCTimeRatio&#x3D;19 → 吞吐量目标 &#x3D; 1&#x2F;(1+19) &#x3D; 5%（默认值）</li>
+</ul>
+<h3 id="5-2-核心参数"><a href="#5-2-核心参数" class="headerlink" title="5.2 核心参数"></a>5.2 核心参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 启用 Parallel Scavenge + Parallel Old</span></span><br><span class="line">-XX:+UseParallelGC              <span class="comment"># 新生代用 Parallel Scavenge（JDK8 默认）</span></span><br><span class="line">-XX:+UseParallelOldGC           <span class="comment"># 老年代用 Parallel Old</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 吞吐量控制</span></span><br><span class="line">-XX:MaxGCPauseMillis=200        <span class="comment"># 最大停顿时间目标（ms），ERG 尽力达成</span></span><br><span class="line">-XX:GCTimeRatio=99              <span class="comment"># 吞吐量目标比例，值越大吞吐量越高</span></span><br><span class="line">-XX:+UseAdaptiveSizePolicy     <span class="comment"># 开启自适应调整（默认开启）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 线程数</span></span><br><span class="line">-XX:ParallelGCThreads=8         <span class="comment"># GC 线程数</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 内存布局</span></span><br><span class="line">-Xmn1536m                       <span class="comment"># 新生代大小</span></span><br><span class="line">-XX:SurvivorRatio=8             <span class="comment"># Eden:Survivor = 8:1</span></span><br><span class="line">-XX:MaxTenuringThreshold=15     <span class="comment"># 晋升年龄阈值</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="5-3-实际项目实战"><a href="#5-3-实际项目实战" class="headerlink" title="5.3 实际项目实战"></a>5.3 实际项目实战</h3><p>智慧矿山的 <code>report-service</code>（报表统计服务）是典型的批处理场景，每天凌晨生成安全日报和设备统计报表，对吞吐量要求高，对停顿不敏感：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># report-service 的 Parallel GC 配置</span></span><br><span class="line">java -Xms8g -Xmx8g \</span><br><span class="line">     -XX:+UseParallelGC \</span><br><span class="line">     -XX:+UseParallelOldGC \</span><br><span class="line">     -XX:MaxGCPauseMillis=500 \</span><br><span class="line">     -XX:GCTimeRatio=99 \</span><br><span class="line">     -XX:ParallelGCThreads=8 \</span><br><span class="line">     -XX:NewRatio=1 \</span><br><span class="line">     -XX:SurvivorRatio=6 \</span><br><span class="line">     -XX:MaxTenuringThreshold=10 \</span><br><span class="line">     -XX:+UseAdaptiveSizePolicy \</span><br><span class="line">     -XX:+PrintGCDetails \</span><br><span class="line">     -XX:+PrintGCDateStamps \</span><br><span class="line">     -XX:+PrintGCApplicationStoppedTime \</span><br><span class="line">     -Xloggc:/data/logs/report-service-gc.log \</span><br><span class="line">     -jar report-service.jar</span><br></pre></td></tr></table></figure>
+
+<p><strong>吞吐量优先的原因</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * report-service 的批处理场景分析：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 1. 凌晨 2:00-5:00 生成日报，期间为全量计算，无人交互</span></span><br><span class="line"><span class="comment"> * 2. 生成过程需要频繁创建临时对象（报表行、统计结果、聚合数据）</span></span><br><span class="line"><span class="comment"> * 3. 这些临时对象朝生夕灭，在 Eden 区即可回收</span></span><br><span class="line"><span class="comment"> * 4. 用户不关心 GC 停顿（离线计算），只关心报表生成总时间</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 因此选择 Parallel Scavenge：</span></span><br><span class="line"><span class="comment"> * - 吞吐量优先，GC 总耗时最少</span></span><br><span class="line"><span class="comment"> * - ERG 自动调整内存布局，无需手动微调</span></span><br><span class="line"><span class="comment"> * - 搭配 Parallel Old，老年代也并行收集</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DailyReportGenerator</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 每日报表生成入口</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 2 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">generateDailyReport</span><span class="params">()</span> &#123;</span><br><span class="line">        List&lt;DeviceStat&gt; deviceStats = deviceService.queryAllDeviceStats();</span><br><span class="line">        <span class="comment">// 大量临时对象：DeviceStat → ReportRow → ReportPage → PDF bytes</span></span><br><span class="line">        <span class="keyword">for</span> (DeviceStat stat : deviceStats) &#123;</span><br><span class="line">            <span class="type">ReportRow</span> <span class="variable">row</span> <span class="operator">=</span> ReportRow.from(stat);           <span class="comment">// 临时对象</span></span><br><span class="line">            <span class="type">AggregationResult</span> <span class="variable">result</span> <span class="operator">=</span> row.aggregate();      <span class="comment">// 临时对象</span></span><br><span class="line">            reportBuilder.addRow(row, result);               <span class="comment">// 短生命周期</span></span><br><span class="line">        &#125;</span><br><span class="line">        <span class="type">byte</span>[] pdfBytes = reportBuilder.buildPdf();          <span class="comment">// 大临时对象</span></span><br><span class="line">        storageService.upload(pdfBytes);</span><br><span class="line">        <span class="comment">// 方法结束后，所有 row/result/pdfBytes 均为垃圾</span></span><br><span class="line">        <span class="comment">// Parallel Scavenge 快速回收 Eden 区，吞吐量最高</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-4-Parallel-GC-日志分析"><a href="#5-4-Parallel-GC-日志分析" class="headerlink" title="5.4 Parallel GC 日志分析"></a>5.4 Parallel GC 日志分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">2023-05-10T02:15:32.789+0800: [GC (Allocation Failure) [PSYoungGen: 2732544K-&gt;321536K(2867200K)] 2732544K-&gt;567890K(8388608K), 0.0456780 secs] [Times: user=0.18 sys=0.03, real=0.05 secs]</span><br><span class="line"></span><br><span class="line">2023-05-10T04:23:45.123+0800: [Full GC (Ergonomics) [PSYoungGen: 321536K-&gt;0K(2867200K)] [ParOldGen: 246354K-&gt;245678K(5521408K)] 567890K-&gt;245678K(8388608K), [Metaspace: 45678K-&gt;45678K(1081344K)], 0.2345670 secs] [Times: user=0.45 sys=0.08, real=0.23 secs]</span><br><span class="line"></span><br><span class="line">解读：</span><br><span class="line">- PSYoungGen：Parallel Scavenge 新生代</span><br><span class="line">- Full GC (Ergonomics)：ERG 自适应触发（堆使用率达阈值）</span><br><span class="line">- 老年代 ParOldGen：Parallel Old 并行收集</span><br><span class="line">- Full GC 耗时 234ms，对报表服务可接受</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="六、CMS-收集器"><a href="#六、CMS-收集器" class="headerlink" title="六、CMS 收集器"></a>六、CMS 收集器</h2><h3 id="6-1-工作原理"><a href="#6-1-工作原理" class="headerlink" title="6.1 工作原理"></a>6.1 工作原理</h3><p>CMS（Concurrent Mark Sweep）是第一个实现并发收集的垃圾收集器，以获取最小停顿时间为目标。它采用标记-清除算法，在并发阶段与用户线程同时运行，大幅缩短 STW 时间。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">CMS 四个阶段详解：</span><br><span class="line"></span><br><span class="line">时间 ──────────────────────────────────────────────────────────────────────&gt;</span><br><span class="line"></span><br><span class="line">阶段1           阶段2                阶段3            阶段4</span><br><span class="line">初始标记         并发标记              重新标记          并发清除</span><br><span class="line">(STW)           (并发)               (STW)            (并发)</span><br><span class="line"></span><br><span class="line">用户线程: [暂停][恢复运行────────────────][暂停][恢复运行────────────────]</span><br><span class="line">GC线程:  [标记] [---并发标记对象图--------] [修正] [---并发清除垃圾-------]</span><br><span class="line">                |                        |</span><br><span class="line">                | 并发阶段用户线程产生      | 并发阶段用户线程产生</span><br><span class="line">                | 新的引用变更             | 新的垃圾（浮动垃圾）</span><br><span class="line">                v                        v</span><br><span class="line">           +------------------+    +------------------+</span><br><span class="line">           | 写屏障记录变更    |    | 本次无法收集      |</span><br><span class="line">           | (Incremental    |    | 留待下次CMS处理   |</span><br><span class="line">           |  Update)        |    |                  |</span><br><span class="line">           +------------------+    +------------------+</span><br><span class="line"></span><br><span class="line">STW时间: [极短]                    [较短]</span><br><span class="line">         标记GC Roots               修正并发阶段变更</span><br><span class="line">         直接关联对象                (比初始标记稍长)</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-2-CMS-四阶段深度分析"><a href="#6-2-CMS-四阶段深度分析" class="headerlink" title="6.2 CMS 四阶段深度分析"></a>6.2 CMS 四阶段深度分析</h3><p><strong>|          | Update)减少停顿             |</strong></p>
+<ul>
+<li>阶段    | 是否STW  |         工作内容            |       实际项目影响</li>
+<li>初始标记  | STW      | 标记GC Roots直接关联的对象   | safety-service 约 5ms</li>
+<li>|          | 速度极快                    | 几乎无影响</li>
+<li>并发标记  | 并发      | 从GC Roots遍历整个对象图     | 与告警推送并发运行</li>
+<li>|          | 耗时最长，但用户线程不暂停    | CPU占用增加，不影响延迟</li>
+<li>重新标记  | STW      | 修正并发标记期间的引用变更    | safety-service 约 20ms</li>
+<li>|          | 使用增量更新(Incremental    | 对实时告警影响可控</li>
+<li>并发清除  | 并发      | 清除死亡对象                | 与告警推送并发运行</li>
+<li>|          | 标记-清除算法，不压缩        | 产生内存碎片</li>
+</ul>
+<h3 id="6-3-CMS-的四大问题"><a href="#6-3-CMS-的四大问题" class="headerlink" title="6.3 CMS 的四大问题"></a>6.3 CMS 的四大问题</h3><p><strong>问题1：内存碎片</strong></p>
+<ul>
+<li>CMS 使用标记-清除算法，不做内存压缩</li>
+<li>长期运行后老年代内存碎片严重：</li>
+<li>老年代内存布局：</li>
+<li>[O][  ][O][   ][O][ ][O][      ][O][  ][O][   ][O][    ]</li>
+<li>O&#x3D;存活对象  空格&#x3D;碎片</li>
+<li>后果：大对象（如设备历史数据数组）无法分配，触发 Full GC</li>
+<li>解决：</li>
+<li>-XX:+UseCMSCompactAtFullCollection    # Full GC时压缩</li>
+<li>-XX:CMSFullGCsBeforeCompaction&#x3D;5      # 每5次Full GC后压缩一次</li>
+<li>注意：压缩本身需要STW，是权衡之举</li>
+<li>问题2：浮动垃圾</li>
+<li>并发清除阶段，用户线程仍在运行，可能产生新的垃圾</li>
+<li>这些垃圾本次CMS无法收集，称为”浮动垃圾”</li>
+<li>并发标记阶段：标记了对象A为存活</li>
+<li>并发清除阶段：用户线程将对象A置为不可达</li>
+<li>结果：对象A成为浮动垃圾，本次不收集，留待下次</li>
+<li>后果：需要预留空间给浮动垃圾</li>
+<li>-XX:CMSInitiatingOccupancyFraction&#x3D;70  # 老年代70%就触发CMS</li>
+<li>默认值：JDK5&#x3D;68%, JDK6+&#x3D;92%</li>
+<li>问题3：Concurrent Mode Failure</li>
+<li>CMS 在并发清除阶段，如果老年代预留空间不够容纳新生代晋升的对象</li>
+<li>或者浮动垃圾占满了预留空间</li>
+<li>CMS 退化为 Serial Old（单线程标记-整理），全堆扫描</li>
+<li>触发条件：老年代使用率 &gt; CMSInitiatingOccupancyFraction</li>
+<li>且预留空间仍不足以容纳晋升对象</li>
+<li>实际项目中的一次 Concurrent Mode Failure：</li>
+<li>2023-04-15 03:22:15 CMS并发清除中</li>
+<li>2023-04-15 03:22:16 新生代晋升对象达 450MB</li>
+<li>2023-04-15 03:22:16 老年代剩余空间仅 380MB</li>
+<li>2023-04-15 03:22:16 Concurrent Mode Failure!</li>
+<li>2023-04-15 03:22:16 退化为 Serial Old，STW 4.2秒</li>
+<li>2023-04-15 03:22:20 服务恢复，但安全告警已超时</li>
+<li>解决：调低 CMSInitiatingOccupancyFraction（70→60）</li>
+<li>但过低会导致CMS频繁触发，增加CPU开销</li>
+<li>问题4：CPU敏感</li>
+<li>并发阶段GC线程与用户线程争抢CPU时间</li>
+<li>默认启动 (CPU核数+3)&#x2F;4 个GC线程</li>
+<li>8核服务器：GC线程 &#x3D; (8+3)&#x2F;4 &#x3D; 2 个</li>
+<li>4核服务器：GC线程 &#x3D; (4+3)&#x2F;4 &#x3D; 1 个</li>
+<li>智慧矿山 safety-service 运行在8核容器中</li>
+<li>CMS并发阶段占用 2 个CPU核心，对吞吐量影响约 25%</li>
+<li>解决：</li>
+<li>-XX:ConcGCThreads&#x3D;4       # 增加并发线程数（需权衡CPU占用）</li>
+<li>或升级为G1&#x2F;ZGC             # 根本解决方案</li>
+</ul>
+<h3 id="6-4-CMS-核心参数"><a href="#6-4-CMS-核心参数" class="headerlink" title="6.4 CMS 核心参数"></a>6.4 CMS 核心参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># CMS 基础参数</span></span><br><span class="line">-XX:+UseConcMarkSweepGC                    <span class="comment"># 使用 CMS（自动启用 ParNew）</span></span><br><span class="line">-XX:+UseCMSCompactAtFullCollection         <span class="comment"># Full GC 时压缩（JDK9后默认开启）</span></span><br><span class="line">-XX:CMSFullGCsBeforeCompaction=5           <span class="comment"># 每 5 次 Full GC 后压缩一次</span></span><br><span class="line">-XX:CMSInitiatingOccupancyFraction=70      <span class="comment"># 老年代使用 70% 触发 CMS</span></span><br><span class="line">-XX:ConcGCThreads=4                        <span class="comment"># 并发标记/清除线程数</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># CMS 优化参数</span></span><br><span class="line">-XX:+CMSParallelRemarkEnabled              <span class="comment"># 并行重新标记，缩短 STW</span></span><br><span class="line">-XX:+CMSScavengeBeforeRemark               <span class="comment"># 重新标记前先 Young GC，减少扫描范围</span></span><br><span class="line">-XX:CMSInitiatingOccupancyFraction=70      <span class="comment"># 触发阈值</span></span><br><span class="line">-XX:+UseCMSInitiatingOccupancyOnly         <span class="comment"># 只用设定值，不自适应</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># CMS 诊断参数</span></span><br><span class="line">-XX:+PrintGCDetails                        <span class="comment"># 详细GC日志</span></span><br><span class="line">-XX:+PrintGCDateStamps                     <span class="comment"># 日期时间戳</span></span><br><span class="line">-XX:+PrintGCApplicationStoppedTime         <span class="comment"># STW时间</span></span><br><span class="line">-XX:+PrintCMSInitiationStatistics          <span class="comment"># CMS触发统计</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="6-5-实际项目-CMS-调优实战"><a href="#6-5-实际项目-CMS-调优实战" class="headerlink" title="6.5 实际项目 CMS 调优实战"></a>6.5 实际项目 CMS 调优实战</h3><p>safety-service 使用 CMS 期间的调优过程：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 阶段1：初始配置（问题多）</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:+UseConcMarkSweepGC \</span><br><span class="line">     -XX:CMSInitiatingOccupancyFraction=92 \</span><br><span class="line">     -jar safety-service.jar</span><br><span class="line"><span class="comment"># 问题：Concurrent Mode Failure 频发，每周 2-3 次退化为 Serial Old</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 阶段2：降低触发阈值 + 压缩</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:+UseConcMarkSweepGC \</span><br><span class="line">     -XX:CMSInitiatingOccupancyFraction=70 \</span><br><span class="line">     -XX:+UseCMSCompactAtFullCollection \</span><br><span class="line">     -XX:CMSFullGCsBeforeCompaction=5 \</span><br><span class="line">     -jar safety-service.jar</span><br><span class="line"><span class="comment"># 改善：Concurrent Mode Failure 降为每月 1 次</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 阶段3：优化重新标记 + Young GC 配合</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:+UseConcMarkSweepGC \</span><br><span class="line">     -XX:CMSInitiatingOccupancyFraction=68 \</span><br><span class="line">     -XX:+UseCMSCompactAtFullCollection \</span><br><span class="line">     -XX:CMSFullGCsBeforeCompaction=5 \</span><br><span class="line">     -XX:+CMSParallelRemarkEnabled \</span><br><span class="line">     -XX:+CMSScavengeBeforeRemark \</span><br><span class="line">     -XX:NewSize=1536m \</span><br><span class="line">     -XX:SurvivorRatio=6 \</span><br><span class="line">     -XX:MaxTenuringThreshold=6 \</span><br><span class="line">     -XX:ConcGCThreads=4 \</span><br><span class="line">     -jar safety-service.jar</span><br><span class="line"><span class="comment"># 改善：重新标记时间从 50ms 降至 18ms，Full GC 近 30 天 0 次</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>CMS 调优效果对比</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>阶段1（默认）</th>
+<th>阶段2（调阈值）</th>
+<th>阶段3（完整调优）</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Young GC 停顿</td>
+<td>35ms</td>
+<td>30ms</td>
+<td>22ms</td>
+</tr>
+<tr>
+<td>CMS 重新标记停顿</td>
+<td>55ms</td>
+<td>50ms</td>
+<td>18ms</td>
+</tr>
+<tr>
+<td>Full GC 频率</td>
+<td>每周 2-3 次</td>
+<td>每月 1 次</td>
+<td>近 30 天 0 次</td>
+</tr>
+<tr>
+<td>Concurrent Mode Failure</td>
+<td>每周 2-3 次</td>
+<td>每月 1 次</td>
+<td>0 次</td>
+</tr>
+<tr>
+<td>CMS 触发频率</td>
+<td>每 4 小时</td>
+<td>每 2 小时</td>
+<td>每 1.5 小时</td>
+</tr>
+<tr>
+<td>CPU 占用（CMS并发阶段）</td>
+<td>15%</td>
+<td>20%</td>
+<td>25%</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="七、G1-收集器"><a href="#七、G1-收集器" class="headerlink" title="七、G1 收集器"></a>七、G1 收集器</h2><h3 id="7-1-工作原理"><a href="#7-1-工作原理" class="headerlink" title="7.1 工作原理"></a>7.1 工作原理</h3><p>G1（Garbage First）是 JDK9 及以后的默认收集器，采用分 Region 的内存布局，打破了传统的新生代&#x2F;老年代物理隔离，将堆划分为大小相等的 Region，每个 Region 可以动态地扮演 Eden、Survivor、Old 或 Humongous 角色。</p>
+<p><strong>G1 Region 内存布局：</strong></p>
+<ol>
+<li>Region 动态角色：Eden 可变为 Old，Old 可回收后变为 Free</li>
+<li>优先回收价值高的 Region（垃圾占比高的先回收 → “Garbage First”）</li>
+<li>可预测停顿：根据 MaxGCPauseMillis 选择本次回收哪些 Region</li>
+</ol>
+<h3 id="7-2-G1-的三种收集模式"><a href="#7-2-G1-的三种收集模式" class="headerlink" title="7.2 G1 的三种收集模式"></a>7.2 G1 的三种收集模式</h3><p><strong>G1 的三种收集模式</strong></p>
+<ol>
+<li>Young GC（纯新生代收集）</li>
+<li>Mixed GC（混合收集）</li>
+<li>Full GC（全堆收集）</li>
+</ol>
+<h3 id="7-3-G1-并发标记流程"><a href="#7-3-G1-并发标记流程" class="headerlink" title="7.3 G1 并发标记流程"></a>7.3 G1 并发标记流程</h3><p><strong>G1 并发标记的四个子阶段：</strong></p>
+<ul>
+<li>阶段1：初始标记（STW，借 Young GC 完成）</li>
+<li>标记 GC Roots 直接关联的对象</li>
+<li>借助 Young GC 的 STW 完成，无额外停顿</li>
+<li>safety-service 约 2ms</li>
+<li>|</li>
+<li>v</li>
+<li>阶段2：并发标记（与用户线程并发）</li>
+<li>从 GC Roots 遍历整个对象图</li>
+<li>使用 SATB（Snapshot At The Beginning）算法</li>
+<li>在标记开始时拍摄对象图快照，保证标记完整性</li>
+<li>耗时最长，但不暂停用户线程</li>
+<li>|</li>
+<li>v</li>
+<li>阶段3：最终标记（STW）</li>
+<li>处理 SATB 缓冲区中残留的引用变更</li>
+<li>修正并发标记期间对象引用的变化</li>
+<li>safety-service 约 10ms</li>
+<li>|</li>
+<li>v</li>
+<li>阶段4：筛选回收（STW）</li>
+<li>根据每个 Region 的回收价值（垃圾占比）排序</li>
+<li>在 MaxGCPauseMillis 目标内，选择回收价值最高的 Region</li>
+<li>将存活对象复制到新 Region，回收旧 Region</li>
+<li>safety-service 约 20ms</li>
+<li>时间线：</li>
+<li>STW:  [初始标记]                  [最终标记][筛选回收]</li>
+<li>并发:           [—并发标记—]</li>
+<li>用户:  [暂停][继续运行][暂停][暂停][继续运行]</li>
+</ul>
+<h3 id="7-4-G1-核心参数"><a href="#7-4-G1-核心参数" class="headerlink" title="7.4 G1 核心参数"></a>7.4 G1 核心参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># G1 基础参数</span></span><br><span class="line">-XX:+UseG1GC                      <span class="comment"># 使用 G1（JDK9+ 默认）</span></span><br><span class="line">-XX:MaxGCPauseMillis=200          <span class="comment"># 目标停顿时间（ms），默认 200</span></span><br><span class="line">-XX:G1HeapRegionSize=4m           <span class="comment"># Region 大小（1/2/4/8/16/32MB）</span></span><br><span class="line">-XX:InitiatingHeapOccupancyPercent=45  <span class="comment"># 堆使用 45% 触发并发标记</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Mixed GC 控制</span></span><br><span class="line">-XX:G1MixedGCCountTarget=8        <span class="comment"># Mixed GC 次数目标（默认 8）</span></span><br><span class="line">-XX:G1MixedGCLiveThresholdPercent=85   <span class="comment"># Region 存活率 &lt; 85% 才回收</span></span><br><span class="line">-XX:G1OldCSetRegionThresholdPercent=10 <span class="comment"># 单次 Mixed GC 最多回收 Old Region 的 10%</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 大对象处理</span></span><br><span class="line">-XX:G1HeapRegionSize=8m           <span class="comment"># 增大 Region 减少 Humongous 分配</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 高级参数</span></span><br><span class="line">-XX:+ParallelRefProcEnabled       <span class="comment"># 并行处理引用对象</span></span><br><span class="line">-XX:G1RSetUpdatingPauseTimePercent=10  <span class="comment"># RSet 更新占 GC 停顿的目标比例</span></span><br><span class="line">-XX:G1UseAdaptiveIHOP             <span class="comment"># 自适应 IHOP（JDK9+ 默认开启）</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="7-5-实际项目-G1-调优实战"><a href="#7-5-实际项目-G1-调优实战" class="headerlink" title="7.5 实际项目 G1 调优实战"></a>7.5 实际项目 G1 调优实战</h3><h4 id="7-5-1-device-service-G1-调优全记录"><a href="#7-5-1-device-service-G1-调优全记录" class="headerlink" title="7.5.1 device-service G1 调优全记录"></a>7.5.1 device-service G1 调优全记录</h4><p>device-service 是实际项目中 GC 问题最严重的服务，以下是从 Parallel GC 迁移到 G1 的完整调优过程：</p>
+<p><strong>问题现状</strong>：</p>
+<p><strong>device-service (Parallel GC) GC 问题统计：</strong></p>
+<ul>
+<li>指标              | 数值</li>
+<li>——————-|—————————</li>
+<li>堆大小            | 2GB</li>
+<li>GC 算法           | Parallel Scavenge + Old</li>
+<li>Young GC 频率     | 每 8 秒 1 次</li>
+<li>Young GC 停顿     | 50-80ms</li>
+<li>Full GC 频率      | 每日 2-3 次</li>
+<li>Full GC 停顿      | 1.2-4.2 秒</li>
+<li>老年代使用率      | 持续 85%+</li>
+<li>设备数据点写入    | 5000+ 点&#x2F;秒</li>
+</ul>
+<p><strong>调优步骤</strong>：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 步骤1：切换到 G1，扩大堆内存</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:+UseG1GC \</span><br><span class="line">     -XX:MaxGCPauseMillis=100 \</span><br><span class="line">     -jar device-service.jar</span><br><span class="line"></span><br><span class="line"><span class="comment"># 结果：Young GC 停顿降至 30ms，但 Full GC 仍每周 1 次</span></span><br><span class="line"><span class="comment"># 原因：大对象（设备历史数据数组）频繁分配 Humongous Region</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 步骤2：增大 Region 大小，减少 Humongous 对象</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:+UseG1GC \</span><br><span class="line">     -XX:MaxGCPauseMillis=100 \</span><br><span class="line">     -XX:G1HeapRegionSize=8m \</span><br><span class="line">     -jar device-service.jar</span><br><span class="line"></span><br><span class="line"><span class="comment"># 结果：Humongous 分配减少 70%，Full GC 降为每月 1 次</span></span><br><span class="line"><span class="comment"># 但 Mixed GC 停顿偶发 200ms+</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 步骤3：优化 Mixed GC 频次和范围</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:+UseG1GC \</span><br><span class="line">     -XX:MaxGCPauseMillis=50 \</span><br><span class="line">     -XX:G1HeapRegionSize=8m \</span><br><span class="line">     -XX:InitiatingHeapOccupancyPercent=40 \</span><br><span class="line">     -XX:G1MixedGCCountTarget=16 \</span><br><span class="line">     -XX:G1MixedGCLiveThresholdPercent=85 \</span><br><span class="line">     -XX:+ParallelRefProcEnabled \</span><br><span class="line">     -XX:+AlwaysPreTouch \</span><br><span class="line">     -XX:+DisableExplicitGC \</span><br><span class="line">     -jar device-service.jar</span><br><span class="line"></span><br><span class="line"><span class="comment"># 结果：Mixed GC 停顿稳定在 20-40ms，连续 60 天 Full GC 为 0</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>最终生产配置</strong>：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># device-service 生产环境 G1 配置（4GB堆）</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:+UseG1GC \</span><br><span class="line">     -XX:MaxGCPauseMillis=50 \</span><br><span class="line">     -XX:G1HeapRegionSize=8m \</span><br><span class="line">     -XX:InitiatingHeapOccupancyPercent=40 \</span><br><span class="line">     -XX:G1MixedGCCountTarget=16 \</span><br><span class="line">     -XX:G1MixedGCLiveThresholdPercent=85 \</span><br><span class="line">     -XX:G1OldCSetRegionThresholdPercent=10 \</span><br><span class="line">     -XX:+ParallelRefProcEnabled \</span><br><span class="line">     -XX:+AlwaysPreTouch \</span><br><span class="line">     -XX:+DisableExplicitGC \</span><br><span class="line">     -XX:+PrintGCDetails \</span><br><span class="line">     -XX:+PrintGCDateStamps \</span><br><span class="line">     -XX:+PrintGCApplicationStoppedTime \</span><br><span class="line">     -Xloggc:/data/logs/device-service-gc.log \</span><br><span class="line">     -jar device-service.jar</span><br></pre></td></tr></table></figure>
+
+<h4 id="7-5-2-safety-service-G1-调优"><a href="#7-5-2-safety-service-G1-调优" class="headerlink" title="7.5.2 safety-service G1 调优"></a>7.5.2 safety-service G1 调优</h4><p>safety-service 从 CMS 迁移到 G1 的过程：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># safety-service G1 配置（4GB堆，低延迟优先）</span></span><br><span class="line">java -Xms4g -Xmx4g \</span><br><span class="line">     -XX:+UseG1GC \</span><br><span class="line">     -XX:MaxGCPauseMillis=20 \</span><br><span class="line">     -XX:G1HeapRegionSize=4m \</span><br><span class="line">     -XX:InitiatingHeapOccupancyPercent=45 \</span><br><span class="line">     -XX:G1MixedGCCountTarget=16 \</span><br><span class="line">     -XX:G1MixedGCLiveThresholdPercent=80 \</span><br><span class="line">     -XX:+ParallelRefProcEnabled \</span><br><span class="line">     -XX:+AlwaysPreTouch \</span><br><span class="line">     -XX:+DisableExplicitGC \</span><br><span class="line">     -XX:+PrintGCDetails \</span><br><span class="line">     -XX:+PrintGCDateStamps \</span><br><span class="line">     -XX:+PrintGCApplicationStoppedTime \</span><br><span class="line">     -Xloggc:/data/logs/safety-service-gc.log \</span><br><span class="line">     -jar safety-service.jar</span><br></pre></td></tr></table></figure>
+
+<h3 id="7-6-G1-调优效果汇总"><a href="#7-6-G1-调优效果汇总" class="headerlink" title="7.6 G1 调优效果汇总"></a>7.6 G1 调优效果汇总</h3><table>
+<thead>
+<tr>
+<th>服务</th>
+<th>GC算法</th>
+<th>Young GC停顿</th>
+<th>Mixed GC停顿</th>
+<th>Full GC频率</th>
+<th>GC总耗时占比</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>device-service</td>
+<td>Parallel GC（调优前）</td>
+<td>50-80ms</td>
+<td>N&#x2F;A</td>
+<td>每日2-3次</td>
+<td>3.5%</td>
+</tr>
+<tr>
+<td>device-service</td>
+<td>G1（调优后）</td>
+<td>15-25ms</td>
+<td>20-40ms</td>
+<td>0次&#x2F;60天</td>
+<td>0.8%</td>
+</tr>
+<tr>
+<td>safety-service</td>
+<td>CMS（调优前）</td>
+<td>22-35ms</td>
+<td>N&#x2F;A</td>
+<td>每月1次</td>
+<td>1.5%</td>
+</tr>
+<tr>
+<td>safety-service</td>
+<td>G1（调优后）</td>
+<td>10-18ms</td>
+<td>15-30ms</td>
+<td>0次&#x2F;45天</td>
+<td>0.6%</td>
+</tr>
+<tr>
+<td>order-service</td>
+<td>Parallel GC（默认）</td>
+<td>40-60ms</td>
+<td>N&#x2F;A</td>
+<td>每周1次</td>
+<td>2.1%</td>
+</tr>
+<tr>
+<td>order-service</td>
+<td>G1（调优后）</td>
+<td>18-30ms</td>
+<td>25-45ms</td>
+<td>0次&#x2F;30天</td>
+<td>0.9%</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="八、ZGC-收集器"><a href="#八、ZGC-收集器" class="headerlink" title="八、ZGC 收集器"></a>八、ZGC 收集器</h2><h3 id="8-1-工作原理"><a href="#8-1-工作原理" class="headerlink" title="8.1 工作原理"></a>8.1 工作原理</h3><p>ZGC（Z Garbage Collector）是 JDK15+ 生产可用的超低延迟垃圾收集器，停顿时间不超过 1ms（JDK16+ 不超过 0.1ms），且停顿时间不随堆大小增加而增长，支持最大 16TB 的堆内存。</p>
+<p><strong>ZGC 核心技术架构：</strong></p>
+<ol>
+<li>选择需要整理的 Page</li>
+<li>分配新的 Page（目标位置）</li>
+<li>并发将存活对象复制到新 Page</li>
+<li>复制完成后，旧 Page 释放</li>
+<li>应用线程访问旧地址时，读屏障自动修正到新地址</li>
+</ol>
+<h3 id="8-2-ZGC-工作流程"><a href="#8-2-ZGC-工作流程" class="headerlink" title="8.2 ZGC 工作流程"></a>8.2 ZGC 工作流程</h3><p><strong>ZGC 收集流程：</strong></p>
+<ul>
+<li>STW:   [初始标记]                              [再标记]</li>
+<li>约0.1ms                               约0.2ms</li>
+<li>并发:            [—并发标记—]  [—并发转移准备—]  [—并发转移—]</li>
+<li>用户: [暂停][继续运行————————————————————]</li>
+<li>详细阶段说明：</li>
+<li>阶段   | 是否STW|                    工作内容</li>
+<li>初始标记  | STW    | 标记 GC Roots 直接关联的对象</li>
+<li>| &lt;0.1ms | 极快，只扫描根集合</li>
+<li>并发标记  | 并发    | 遍历对象图，通过指针颜色标记存活&#x2F;死亡</li>
+<li>|        | 使用读屏障发现新引用</li>
+<li>再标记    | STW    | 处理并发标记期间的新增引用</li>
+<li>| &lt;0.2ms | 极短，仅处理少量残留</li>
+<li>并发转移  | 并发    | 选择垃圾最多的 Page，将存活对象复制到新 Page</li>
+<li>准备      |        | 构建转移映射表</li>
+<li>并发转移  | 并发    | 实际移动对象到新 Page</li>
+<li>|        | 读屏障保证引用自愈</li>
+<li>对比 CMS&#x2F;G1 的 STW 时间：</li>
+<li>收集器 | 初始标记 | 重新&#x2F;最终标记 | 筛选回收&#x2F;压缩</li>
+<li>——-|———|————-|————–</li>
+<li>CMS   | ~5ms    | ~20ms       | N&#x2F;A（不压缩）</li>
+<li>G1    | ~3ms    | ~15ms       | ~25ms</li>
+<li>ZGC   | &lt;0.1ms  | &lt;0.2ms      | 并发（不STW）</li>
+</ul>
+<h3 id="8-3-ZGC-核心参数"><a href="#8-3-ZGC-核心参数" class="headerlink" title="8.3 ZGC 核心参数"></a>8.3 ZGC 核心参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ZGC 基础参数</span></span><br><span class="line">-XX:+UseZGC                      <span class="comment"># 使用 ZGC</span></span><br><span class="line">-XX:ZAllocationSpikeTolerance=2  <span class="comment"># 分配尖峰容忍度（默认2，推荐2-5）</span></span><br><span class="line">-XX:ZCollectionInterval=0        <span class="comment"># GC 间隔（0=自适应，单位秒）</span></span><br><span class="line">-XX:ZFragmentationLimit=5        <span class="comment"># 碎片率上限（默认5%）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ZGC 并发线程数</span></span><br><span class="line">-XX:ConcGCThreads=4              <span class="comment"># 并发GC线程数（默认=CPU核数的1/4~1/2）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ZGC 大内存支持</span></span><br><span class="line">-Xmx32g                          <span class="comment"># 大堆内存（ZGC 优势场景）</span></span><br><span class="line">-XX:SoftMaxHeapSize=24g          <span class="comment"># 软最大堆（ZGC 特有，尽量不超但允许超）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ZGC 诊断参数</span></span><br><span class="line">-XX:+UnlockDiagnosticVMOptions</span><br><span class="line">-XX:+ZStatisticsForceTrace       <span class="comment"># 强制追踪</span></span><br><span class="line">-XX:+PrintGCDetails</span><br><span class="line">-XX:+PrintGCDateStamps</span><br><span class="line">-Xloggc:/data/logs/zgc-gc.log</span><br></pre></td></tr></table></figure>
+
+<h3 id="8-4-实际项目-ZGC-试点"><a href="#8-4-实际项目-ZGC-试点" class="headerlink" title="8.4 实际项目 ZGC 试点"></a>8.4 实际项目 ZGC 试点</h3><p>智慧矿山的 <code>order-service</code>（生产调度服务）在 2023 年 Q4 进行了 ZGC 试点，该服务堆内存 6GB，事务密集，对停顿敏感：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># order-service ZGC 配置（6GB 堆）</span></span><br><span class="line">java -Xms6g -Xmx6g \</span><br><span class="line">     -XX:+UseZGC \</span><br><span class="line">     -XX:ZAllocationSpikeTolerance=3 \</span><br><span class="line">     -XX:ConcGCThreads=4 \</span><br><span class="line">     -XX:+UnlockDiagnosticVMOptions \</span><br><span class="line">     -XX:+ZStatisticsForceTrace \</span><br><span class="line">     -XX:+PrintGCDetails \</span><br><span class="line">     -XX:+PrintGCDateStamps \</span><br><span class="line">     -Xloggc:/data/logs/order-service-zgc.log \</span><br><span class="line">     -jar order-service.jar</span><br></pre></td></tr></table></figure>
+
+<p><strong>ZGC 试点效果</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>G1（调优后）</th>
+<th>ZGC</th>
+<th>改善</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Young GC 停顿</td>
+<td>18-30ms</td>
+<td>0.05-0.15ms</td>
+<td>200倍</td>
+</tr>
+<tr>
+<td>Mixed GC 停顿</td>
+<td>25-45ms</td>
+<td>N&#x2F;A（不分代）</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Full GC 停顿</td>
+<td>未发生</td>
+<td>0.3ms（测试触发）</td>
+<td>-</td>
+</tr>
+<tr>
+<td>GC 总耗时占比</td>
+<td>0.9%</td>
+<td>0.3%</td>
+<td>3倍</td>
+</tr>
+<tr>
+<td>CPU 开销</td>
+<td>正常</td>
+<td>增加15%（读屏障开销）</td>
+<td>-</td>
+</tr>
+<tr>
+<td>吞吐量</td>
+<td>基准</td>
+<td>降低3-5%</td>
+<td>-</td>
+</tr>
+</tbody></table>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * ZGC 读屏障对吞吐量的影响分析：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 读屏障在每次对象引用加载时执行检查，大约增加 3-5% 的 CPU 开销。</span></span><br><span class="line"><span class="comment"> * 对于 order-service 的业务特征分析：</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 1. 大量事务操作：涉及频繁的对象引用加载，读屏障开销较大</span></span><br><span class="line"><span class="comment"> * 2. 延迟敏感：生产调度指令需要毫秒级响应，ZGC 的亚毫秒停顿是巨大优势</span></span><br><span class="line"><span class="comment"> * 3. 结论：牺牲 3-5% 吞吐量，换取 200 倍的停顿改善，完全值得</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 注意事项：</span></span><br><span class="line"><span class="comment"> * - ZGC 不分代（JDK21前），每次都是全堆标记，大堆时标记时间长</span></span><br><span class="line"><span class="comment"> * - JDK21 的分代 ZGC（Generational ZGC）解决了这个问题</span></span><br><span class="line"><span class="comment"> */</span></span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="九、GC-日志分析实战"><a href="#九、GC-日志分析实战" class="headerlink" title="九、GC 日志分析实战"></a>九、GC 日志分析实战</h2><h3 id="9-1-开启-GC-日志"><a href="#9-1-开启-GC-日志" class="headerlink" title="9.1 开启 GC 日志"></a>9.1 开启 GC 日志</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># JDK8 GC 日志参数</span></span><br><span class="line">-XX:+PrintGCDetails               <span class="comment"># 详细 GC 日志</span></span><br><span class="line">-XX:+PrintGCDateStamps            <span class="comment"># 日期时间戳</span></span><br><span class="line">-XX:+PrintGCTimeStamps            <span class="comment"># 相对时间戳</span></span><br><span class="line">-XX:+PrintGCApplicationStoppedTime  <span class="comment"># STW 时间</span></span><br><span class="line">-XX:+PrintGCApplicationConcurrentTime  <span class="comment"># 并发时间</span></span><br><span class="line">-XX:+PrintHeapAtGC                <span class="comment"># GC 时堆信息</span></span><br><span class="line">-Xloggc:/data/logs/gc.log         <span class="comment"># 日志文件路径</span></span><br><span class="line">-XX:+UseGCLogFileRotation         <span class="comment"># 日志滚动</span></span><br><span class="line">-XX:NumberOfGCLogFiles=10         <span class="comment"># 保留 10 个日志文件</span></span><br><span class="line">-XX:GCLogFileSize=50M             <span class="comment"># 每个日志文件 50MB</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># JDK9+ GC 日志参数（统一日志框架）</span></span><br><span class="line">-Xlog:gc*:file=/data/logs/gc.log:<span class="keyword">time</span>,<span class="built_in">uptime</span>,level,tags:filecount=10,filesize=50M</span><br><span class="line"></span><br><span class="line"><span class="comment"># 实际项目统一的 GC 日志配置（JDK8）</span></span><br><span class="line">GC_LOG_OPTS=<span class="string">&quot;-XX:+PrintGCDetails \</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDateStamps \</span></span><br><span class="line"><span class="string">  -XX:+PrintGCTimeStamps \</span></span><br><span class="line"><span class="string">  -XX:+PrintGCApplicationStoppedTime \</span></span><br><span class="line"><span class="string">  -XX:+PrintGCApplicationConcurrentTime \</span></span><br><span class="line"><span class="string">  -XX:+PrintHeapAtGC \</span></span><br><span class="line"><span class="string">  -Xloggc:/data/logs/\$&#123;SERVICE_NAME&#125;-gc.log \</span></span><br><span class="line"><span class="string">  -XX:+UseGCLogFileRotation \</span></span><br><span class="line"><span class="string">  -XX:NumberOfGCLogFiles=10 \</span></span><br><span class="line"><span class="string">  -XX:GCLogFileSize=50M&quot;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="9-2-GC-日志格式解读"><a href="#9-2-GC-日志格式解读" class="headerlink" title="9.2 GC 日志格式解读"></a>9.2 GC 日志格式解读</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"># G1 GC 日志示例（device-service）</span><br><span class="line"></span><br><span class="line"># Young GC</span><br><span class="line">2023-05-15T10:23:15.456+0800: 15234.567:</span><br><span class="line">  [GC pause (G1 Evacuation Pause) (young), 0.0234567 secs]</span><br><span class="line">     [Eden: 1024.0M(1024.0M)-&gt;0.0B(768.0M)</span><br><span class="line">      Survivors: 128.0M-&gt;256.0M</span><br><span class="line">      Heap: 3.2G(4.0G)-&gt;2.1G(4.0G)]</span><br><span class="line">  [Times: user=0.09 sys=0.01, real=0.02 secs]</span><br><span class="line"></span><br><span class="line">解读：</span><br><span class="line">- G1 Evacuation Pause (young)：G1 新生代转移暂停</span><br><span class="line">- 0.0234567 secs：STW 23ms</span><br><span class="line">- Eden: 1024M → 0B：Eden 区完全清空</span><br><span class="line">- Survivors: 128M → 256M：Survivor 区增大（更多对象存活）</span><br><span class="line">- Heap: 3.2G → 2.1G：堆使用从 3.2GB 降至 2.1GB</span><br><span class="line">- user &gt; real：多线程并行收集</span><br><span class="line"></span><br><span class="line"># Mixed GC</span><br><span class="line">2023-05-15T10:25:32.789+0800: 15371.901:</span><br><span class="line">  [GC pause (G1 Evacuation Pause) (mixed), 0.0389012 secs]</span><br><span class="line">     [Eden: 768.0M(768.0M)-&gt;0.0B(512.0M)</span><br><span class="line">      Survivors: 256.0M-&gt;128.0M</span><br><span class="line">      Heap: 2.8G(4.0G)-&gt;1.9G(4.0G)]</span><br><span class="line">     [Old: 1.5G-&gt;1.2G]   # 老年代从 1.5GB 降至 1.2GB</span><br><span class="line"></span><br><span class="line">解读：</span><br><span class="line">- (mixed)：混合收集，包含部分 Old Region</span><br><span class="line">- 老年代减少了 300MB，说明回收了部分垃圾多的 Old Region</span><br><span class="line">- 停顿 38ms，在 MaxGCPauseMillis=50 目标内</span><br><span class="line"></span><br><span class="line"># Full GC（需要避免）</span><br><span class="line">2023-05-15T12:34:56.123+0800: 23015.235:</span><br><span class="line">  [Full GC (Allocation Failure) 3.2G-&gt;2.5G(4.0G), 1.2345670 secs]</span><br><span class="line">     [Eden: 512.0M(512.0M)-&gt;0.0B(512.0M)</span><br><span class="line">      Survivors: 0.0M-&gt;0.0M</span><br><span class="line">      Heap: 3.2G(4.0G)-&gt;2.5G(4.0G)]</span><br><span class="line">  [Times: user=1.20 sys=0.05, real=1.23 secs]</span><br><span class="line"></span><br><span class="line">解读：</span><br><span class="line">- Full GC (Allocation Failure)：分配失败触发 Full GC</span><br><span class="line">- 1.2345670 secs：STW 1.2秒！这是不可接受的</span><br><span class="line">- 需要调优减少 Full GC</span><br></pre></td></tr></table></figure>
+
+<h3 id="9-3-日志分析工具"><a href="#9-3-日志分析工具" class="headerlink" title="9.3 日志分析工具"></a>9.3 日志分析工具</h3><table>
+<thead>
+<tr>
+<th>工具</th>
+<th>类型</th>
+<th>特点</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>GCEasy</td>
+<td>在线</td>
+<td>上传日志即可分析，可视化强</td>
+<td>快速分析、分享报告</td>
+</tr>
+<tr>
+<td>GCViewer</td>
+<td>本地</td>
+<td>开源Java应用，离线分析</td>
+<td>内网环境、隐私数据</td>
+</tr>
+<tr>
+<td>JClarity Censum</td>
+<td>本地</td>
+<td>商业工具，分析深入</td>
+<td>企业级深度分析</td>
+</tr>
+<tr>
+<td>JDK Mission Control</td>
+<td>本地</td>
+<td>JDK自带，配合JFR</td>
+<td>实时监控+离线分析</td>
+</tr>
+<tr>
+<td>jstat</td>
+<td>命令行</td>
+<td>JDK自带，实时查看</td>
+<td>快速检查GC状态</td>
+</tr>
+</tbody></table>
+<p><strong>GCEasy 分析报告关键指标</strong>：</p>
+<p><strong>GCEasy 报告示例（device-service 调优前）：</strong></p>
+<ul>
+<li>指标                  | 数值</li>
+<li>———————-|————————</li>
+<li>总 GC 次数           | 15,234</li>
+<li>Young GC 次数        | 15,210</li>
+<li>Full GC 次数         | 24</li>
+<li>Young GC 平均停顿    | 45ms</li>
+<li>Young GC 最大停顿    | 120ms</li>
+<li>Full GC 平均停顿     | 2.1s</li>
+<li>Full GC 最大停顿     | 4.2s</li>
+<li>堆使用率峰值         | 92%</li>
+<li>GC 总耗时            | 45 分钟 &#x2F; 30 天</li>
+<li>吞吐量               | 96.5%</li>
+<li>问题标注：</li>
+<li><ul>
+<li>Full GC 最大停顿 4.2s：严重！需立即处理</li>
+</ul>
+</li>
+<li><ul>
+<li>堆使用率峰值 92%：过高，建议扩堆或调优</li>
+</ul>
+</li>
+<li><ul>
+<li>Full GC 频率 24次&#x2F;30天：偏高</li>
+</ul>
+</li>
+</ul>
+<h3 id="9-4-jstat-实时监控"><a href="#9-4-jstat-实时监控" class="headerlink" title="9.4 jstat 实时监控"></a>9.4 jstat 实时监控</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 查看 GC 统计信息（每 1 秒输出一次，共 10 次）</span></span><br><span class="line">jstat -gcutil &lt;pid&gt; 1000 10</span><br><span class="line"></span><br><span class="line"><span class="comment"># 输出示例（device-service G1 调优后）：</span></span><br><span class="line">  S0     S1     E      O      M     CCS    YGC   YGCT    FGC FGCT    GCT</span><br><span class="line">  0.00  45.23  67.89  52.34  95.12  91.34  15234  345.678  0   0.000  345.678</span><br><span class="line">  0.00  45.23  72.34  52.56  95.12  91.34  15235  345.701  0   0.000  345.701</span><br><span class="line"> 23.45   0.00   0.00  48.90  95.12  91.34  15236  345.725  0   0.000  345.725</span><br><span class="line"></span><br><span class="line"><span class="comment"># 解读：</span></span><br><span class="line"><span class="comment"># S0/S1: Survivor 0/1 使用率</span></span><br><span class="line"><span class="comment"># E: Eden 使用率</span></span><br><span class="line"><span class="comment"># O: Old 使用率</span></span><br><span class="line"><span class="comment"># M: Metaspace 使用率</span></span><br><span class="line"><span class="comment"># YGC: Young GC 次数</span></span><br><span class="line"><span class="comment"># YGCT: Young GC 总耗时（秒）</span></span><br><span class="line"><span class="comment"># FGC: Full GC 次数（0 = 完美）</span></span><br><span class="line"><span class="comment"># FGCT: Full GC 总耗时</span></span><br><span class="line"><span class="comment"># GCT: GC 总耗时</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 实际项目监控脚本</span></span><br><span class="line"><span class="comment">#!/bin/bash</span></span><br><span class="line"><span class="comment"># gc_monitor.sh - GC 实时监控脚本</span></span><br><span class="line">PID=$(pgrep -f device-service.jar)</span><br><span class="line">INTERVAL=5</span><br><span class="line"></span><br><span class="line"><span class="keyword">while</span> <span class="literal">true</span>; <span class="keyword">do</span></span><br><span class="line">    <span class="built_in">echo</span> <span class="string">&quot;=== <span class="subst">$(date &#x27;+%Y-%m-%d %H:%M:%S&#x27;)</span> ===&quot;</span></span><br><span class="line">    jstat -gcutil <span class="variable">$PID</span> | <span class="built_in">tail</span> -1 | awk <span class="string">&#x27;&#123;</span></span><br><span class="line"><span class="string">        printf &quot;Eden: %s%%  Old: %s%%  YGC: %s  FGC: %s  YGCT: %ss\n&quot;,</span></span><br><span class="line"><span class="string">               $3, $4, $7, $9, $8</span></span><br><span class="line"><span class="string">    &#125;&#x27;</span></span><br><span class="line">    <span class="built_in">sleep</span> <span class="variable">$INTERVAL</span></span><br><span class="line"><span class="keyword">done</span></span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="十、GC-相关-JVM-参数速查"><a href="#十、GC-相关-JVM-参数速查" class="headerlink" title="十、GC 相关 JVM 参数速查"></a>十、GC 相关 JVM 参数速查</h2><h3 id="10-1-内存参数"><a href="#10-1-内存参数" class="headerlink" title="10.1 内存参数"></a>10.1 内存参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 堆内存</span></span><br><span class="line">-Xms4g                    <span class="comment"># 初始堆大小（建议与最大堆相同，避免动态扩容）</span></span><br><span class="line">-Xmx4g                    <span class="comment"># 最大堆大小</span></span><br><span class="line">-Xmn1536m                 <span class="comment"># 新生代大小</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 新生代比例</span></span><br><span class="line">-XX:NewRatio=2            <span class="comment"># 新生代:老年代 = 1:2</span></span><br><span class="line">-XX:SurvivorRatio=8       <span class="comment"># Eden:Survivor = 8:1</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 元空间</span></span><br><span class="line">-XX:MetaspaceSize=256m    <span class="comment"># 初始元空间大小</span></span><br><span class="line">-XX:MaxMetaspaceSize=512m <span class="comment"># 最大元空间大小</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 直接内存</span></span><br><span class="line">-XX:MaxDirectMemorySize=512m  <span class="comment"># 最大直接内存</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 栈内存</span></span><br><span class="line">-Xss512k                  <span class="comment"># 线程栈大小</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="10-2-GC-选择参数"><a href="#10-2-GC-选择参数" class="headerlink" title="10.2 GC 选择参数"></a>10.2 GC 选择参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Serial</span></span><br><span class="line">-XX:+UseSerialGC</span><br><span class="line"></span><br><span class="line"><span class="comment"># Parallel（JDK8默认）</span></span><br><span class="line">-XX:+UseParallelGC</span><br><span class="line">-XX:+UseParallelOldGC</span><br><span class="line"></span><br><span class="line"><span class="comment"># CMS（JDK14移除）</span></span><br><span class="line">-XX:+UseConcMarkSweepGC</span><br><span class="line"></span><br><span class="line"><span class="comment"># G1（JDK9+默认）</span></span><br><span class="line">-XX:+UseG1GC</span><br><span class="line"></span><br><span class="line"><span class="comment"># ZGC</span></span><br><span class="line">-XX:+UseZGC               <span class="comment"># JDK15+</span></span><br><span class="line">-XX:+UseZGC -XX:+ZGenerational  <span class="comment"># JDK21+ 分代ZGC</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Shenandoah（OpenJDK）</span></span><br><span class="line">-XX:+UseShenandoahGC</span><br></pre></td></tr></table></figure>
+
+<h3 id="10-3-通用调优参数"><a href="#10-3-通用调优参数" class="headerlink" title="10.3 通用调优参数"></a>10.3 通用调优参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 性能优化</span></span><br><span class="line">-XX:+AlwaysPreTouch        <span class="comment"># 启动时预分配所有内存（避免运行时缺页中断）</span></span><br><span class="line">-XX:+DisableExplicitGC     <span class="comment"># 禁止 System.gc() 触发 Full GC</span></span><br><span class="line">-XX:+ParallelRefProcEnabled <span class="comment"># 并行处理引用对象</span></span><br><span class="line">-XX:+UseCompressedOops     <span class="comment"># 压缩普通对象指针（堆&lt;32G默认开启）</span></span><br><span class="line">-XX:+UseCompressedClassPointers  <span class="comment"># 压缩类指针</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># OOM 处理</span></span><br><span class="line">-XX:+HeapDumpOnOutOfMemoryError     <span class="comment"># OOM 时自动 dump</span></span><br><span class="line">-XX:HeapDumpPath=/data/logs/        <span class="comment"># dump 文件路径</span></span><br><span class="line">-XX:OnOutOfMemoryError=<span class="string">&quot;send_alert.sh&quot;</span>  <span class="comment"># OOM 时执行脚本</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># JIT 优化</span></span><br><span class="line">-XX:ReservedCodeCacheSize=256m  <span class="comment"># 代码缓存大小</span></span><br><span class="line">-XX:+TieredCompilation          <span class="comment"># 分层编译</span></span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="十一、收集器选择指南"><a href="#十一、收集器选择指南" class="headerlink" title="十一、收集器选择指南"></a>十一、收集器选择指南</h2><h3 id="11-1-按业务场景选择"><a href="#11-1-按业务场景选择" class="headerlink" title="11.1 按业务场景选择"></a>11.1 按业务场景选择</h3><p><strong>收集器选择决策树</strong></p>
+<ul>
+<li>堆内存大小？</li>
+<li>|</li>
+<li>+– &lt; 2GB → Serial 或 Parallel</li>
+<li>|</li>
+<li>+– 2GB~8GB → 延迟敏感？</li>
+<li>|                  |</li>
+<li>|                  +– 是 → G1（MaxGCPauseMillis&#x3D;50）</li>
+<li>|                  |</li>
+<li>|                  +– 否 → Parallel（吞吐量优先）</li>
+<li>|</li>
+<li>+– 8GB~32GB → G1（大部分场景最佳）</li>
+<li>|</li>
+<li>+– &gt; 32GB → ZGC（超低延迟）或 G1（延迟要求不极端）</li>
+</ul>
+<h3 id="11-2-按实际项目服务选择"><a href="#11-2-按实际项目服务选择" class="headerlink" title="11.2 按实际项目服务选择"></a>11.2 按实际项目服务选择</h3><table>
+<thead>
+<tr>
+<th>服务</th>
+<th>堆大小</th>
+<th>业务特征</th>
+<th>推荐收集器</th>
+<th>关键参数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>safety-service</td>
+<td>4GB</td>
+<td>实时告警，延迟敏感</td>
+<td>G1</td>
+<td>MaxGCPauseMillis&#x3D;20</td>
+</tr>
+<tr>
+<td>device-service</td>
+<td>4GB</td>
+<td>高频写入，吞吐+延迟</td>
+<td>G1</td>
+<td>MaxGCPauseMillis&#x3D;50, RegionSize&#x3D;8m</td>
+</tr>
+<tr>
+<td>order-service</td>
+<td>6GB</td>
+<td>事务密集，延迟敏感</td>
+<td>G1&#x2F;ZGC</td>
+<td>MaxGCPauseMillis&#x3D;50 或 UseZGC</td>
+</tr>
+<tr>
+<td>report-service</td>
+<td>8GB</td>
+<td>批量计算，吞吐优先</td>
+<td>Parallel</td>
+<td>GCTimeRatio&#x3D;99</td>
+</tr>
+<tr>
+<td>user-service</td>
+<td>2GB</td>
+<td>请求量小</td>
+<td>G1（默认即可）</td>
+<td>无需额外调优</td>
+</tr>
+</tbody></table>
+<h3 id="11-3-JDK-版本与默认收集器"><a href="#11-3-JDK-版本与默认收集器" class="headerlink" title="11.3 JDK 版本与默认收集器"></a>11.3 JDK 版本与默认收集器</h3><table>
+<thead>
+<tr>
+<th>JDK 版本</th>
+<th>默认收集器</th>
+<th>推荐收集器</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>JDK 8</td>
+<td>Parallel Scavenge + Parallel Old</td>
+<td>G1</td>
+<td>CMS 已 Deprecated</td>
+</tr>
+<tr>
+<td>JDK 9-14</td>
+<td>G1</td>
+<td>G1</td>
+<td>CMS 标记 Deprecated</td>
+</tr>
+<tr>
+<td>JDK 15-20</td>
+<td>G1</td>
+<td>G1 或 ZGC</td>
+<td>ZGC 生产可用</td>
+</tr>
+<tr>
+<td>JDK 21+</td>
+<td>G1</td>
+<td>G1 或 分代ZGC</td>
+<td>分代 ZGC 正式发布</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="十二、实际项目-GC-问题实战"><a href="#十二、实际项目-GC-问题实战" class="headerlink" title="十二、实际项目 GC 问题实战"></a>十二、实际项目 GC 问题实战</h2><h3 id="12-1-15-个项目问题汇总"><a href="#12-1-15-个项目问题汇总" class="headerlink" title="12.1 15 个项目问题汇总"></a>12.1 15 个项目问题汇总</h3><p>在实际项目的开发和运维过程中，团队遇到了 15 个与 GC 直接相关的实际问题。以下是完整的问题清单及解决方案：</p>
+<table>
+<thead>
+<tr>
+<th>序号</th>
+<th>问题类别</th>
+<th>问题描述</th>
+<th>根因分析</th>
+<th>解决方案</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>Full GC</td>
+<td>device-service 每日 Full GC 2-3次，停顿 1.2-4.2秒</td>
+<td>Parallel GC + 堆2GB，老年代空间不足</td>
+<td>切换G1 + 堆扩至4GB + RegionSize&#x3D;8m</td>
+<td>60天Full GC为0</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Concurrent Mode Failure</td>
+<td>safety-service CMS并发清除时老年代空间耗尽</td>
+<td>CMSInitiatingOccupancyFraction&#x3D;92过高，浮动垃圾占满预留</td>
+<td>降至68 + CMSScavengeBeforeRemark</td>
+<td>Concurrent Mode Failure降至0</td>
+</tr>
+<tr>
+<td>3</td>
+<td>内存碎片</td>
+<td>safety-service CMS长期运行后大对象分配失败</td>
+<td>标记-清除算法不压缩，碎片率超40%</td>
+<td>每5次Full GC压缩一次 &#x2F; 迁移G1</td>
+<td>碎片率降至5%以下</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Humongous对象</td>
+<td>device-service G1大对象分配触发并发标记频繁</td>
+<td>设备历史数据数组&gt;Region50%，作为Humongous分配</td>
+<td>RegionSize从4m增至8m</td>
+<td>Humongous分配减少70%</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Mixed GC停顿长</td>
+<td>order-service G1 Mixed GC偶发停顿200ms+</td>
+<td>单次回收Old Region过多</td>
+<td>MixedGCCountTarget从8增至16</td>
+<td>每次少回收，停顿降至40ms</td>
+</tr>
+<tr>
+<td>6</td>
+<td>元空间溢出</td>
+<td>report-service java.lang.OutOfMemoryError: Metaspace</td>
+<td>动态生成报表类（CGLIB代理）未释放</td>
+<td>MaxMetaspaceSize&#x3D;512m + 类加载器优化</td>
+<td>OOM消失</td>
+</tr>
+<tr>
+<td>7</td>
+<td>直接内存泄漏</td>
+<td>safety-service Netty直接内存未释放</td>
+<td>WebSocket连接断开后ByteBuf未正确release</td>
+<td>添加ChannelInboundHandlerAdapter释放逻辑</td>
+<td>直接内存占用从1.5GB降至200MB</td>
+</tr>
+<tr>
+<td>8</td>
+<td>System.gc干扰</td>
+<td>order-service定时任务调用System.gc触发Full GC</td>
+<td>报表库使用RMI，RMI框架定期调用System.gc</td>
+<td>-XX:+DisableExplicitGC</td>
+<td>显式GC消失</td>
+</tr>
+<tr>
+<td>9</td>
+<td>线程栈溢出</td>
+<td>device-service StackOverflowError</td>
+<td>递归解析设备协议栈，深度超1000层</td>
+<td>改为迭代实现 + -Xss1m</td>
+<td>栈溢出降为0</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Young GC频率高</td>
+<td>device-service Young GC每8秒一次</td>
+<td>堆2GB，Eden区仅640MB，5000+点&#x2F;秒快速填满</td>
+<td>堆扩至4GB + NewRatio&#x3D;1</td>
+<td>频率降至30秒一次</td>
+</tr>
+<tr>
+<td>11</td>
+<td>GC日志磁盘满</td>
+<td>report-service GC日志占满磁盘</td>
+<td>日志无滚动策略，30天累积50GB</td>
+<td>启用GCLogFileRotation + 保留10个50MB文件</td>
+<td>磁盘占用降至500MB</td>
+</tr>
+<tr>
+<td>12</td>
+<td>对象过早晋升</td>
+<td>device-service Survivor区过小，对象直接晋升老年代</td>
+<td>SurvivorRatio&#x3D;8导致Survivor仅64MB，Eden区大对象复制时Survivor放不下</td>
+<td>SurvivorRatio&#x3D;6 + MaxTenuringThreshold&#x3D;6</td>
+<td>晋升率降低60%</td>
+</tr>
+<tr>
+<td>13</td>
+<td>内存泄漏</td>
+<td>order-service 老年代持续增长，Full GC无法回收</td>
+<td>生产工单存入ThreadLocal但未remove</td>
+<td>添加try-finally确保ThreadLocal.remove</td>
+<td>老年代增长率从50MB&#x2F;小时降至0</td>
+</tr>
+<tr>
+<td>14</td>
+<td>大页面TLB</td>
+<td>safety-service GC停顿波动大</td>
+<td>堆内存分散在4KB页面，TLB miss率高</td>
+<td>启用大页面 -XX:+UseLargePages + OS配置</td>
+<td>GC停顿波动降低50%</td>
+</tr>
+<tr>
+<td>15</td>
+<td>ZGC读屏障开销</td>
+<td>order-service ZGC试点吞吐量下降5%</td>
+<td>读屏障在每次引用加载时检查，高频调用路径开销大</td>
+<td>热点路径优化引用加载频率 + JDK21分代ZGC</td>
+<td>开销降至2%</td>
+</tr>
+</tbody></table>
+<h3 id="12-2-典型问题深度分析"><a href="#12-2-典型问题深度分析" class="headerlink" title="12.2 典型问题深度分析"></a>12.2 典型问题深度分析</h3><h4 id="问题1：device-service-Full-GC-灾难"><a href="#问题1：device-service-Full-GC-灾难" class="headerlink" title="问题1：device-service Full GC 灾难"></a>问题1：device-service Full GC 灾难</h4><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 问题：device-service 每日 Full GC 2-3 次，单次停顿 1.2-4.2 秒</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 根因分析：</span></span><br><span class="line"><span class="comment"> * 1. 堆内存 2GB 过小，设备数据点每秒写入 5000+ 条</span></span><br><span class="line"><span class="comment"> * 2. Parallel GC 在吞吐量优先模式下，Full GC 是全堆扫描</span></span><br><span class="line"><span class="comment"> * 3. 大对象（设备历史数据数组）直接进入老年代，加速老年代填满</span></span><br><span class="line"><span class="comment"> * 4. 夜班巡检高峰期（0:00-6:00）数据量翻倍，触发更频繁的 Full GC</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 问题代码：设备历史数据全量缓存</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceHistoryCache</span> &#123;</span><br><span class="line">    <span class="comment">// 每个设备 24 小时数据，5000+ 设备 × 2880 条/设备 ≈ 1440 万条</span></span><br><span class="line">    <span class="comment">// 每条约 200 字节 → 总计约 2.7GB，远超堆大小</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, List&lt;DeviceDataPoint&gt;&gt; cache = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Scheduled(fixedRate = 30000)</span>  <span class="comment">// 每 30 秒刷新</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">refresh</span><span class="params">()</span> &#123;</span><br><span class="line">        cache.clear();  <span class="comment">// 旧数据全部变为垃圾</span></span><br><span class="line">        List&lt;Device&gt; devices = deviceRepository.findAll();  <span class="comment">// 查全量</span></span><br><span class="line">        <span class="keyword">for</span> (Device device : devices) &#123;</span><br><span class="line">            List&lt;DeviceDataPoint&gt; history = dataPointMapper</span><br><span class="line">                .selectByDeviceIdAndTimeRange(</span><br><span class="line">                    device.getId(),</span><br><span class="line">                    LocalDateTime.now().minusHours(<span class="number">24</span>),</span><br><span class="line">                    LocalDateTime.now());</span><br><span class="line">            cache.put(device.getId(), history);  <span class="comment">// 新对象大量分配</span></span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 结果：每 30 秒产生约 2.7GB 垃圾，Eden 区 640MB 根本放不下</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 修复方案1：分页查询 + 限制缓存大小</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceHistoryCache</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Cache&lt;String, List&lt;DeviceDataPoint&gt;&gt; cache = Caffeine.newBuilder()</span><br><span class="line">        .maximumSize(<span class="number">500</span>)          <span class="comment">// 最多缓存 500 个设备</span></span><br><span class="line">        .expireAfterWrite(<span class="number">5</span>, TimeUnit.MINUTES)  <span class="comment">// 5 分钟过期</span></span><br><span class="line">        .build();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> List&lt;DeviceDataPoint&gt; <span class="title function_">getHistory</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> cache.get(deviceId, id -&gt;</span><br><span class="line">            dataPointMapper.selectByDeviceIdAndTimeRange(</span><br><span class="line">                id,</span><br><span class="line">                LocalDateTime.now().minusHours(<span class="number">1</span>),  <span class="comment">// 缩短为1小时</span></span><br><span class="line">                LocalDateTime.now()));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 修复方案2：切换 G1 + 扩大堆</span></span><br><span class="line"><span class="comment">// 配合代码修复，GC 问题彻底解决</span></span><br></pre></td></tr></table></figure>
+
+<h4 id="问题6：元空间溢出"><a href="#问题6：元空间溢出" class="headerlink" title="问题6：元空间溢出"></a>问题6：元空间溢出</h4><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 问题：report-service OOM: Metaspace</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 根因：动态报表使用 CGLIB 生成代理类，每次生成新类但不卸载</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 元空间（Metaspace）不在堆中，使用本地内存，默认无上限</span></span><br><span class="line"><span class="comment"> * CGLIB 生成的类不断加载，元空间持续增长直至耗尽本地内存</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 问题代码：每次报表查询都生成新的代理类</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ReportProxyFactory</span> &#123;</span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">createProxy</span><span class="params">(Class&lt;?&gt; targetClass)</span> &#123;</span><br><span class="line">        <span class="type">Enhancer</span> <span class="variable">enhancer</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Enhancer</span>();</span><br><span class="line">        enhancer.setSuperclass(targetClass);</span><br><span class="line">        enhancer.setCallback(<span class="keyword">new</span> <span class="title class_">ReportMethodInterceptor</span>());</span><br><span class="line">        <span class="comment">// 每次调用都创建新的 Enhancer 实例，生成新的代理类</span></span><br><span class="line">        <span class="comment">// 这些代理类被加载后很难卸载（类加载器持有引用）</span></span><br><span class="line">        <span class="keyword">return</span> enhancer.create();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 修复方案：缓存代理类 + 限制元空间大小</span></span><br><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ReportProxyConfig</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;Class&lt;?&gt;, Object&gt; proxyCache = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> &lt;T&gt; T <span class="title function_">getProxy</span><span class="params">(Class&lt;T&gt; targetClass)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> (T) proxyCache.computeIfAbsent(targetClass, cls -&gt; &#123;</span><br><span class="line">            <span class="type">Enhancer</span> <span class="variable">enhancer</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Enhancer</span>();</span><br><span class="line">            enhancer.setSuperclass(cls);</span><br><span class="line">            enhancer.setCallback(<span class="keyword">new</span> <span class="title class_">ReportMethodInterceptor</span>());</span><br><span class="line">            <span class="keyword">return</span> enhancer.create();</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// JVM 参数修复</span></span><br><span class="line">-XX:MaxMetaspaceSize=512m    # 限制元空间上限</span><br><span class="line">-XX:MetaspaceSize=256m       # 初始元空间大小，减少扩容开销</span><br></pre></td></tr></table></figure>
+
+<h4 id="问题13：ThreadLocal-内存泄漏"><a href="#问题13：ThreadLocal-内存泄漏" class="headerlink" title="问题13：ThreadLocal 内存泄漏"></a>问题13：ThreadLocal 内存泄漏</h4><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 问题：order-service 老年代持续增长，Full GC 无法回收</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 排查过程：</span></span><br><span class="line"><span class="comment"> * 1. jmap -histo:live &lt;pid&gt; 发现 OrderContext 对象数量异常（200万+）</span></span><br><span class="line"><span class="comment"> * 2. jhat 分析发现 OrderContext 被 ThreadLocalMap$Entry 引用</span></span><br><span class="line"><span class="comment"> * 3. ThreadLocalMap 的 Entry 是弱引用 key + 强引用 value</span></span><br><span class="line"><span class="comment"> *    key 被回收后 value 仍被强引用，形成泄漏</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * 原因：线程池中的线程不会销毁，ThreadLocal 的 value 无法回收</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 问题代码：生产工单处理中使用 ThreadLocal</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderContextHolder</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> ThreadLocal&lt;OrderContext&gt; CONTEXT =</span><br><span class="line">        <span class="keyword">new</span> <span class="title class_">ThreadLocal</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">set</span><span class="params">(OrderContext context)</span> &#123;</span><br><span class="line">        CONTEXT.set(context);  <span class="comment">// 设置上下文</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> OrderContext <span class="title function_">get</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> CONTEXT.get();</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 缺少 remove() 调用！</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderService</span> &#123;</span><br><span class="line">    <span class="meta">@Async(&quot;orderTaskExecutor&quot;)</span>  <span class="comment">// 线程池中的线程</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">processOrder</span><span class="params">(Order order)</span> &#123;</span><br><span class="line">        OrderContextHolder.set(<span class="keyword">new</span> <span class="title class_">OrderContext</span>(order));</span><br><span class="line">        <span class="comment">// 处理业务...</span></span><br><span class="line">        <span class="comment">// 方法结束后 ThreadLocal 未清理</span></span><br><span class="line">        <span class="comment">// 线程回到线程池，OrderContext 无法被 GC</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 修复方案：确保 finally 中 remove</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderService</span> &#123;</span><br><span class="line">    <span class="meta">@Async(&quot;orderTaskExecutor&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">processOrder</span><span class="params">(Order order)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            OrderContextHolder.set(<span class="keyword">new</span> <span class="title class_">OrderContext</span>(order));</span><br><span class="line">            <span class="comment">// 处理业务...</span></span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            OrderContextHolder.remove();  <span class="comment">// 必须清理！</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 额外防护：使用自定义 ThreadPoolTaskExecutor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CleanUpTaskExecutor</span> <span class="keyword">extends</span> <span class="title class_">ThreadPoolTaskExecutor</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">execute</span><span class="params">(Runnable task)</span> &#123;</span><br><span class="line">        <span class="built_in">super</span>.execute(() -&gt; &#123;</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                task.run();</span><br><span class="line">            &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                <span class="comment">// 清理所有 ThreadLocal</span></span><br><span class="line">                cleanUpThreadLocals();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="十三、面试高频问题"><a href="#十三、面试高频问题" class="headerlink" title="十三、面试高频问题"></a>十三、面试高频问题</h2><h3 id="13-1-CMS-和-G1-的区别？"><a href="#13-1-CMS-和-G1-的区别？" class="headerlink" title="13.1 CMS 和 G1 的区别？"></a>13.1 CMS 和 G1 的区别？</h3><p><strong>对比维度     | CMS                | G1</strong></p>
+<ul>
+<li>————-|——————–|————————–</li>
+<li>算法         | 标记-清除          | 标记-整理+复制</li>
+<li>内存碎片     | 有，需定期压缩      | 无，Region间复制整理</li>
+<li>内存布局     | 固定分代            | 分Region动态角色</li>
+<li>停顿可控     | 不可控              | 可预测（MaxGCPauseMillis）</li>
+<li>浮动垃圾     | 有                 | 有（SATB减少影响）</li>
+<li>大堆支持     | 差（&gt;8G碎片严重）   | 好（Region管理）</li>
+<li>状态         | JDK9 Deprecated    | JDK9+ 默认</li>
+<li>| JDK14 移除         | 持续增强</li>
+<li>实际项目选择：</li>
+<li><ul>
+<li>2023年Q1之前：CMS（历史遗留）</li>
+</ul>
+</li>
+<li><ul>
+<li>2023年Q2之后：全面迁移到G1</li>
+</ul>
+</li>
+<li><ul>
+<li>原因：CMS碎片问题严重，G1综合表现更优</li>
+</ul>
+</li>
+</ul>
+<h3 id="13-2-G1-的-Mixed-GC-是什么？"><a href="#13-2-G1-的-Mixed-GC-是什么？" class="headerlink" title="13.2 G1 的 Mixed GC 是什么？"></a>13.2 G1 的 Mixed GC 是什么？</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">Mixed GC = Young GC + 部分Old Region回收</span><br><span class="line"></span><br><span class="line">选择标准：回收价值（垃圾占比）最高的 Old Region</span><br><span class="line"></span><br><span class="line">工作流程：</span><br><span class="line">1. 并发标记完成后，统计每个 Old Region 的垃圾占比</span><br><span class="line">2. 按 MaxGCPauseMillis 目标，选择垃圾占比最高的 N 个 Old Region</span><br><span class="line">3. 同时回收所有 Young Region + 选中的 N 个 Old Region</span><br><span class="line">4. 存活对象复制到新 Region，旧 Region 整体释放</span><br><span class="line"></span><br><span class="line">示例（device-service）：</span><br><span class="line">- 堆 4GB，RegionSize=8m，共约 500 个 Region</span><br><span class="line">- Old Region 约 200 个</span><br><span class="line">- MaxGCPauseMillis=50ms，单次可回收 20 个 Old Region</span><br><span class="line">- 选择垃圾占比 Top 20 的 Old Region 回收</span><br><span class="line">- G1MixedGCCountTarget=16，分 16 次完成所有目标 Old Region 的回收</span><br></pre></td></tr></table></figure>
+
+<h3 id="13-3-ZGC-为什么停顿这么短？"><a href="#13-3-ZGC-为什么停顿这么短？" class="headerlink" title="13.3 ZGC 为什么停顿这么短？"></a>13.3 ZGC 为什么停顿这么短？</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">ZGC 停顿时间 &lt; 1ms 的三大技术保障：</span><br><span class="line"></span><br><span class="line">1. 染色指针：GC信息存在指针中，不需要遍历对象头</span><br><span class="line">   传统收集器需要访问对象的Mark Word来判断存活状态</span><br><span class="line">   ZGC通过指针颜色直接判断，减少了内存访问</span><br><span class="line"></span><br><span class="line">2. 读屏障：对象移动与应用线程并发执行</span><br><span class="line">   传统收集器移动对象时必须STW，否则应用线程可能访问到无效地址</span><br><span class="line">   ZGC通过读屏障，在应用线程访问时自动修正引用（自愈）</span><br><span class="line">   因此对象可以并发移动，不需要STW</span><br><span class="line"></span><br><span class="line">3. STW阶段极简：只做根扫描</span><br><span class="line">   初始标记：只标记GC Roots直接关联的对象 → &lt;0.1ms</span><br><span class="line">   再标记：只处理少量残留引用变更 → &lt;0.2ms</span><br><span class="line">   不需要扫描整个对象图（并发完成）</span><br><span class="line">   不需要移动对象（并发完成）</span><br><span class="line"></span><br><span class="line">停顿时间与堆大小无关：</span><br><span class="line">- 根集合大小固定（不随堆增长）</span><br><span class="line">- STW阶段只处理根集合</span><br><span class="line">- 因此4GB堆和4TB堆的停顿时间基本一致</span><br></pre></td></tr></table></figure>
+
+<h3 id="13-4-什么时候用-ZGC-替代-G1？"><a href="#13-4-什么时候用-ZGC-替代-G1？" class="headerlink" title="13.4 什么时候用 ZGC 替代 G1？"></a>13.4 什么时候用 ZGC 替代 G1？</h3><p><strong>场景                    | 推荐选择     | 原因</strong></p>
+<ul>
+<li>————————|————-|———————-</li>
+<li>堆 &gt; 16GB              | ZGC         | G1大堆Mixed GC停顿长</li>
+<li>延迟要求 &lt; 10ms        | ZGC         | G1无法保证亚毫秒停顿</li>
+<li>延迟要求 10-100ms      | G1          | G1够用，吞吐量更好</li>
+<li>堆 4-16GB              | G1          | 综合最优</li>
+<li>批处理&#x2F;离线计算         | Parallel    | 吞吐量最高</li>
+<li>读屏障开销不可接受       | G1          | ZGC读屏障约3-5%开销</li>
+<li>实际项目的选择：</li>
+<li><ul>
+<li>safety-service：当前G1，延迟要求&lt;20ms，G1可满足</li>
+</ul>
+</li>
+<li><ul>
+<li>order-service：试点ZGC，延迟要求&lt;10ms，ZGC优势明显</li>
+</ul>
+</li>
+<li><ul>
+<li>device-service：使用G1，吞吐量优先，读屏障开销不可接受</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="十四、最佳实践与规范"><a href="#十四、最佳实践与规范" class="headerlink" title="十四、最佳实践与规范"></a>十四、最佳实践与规范</h2><h3 id="14-1-实际项目-JVM-配置规范"><a href="#14-1-实际项目-JVM-配置规范" class="headerlink" title="14.1 实际项目 JVM 配置规范"></a>14.1 实际项目 JVM 配置规范</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ===== 实际项目 JVM 配置模板 =====</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 通用参数（所有服务必须配置）</span></span><br><span class="line">JAVA_COMMON_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -XX:+HeapDumpOnOutOfMemoryError</span></span><br><span class="line"><span class="string">  -XX:HeapDumpPath=/data/logs/</span></span><br><span class="line"><span class="string">  -XX:+DisableExplicitGC</span></span><br><span class="line"><span class="string">  -XX:+AlwaysPreTouch</span></span><br><span class="line"><span class="string">  -Djava.security.egd=file:/dev/./urandom</span></span><br><span class="line"><span class="string">  -Dfile.encoding=UTF-8</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># GC 日志参数（所有服务必须开启）</span></span><br><span class="line">GC_LOG_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDetails</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDateStamps</span></span><br><span class="line"><span class="string">  -XX:+PrintGCTimeStamps</span></span><br><span class="line"><span class="string">  -XX:+PrintGCApplicationStoppedTime</span></span><br><span class="line"><span class="string">  -Xloggc:/data/logs/\$&#123;SERVICE_NAME&#125;-gc.log</span></span><br><span class="line"><span class="string">  -XX:+UseGCLogFileRotation</span></span><br><span class="line"><span class="string">  -XX:NumberOfGCLogFiles=10</span></span><br><span class="line"><span class="string">  -XX:GCLogFileSize=50M</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># safety-service（低延迟优先，G1）</span></span><br><span class="line">SAFETY_JVM_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -Xms4g -Xmx4g</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=20</span></span><br><span class="line"><span class="string">  -XX:G1HeapRegionSize=4m</span></span><br><span class="line"><span class="string">  -XX:InitiatingHeapOccupancyPercent=45</span></span><br><span class="line"><span class="string">  -XX:G1MixedGCCountTarget=16</span></span><br><span class="line"><span class="string">  -XX:G1MixedGCLiveThresholdPercent=80</span></span><br><span class="line"><span class="string">  -XX:+ParallelRefProcEnabled</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># device-service（吞吐+延迟平衡，G1）</span></span><br><span class="line">DEVICE_JVM_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -Xms4g -Xmx4g</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=50</span></span><br><span class="line"><span class="string">  -XX:G1HeapRegionSize=8m</span></span><br><span class="line"><span class="string">  -XX:InitiatingHeapOccupancyPercent=40</span></span><br><span class="line"><span class="string">  -XX:G1MixedGCCountTarget=16</span></span><br><span class="line"><span class="string">  -XX:G1MixedGCLiveThresholdPercent=85</span></span><br><span class="line"><span class="string">  -XX:+ParallelRefProcEnabled</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># order-service（低延迟，ZGC试点）</span></span><br><span class="line">ORDER_JVM_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -Xms6g -Xmx6g</span></span><br><span class="line"><span class="string">  -XX:+UseZGC</span></span><br><span class="line"><span class="string">  -XX:ZAllocationSpikeTolerance=3</span></span><br><span class="line"><span class="string">  -XX:ConcGCThreads=4</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># report-service（吞吐量优先，Parallel）</span></span><br><span class="line">REPORT_JVM_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -Xms8g -Xmx8g</span></span><br><span class="line"><span class="string">  -XX:+UseParallelGC</span></span><br><span class="line"><span class="string">  -XX:+UseParallelOldGC</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=500</span></span><br><span class="line"><span class="string">  -XX:GCTimeRatio=99</span></span><br><span class="line"><span class="string">  -XX:NewRatio=1</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># user-service（默认G1即可）</span></span><br><span class="line">USER_JVM_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -Xms2g -Xmx2g</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=100</span></span><br><span class="line"><span class="string">&quot;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="14-2-GC-调优原则"><a href="#14-2-GC-调优原则" class="headerlink" title="14.2 GC 调优原则"></a>14.2 GC 调优原则</h3><p><strong>GC 调优七原则</strong></p>
+<ol>
+<li>先保证代码正确，再调优 GC</li>
+<li>开启 GC 日志是调优的前提</li>
+<li>优先调整堆大小，再切换收集器</li>
+<li>Xms 和 Xmx 设置相同</li>
+<li>避免显式 GC（System.gc）</li>
+<li>关注 Full GC 频率，而非 Young GC</li>
+<li>调优后持续监控，防止回归</li>
+</ol>
+<h3 id="14-3-GC-告警阈值"><a href="#14-3-GC-告警阈值" class="headerlink" title="14.3 GC 告警阈值"></a>14.3 GC 告警阈值</h3><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>警告阈值</th>
+<th>严重阈值</th>
+<th>检测方式</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Young GC 停顿</td>
+<td>&gt; 100ms</td>
+<td>&gt; 500ms</td>
+<td>GC 日志分析</td>
+</tr>
+<tr>
+<td>Full GC 频率</td>
+<td>&gt; 1次&#x2F;天</td>
+<td>&gt; 1次&#x2F;小时</td>
+<td>GC 日志分析</td>
+</tr>
+<tr>
+<td>Full GC 停顿</td>
+<td>&gt; 500ms</td>
+<td>&gt; 2s</td>
+<td>GC 日志分析</td>
+</tr>
+<tr>
+<td>老年代使用率</td>
+<td>&gt; 75%</td>
+<td>&gt; 90%</td>
+<td>jstat &#x2F; JMX</td>
+</tr>
+<tr>
+<td>堆使用率</td>
+<td>&gt; 80%</td>
+<td>&gt; 95%</td>
+<td>jstat &#x2F; JMX</td>
+</tr>
+<tr>
+<td>GC 总耗时占比</td>
+<td>&gt; 2%</td>
+<td>&gt; 5%</td>
+<td>GCEasy 分析</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="十五、总结"><a href="#十五、总结" class="headerlink" title="十五、总结"></a>十五、总结</h2><p>实际项目的 GC 调优历程，是从”能跑就行”到”精准调优”的完整蜕变。回顾全文的核心要点：</p>
+<p><strong>1. 收集器各有千秋，没有银弹</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">Serial    → 简单，适合小堆客户端</span><br><span class="line">ParNew    → CMS 的搭档，多线程新生代</span><br><span class="line">Parallel  → 吞吐量优先，批处理首选</span><br><span class="line">CMS       → 低延迟先驱，但碎片问题严重</span><br><span class="line">G1        → 平衡方案，大多数场景最优</span><br><span class="line">ZGC       → 超低延迟，大堆终极方案</span><br></pre></td></tr></table></figure>
+
+<p><strong>2. 选型依据业务特征</strong></p>
+<ul>
+<li>延迟敏感（safety-service）→ G1，MaxGCPauseMillis&#x3D;20</li>
+<li>吞吐优先（report-service）→ Parallel，GCTimeRatio&#x3D;99</li>
+<li>平衡场景（device-service）→ G1，MaxGCPauseMillis&#x3D;50</li>
+<li>极低延迟（order-service试点）→ ZGC</li>
+</ul>
+<p><strong>3. 调优的本质是减少 Full GC</strong></p>
+<p>从 device-service 的实战来看，将 Full GC 从每日 3 次降至 60 天 0 次，靠的不是某个”神奇参数”，而是：扩堆 + 切换G1 + 优化Region大小 + 代码层面减少大对象分配。</p>
+<p><strong>4. GC 问题往往是代码问题的放大器</strong></p>
+<p>内存泄漏、ThreadLocal未清理、大对象全量缓存——这些代码问题才是GC频繁的根源。调优JVM参数只能治标，修复代码才能治本。</p>
+<p><strong>5. 数据驱动，持续监控</strong></p>
+<p>没有GC日志的调优是盲目的。实际项目已建立GC监控体系：GCEasy定期分析 + jstat实时监控 + Prometheus+Grafana大盘展示，确保GC问题第一时间发现和解决。</p>
+<p>系统学习JVM垃圾收集器后，核心认知是：<strong>垃圾收集器的选择和调优不是黑魔法，而是基于数据和分析的科学决策。理解每种收集器的设计目标和权衡，结合业务特征做出选择，就是最好的调优。</strong></p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/05/20/de2f0b5208e3/">并发容器对比——CopyOnWriteArrayList与ConcurrentHashMap</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/05/21/17171a8132bb/">JVM命令行工具实战——jps、jstack、jmap、jstat排查指南</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/JVM/" class="tag" aria-label="标签: #JVM">#JVM</a>
+            
+                <a href="/tags/%E5%9E%83%E5%9C%BE%E6%94%B6%E9%9B%86%E5%99%A8/" class="tag" aria-label="标签: #垃圾收集器">#垃圾收集器</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/JVM/" aria-label="分类: JVM">
+                        JVM
+                        <span>(6)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MySQL Online DDL——大表加字段的正确姿势 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="MySQL Online DDL——大表加字段的正确姿势">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2023/10/08/d762d168fb9e/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言实际场景中，生产环境设备报警表已有5000万行数据，某次需求要给报警表加一个”处理优先级”字段。运维同事直接执行ALTERTABLE，导致整张表被锁2小时，期间所有报警写入全部超时，监控大屏数据中断，安监部门紧急通报。2023年学会OnlineDDL和pt-online-schema-change后，大表">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">MySQL Online DDL——大表加字段的正确姿势</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-10-08T02:22:51.000Z">2023-10-08</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL%E6%B7%B1%E5%BA%A6/">MySQL深度</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>实际场景中，生产环境设备报警表已有5000万行数据，某次需求要给报警表加一个”处理优先级”字段。运维同事直接执行ALTER TABLE，导致整张表被锁2小时，期间所有报警写入全部超时，监控大屏数据中断，安监部门紧急通报。2023年学会Online DDL和pt-online-schema-change后，大表变更不再影响业务。本文结合实际项目的真实场景，系统讲解MySQL大表加字段的正确姿势。</p>
+<h2 id="DDL的执行方式"><a href="#DDL的执行方式" class="headerlink" title="DDL的执行方式"></a>DDL的执行方式</h2><h3 id="三种算法概览"><a href="#三种算法概览" class="headerlink" title="三种算法概览"></a>三种算法概览</h3><p><strong>算法     | 锁情况   | 速度   | 支持操作</strong></p>
+<ul>
+<li>INSTANT  | 无锁     | 最快   | 仅改元数据（8.0+加列）</li>
+<li>INPLACE  | 短锁     | 快     | 大部分操作</li>
+<li>COPY     | 全表锁   | 最慢   | 所有操作</li>
+<li>优先级：INSTANT &gt; INPLACE &gt; COPY</li>
+</ul>
+<h3 id="INSTANT算法（MySQL-8-0-12-）"><a href="#INSTANT算法（MySQL-8-0-12-）" class="headerlink" title="INSTANT算法（MySQL 8.0.12+）"></a>INSTANT算法（MySQL 8.0.12+）</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- INSTANT：只修改元数据，不修改数据文件</span></span><br><span class="line"><span class="comment">-- 秒级完成，不影响业务</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 支持的操作：</span></span><br><span class="line"><span class="comment">-- 1. 添加列（在表末尾）</span></span><br><span class="line"><span class="comment">-- 2. 删除列</span></span><br><span class="line"><span class="comment">-- 3. 修改列默认值</span></span><br><span class="line"><span class="comment">-- 4. 修改ENUM值（在末尾添加）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 智慧矿山场景：设备报警表加优先级字段</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span> COMMENT <span class="string">&#x27;处理优先级&#x27;</span>, ALGORITHM<span class="operator">=</span>INSTANT;</span><br><span class="line"><span class="comment">-- 瞬间完成！5000万行数据不受影响</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 不支持INSTANT的场景：</span></span><br><span class="line"><span class="comment">-- 1. 添加列不在末尾（AFTER/FIRST）</span></span><br><span class="line"><span class="comment">-- 2. 修改列类型</span></span><br><span class="line"><span class="comment">-- 3. 添加索引</span></span><br><span class="line"><span class="comment">-- 4. 删除主键</span></span><br><span class="line"><span class="comment">-- 5. 修改字符集</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="INSTANT算法原理"><a href="#INSTANT算法原理" class="headerlink" title="INSTANT算法原理"></a>INSTANT算法原理</h3><p><strong>INSTANT实现原理：</strong></p>
+<ul>
+<li>修改前：                           修改后：</li>
+<li>+——————+              +——————+</li>
+<li>t_device_alarm   |              | t_device_alarm</li>
+<li>列数: 10         |   INSTANT    | 列数: 11</li>
+<li>行格式: DYNAMIC  |   ——-&gt;  | 行格式: DYNAMIC</li>
+<li>+——————+   只改元数据 | 新列: priority   |</li>
+<li>默认值: 0</li>
+<li>数据文件完全不变！                 已有行的priority值在读取时</li>
+<li>动态填充默认值0</li>
+<li>关键点：</li>
+<li><ul>
+<li>只修改.frm&#x2F;.sdi元数据文件</li>
+</ul>
+</li>
+<li><ul>
+<li>不修改.ibd数据文件</li>
+</ul>
+</li>
+<li><ul>
+<li>已有数据行不会物理更新</li>
+</ul>
+</li>
+<li><ul>
+<li>查询时动态填充默认值</li>
+</ul>
+</li>
+</ul>
+<h3 id="INPLACE算法"><a href="#INPLACE算法" class="headerlink" title="INPLACE算法"></a>INPLACE算法</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- INPLACE：在原表上修改，不需要拷贝全表数据</span></span><br><span class="line"><span class="comment">-- 短暂锁表（开始和结束阶段）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 智慧矿山场景：设备报警表加索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> INDEX idx_priority_time(priority, alarm_time), ALGORITHM<span class="operator">=</span>INPLACE;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 执行过程：</span></span><br><span class="line"><span class="comment">-- 1. 短暂锁表 -&gt; 创建临时frm文件</span></span><br><span class="line"><span class="comment">-- 2. 释放锁 -&gt; 读取数据构建索引</span></span><br><span class="line"><span class="comment">-- 3. 短暂锁表 -&gt; 替换frm文件</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 期间DML可以正常执行（部分操作支持）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- INPLACE支持的操作：</span></span><br><span class="line"><span class="comment">--   添加索引         -&gt; INPLACE</span></span><br><span class="line"><span class="comment">--   删除索引         -&gt; INPLACE</span></span><br><span class="line"><span class="comment">--   添加列（末尾）   -&gt; INPLACE（MySQL 8.0用INSTANT更好）</span></span><br><span class="line"><span class="comment">--   修改列默认值     -&gt; INPLACE</span></span><br><span class="line"><span class="comment">--   添加全文索引     -&gt; INPLACE</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 不支持INPLACE（只能COPY）：</span></span><br><span class="line"><span class="comment">--   修改列类型       -&gt; COPY</span></span><br><span class="line"><span class="comment">--   修改字符集       -&gt; COPY</span></span><br><span class="line"><span class="comment">--   添加列不在末尾   -&gt; COPY</span></span><br><span class="line"><span class="comment">--   删除主键         -&gt; COPY</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="INPLACE算法执行流程"><a href="#INPLACE算法执行流程" class="headerlink" title="INPLACE算法执行流程"></a>INPLACE算法执行流程</h3><p><strong>INPLACE执行流程（以添加索引为例）：</strong></p>
+<ul>
+<li>阶段1：准备阶段（短暂锁表）</li>
+<li>| 获取MDL写锁      |  &lt;– 阻塞新DML</li>
+<li>创建临时frm文件</li>
+<li>| 释放MDL写锁      |  &lt;– 允许DML</li>
+<li>|</li>
+<li>v</li>
+<li>阶段2：执行阶段（不锁表）</li>
+<li>| 扫描原表数据     |  &lt;– 期间DML正常执行</li>
+<li>| 构建索引结构     |  &lt;– DML变更通过Row Log记录</li>
+<li>| 应用Row Log      |  &lt;– 将DML变更应用到新索引</li>
+<li>|</li>
+<li>v</li>
+<li>阶段3：提交阶段（短暂锁表）</li>
+<li>| 获取MDL写锁      |  &lt;– 阻塞新DML</li>
+<li>应用剩余Row Log</li>
+<li>替换frm文件</li>
+<li>| 释放MDL写锁      |  &lt;– 变更完成</li>
+<li>关键：Row Log记录执行期间的DML变更，保证数据一致</li>
+</ul>
+<h3 id="COPY算法"><a href="#COPY算法" class="headerlink" title="COPY算法"></a>COPY算法</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- COPY：创建临时表 -&gt; 拷贝数据 -&gt; 替换原表</span></span><br><span class="line"><span class="comment">-- 全程锁表！</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 执行过程：</span></span><br><span class="line"><span class="comment">-- 1. 锁原表（MDL写锁）</span></span><br><span class="line"><span class="comment">-- 2. 创建临时表（新结构）</span></span><br><span class="line"><span class="comment">-- 3. 逐行拷贝数据到临时表</span></span><br><span class="line"><span class="comment">-- 4. 删除原表</span></span><br><span class="line"><span class="comment">-- 5. 重命名临时表为原表</span></span><br><span class="line"><span class="comment">-- 6. 释放锁</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 智慧矿山场景：修改列类型（只能COPY）</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm MODIFY <span class="keyword">COLUMN</span> priority <span class="type">INT</span> <span class="keyword">DEFAULT</span> <span class="number">0</span>, ALGORITHM<span class="operator">=</span><span class="keyword">COPY</span>;</span><br><span class="line"><span class="comment">-- 5000万行 -&gt; 可能需要1-2小时</span></span><br><span class="line"><span class="comment">-- 期间所有DML被阻塞</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="COPY算法执行流程"><a href="#COPY算法执行流程" class="headerlink" title="COPY算法执行流程"></a>COPY算法执行流程</h3><p><strong>COPY算法执行流程：</strong></p>
+<ul>
+<li>| 获取MDL写锁      |  &lt;– 全程持有</li>
+<li>|</li>
+<li>v</li>
+<li>创建临时表</li>
+<li>t_device_alarm_tmp</li>
+<li>(新结构)</li>
+<li>|</li>
+<li>v</li>
+<li>| 逐行拷贝数据     |  &lt;– 慢！5000万行</li>
+<li>INSERT INTO tmp</li>
+<li>SELECT * FROM ori</li>
+<li>|</li>
+<li>v</li>
+<li>DROP原表</li>
+<li>RENAME tmp为原表</li>
+<li>释放MDL写锁</li>
+<li>风险：</li>
+<li><ul>
+<li>全程锁表，DML全部阻塞</li>
+</ul>
+</li>
+<li><ul>
+<li>拷贝过程耗时与数据量成正比</li>
+</ul>
+</li>
+<li><ul>
+<li>需要额外磁盘空间（2倍表大小）</li>
+</ul>
+</li>
+<li><ul>
+<li>拷贝过程中主从延迟增大</li>
+</ul>
+</li>
+</ul>
+<h2 id="锁策略"><a href="#锁策略" class="headerlink" title="锁策略"></a>锁策略</h2><h3 id="LOCK子句"><a href="#LOCK子句" class="headerlink" title="LOCK子句"></a>LOCK子句</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- LOCK=NONE：不锁表，允许读写（默认，尽量用这个）</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>, LOCK<span class="operator">=</span><span class="keyword">NONE</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- LOCK=SHARED：允许读，不允许写</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>, LOCK<span class="operator">=</span>SHARED;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- LOCK=EXCLUSIVE：不允许读写</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>, LOCK<span class="operator">=</span>EXCLUSIVE;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优先使用LOCK=NONE</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="锁策略选择决策树"><a href="#锁策略选择决策树" class="headerlink" title="锁策略选择决策树"></a>锁策略选择决策树</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">选择锁策略：</span><br><span class="line"></span><br><span class="line">  操作是否支持LOCK=NONE?</span><br><span class="line">    |</span><br><span class="line">    +-- YES -&gt; 使用LOCK=NONE</span><br><span class="line">    +-- NO  -&gt; 操作是否支持LOCK=SHARED?</span><br><span class="line">                |</span><br><span class="line">                +-- YES -&gt; 评估是否可接受只读</span><br><span class="line">                +-- NO  -&gt; 只能LOCK=EXCLUSIVE或使用pt-osc/gh-ost</span><br><span class="line"></span><br><span class="line">实际项目原则：</span><br><span class="line">1. 优先LOCK=NONE</span><br><span class="line">2. 不支持NONE时评估SHARED</span><br><span class="line">3. 只在维护窗口使用EXCLUSIVE</span><br><span class="line">4. 大表变更用pt-osc或gh-ost</span><br></pre></td></tr></table></figure>
+
+<h2 id="pt-online-schema-change"><a href="#pt-online-schema-change" class="headerlink" title="pt-online-schema-change"></a>pt-online-schema-change</h2><h3 id="原理"><a href="#原理" class="headerlink" title="原理"></a>原理</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">pt-online-schema-change执行流程：</span><br><span class="line"></span><br><span class="line">  步骤1：创建新表（与原表结构相同，加_new后缀）</span><br><span class="line">  步骤2：在New表上执行ALTER</span><br><span class="line">  步骤3：创建触发器（同步INSERT/UPDATE/DELETE增量数据）</span><br><span class="line">  步骤4：分批拷贝数据（小事务，chunk-size控制）</span><br><span class="line">  步骤5：临时锁表 + 重命名新表为原表（&lt;1秒）</span><br><span class="line">  步骤6：删除旧表和触发器</span><br><span class="line"></span><br><span class="line">优点：</span><br><span class="line">- 不锁表（最后重命名短暂锁表&lt;1秒）</span><br><span class="line">- 可控速度（chunk-size + max-load）</span><br><span class="line">- 可暂停恢复（Ctrl+C暂停）</span><br><span class="line">- 数据安全（触发器保证一致性）</span><br></pre></td></tr></table></figure>
+
+<h3 id="安装与使用"><a href="#安装与使用" class="headerlink" title="安装与使用"></a>安装与使用</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 安装percona-toolkit</span></span><br><span class="line">yum install percona-toolkit</span><br><span class="line"></span><br><span class="line"><span class="comment"># 场景1：设备报警表添加优先级字段</span></span><br><span class="line">pt-online-schema-change \</span><br><span class="line">  --host=127.0.0.1 \</span><br><span class="line">  --port=3306 \</span><br><span class="line">  --user=root \</span><br><span class="line">  --password=xxx \</span><br><span class="line">  --alter=<span class="string">&quot;ADD COLUMN priority TINYINT DEFAULT 0 COMMENT &#x27;处理优先级&#x27;&quot;</span> \</span><br><span class="line">  D=mine_db,t=t_device_alarm \</span><br><span class="line">  --execute</span><br><span class="line"></span><br><span class="line"><span class="comment"># 场景2：添加联合索引</span></span><br><span class="line">pt-online-schema-change \</span><br><span class="line">  --alter=<span class="string">&quot;ADD INDEX idx_priority_time(priority, alarm_time)&quot;</span> \</span><br><span class="line">  D=mine_db,t=t_device_alarm \</span><br><span class="line">  --execute</span><br><span class="line"></span><br><span class="line"><span class="comment"># 场景3：修改字段类型</span></span><br><span class="line">pt-online-schema-change \</span><br><span class="line">  --alter=<span class="string">&quot;MODIFY COLUMN priority INT DEFAULT 0 COMMENT &#x27;处理优先级&#x27;&quot;</span> \</span><br><span class="line">  D=mine_db,t=t_device_alarm \</span><br><span class="line">  --execute</span><br><span class="line"></span><br><span class="line"><span class="comment"># 场景4：添加多个字段</span></span><br><span class="line">pt-online-schema-change \</span><br><span class="line">  --alter=<span class="string">&quot;ADD COLUMN handle_by VARCHAR(32) DEFAULT NULL COMMENT &#x27;处理人&#x27;, ADD COLUMN handle_time DATETIME DEFAULT NULL COMMENT &#x27;处理时间&#x27;&quot;</span> \</span><br><span class="line">  D=mine_db,t=t_device_alarm \</span><br><span class="line">  --execute</span><br></pre></td></tr></table></figure>
+
+<h3 id="控制速度"><a href="#控制速度" class="headerlink" title="控制速度"></a>控制速度</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># --max-load：超过阈值暂停</span></span><br><span class="line"><span class="comment"># --chunk-size：每批拷贝行数</span></span><br><span class="line"><span class="comment"># --chunk-time：每批耗时（自适应）</span></span><br><span class="line"></span><br><span class="line">pt-online-schema-change \</span><br><span class="line">  --alter=<span class="string">&quot;ADD COLUMN priority TINYINT DEFAULT 0 COMMENT &#x27;处理优先级&#x27;&quot;</span> \</span><br><span class="line">  D=mine_db,t=t_device_alarm \</span><br><span class="line">  --max-load=<span class="string">&quot;Threads_running=25&quot;</span> \</span><br><span class="line">  --chunk-size=1000 \</span><br><span class="line">  --chunk-time=0.5 \</span><br><span class="line">  --execute</span><br><span class="line"></span><br><span class="line"><span class="comment"># 实际项目实际控制参数：</span></span><br><span class="line"><span class="comment"># --max-load=&quot;Threads_running=20&quot;      超过20个运行线程暂停</span></span><br><span class="line"><span class="comment"># --critical-load=&quot;Threads_running=50&quot; 超过50个运行线程终止</span></span><br><span class="line"><span class="comment"># --chunk-size=500                     每批500行</span></span><br><span class="line"><span class="comment"># --chunk-time=0.3                     每批0.3秒</span></span><br><span class="line"><span class="comment"># --max-slave-lag=60                   从库延迟超过60秒暂停</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="注意事项"><a href="#注意事项" class="headerlink" title="注意事项"></a>注意事项</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">1. 原表必须有主键</span><br><span class="line">   pt-osc通过主键分批拷贝数据</span><br><span class="line">   无主键的表无法使用pt-osc</span><br><span class="line"></span><br><span class="line">2. 不能修改主键</span><br><span class="line">   修改主键会影响分批拷贝逻辑</span><br><span class="line"></span><br><span class="line">3. 触发器会与已有触发器冲突</span><br><span class="line">   表上已有触发器时pt-osc无法创建新触发器</span><br><span class="line">   此时需要使用gh-ost</span><br><span class="line"></span><br><span class="line">4. 外键约束需要特殊处理</span><br><span class="line">   --alter-foreign-keys-method=auto</span><br><span class="line"></span><br><span class="line">5. 磁盘空间需要2倍表大小</span><br><span class="line">   新表+旧表同时存在</span><br><span class="line"></span><br><span class="line">6. 从库延迟监控</span><br><span class="line">   --max-slave-lag=60</span><br><span class="line"></span><br><span class="line">7. 长事务影响</span><br><span class="line">   长事务持有MDL锁，pt-osc可能等待</span><br></pre></td></tr></table></figure>
+
+<h2 id="gh-ost（GitHub出品）"><a href="#gh-ost（GitHub出品）" class="headerlink" title="gh-ost（GitHub出品）"></a>gh-ost（GitHub出品）</h2><h3 id="与pt-osc的区别"><a href="#与pt-osc的区别" class="headerlink" title="与pt-osc的区别"></a>与pt-osc的区别</h3><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>pt-osc</th>
+<th>gh-ost</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>同步机制</td>
+<td>触发器</td>
+<td>Binlog解析</td>
+</tr>
+<tr>
+<td>对原表影响</td>
+<td>创建触发器</td>
+<td>无触发器</td>
+</tr>
+<tr>
+<td>可暂停</td>
+<td>是</td>
+<td>是</td>
+</tr>
+<tr>
+<td>可回滚</td>
+<td>否</td>
+<td>是</td>
+</tr>
+<tr>
+<td>性能影响</td>
+<td>中</td>
+<td>低</td>
+</tr>
+<tr>
+<td>从库延迟处理</td>
+<td>–max-slave-lag</td>
+<td>可配置</td>
+</tr>
+<tr>
+<td>原表触发器冲突</td>
+<td>冲突</td>
+<td>不冲突</td>
+</tr>
+<tr>
+<td>部署复杂度</td>
+<td>低</td>
+<td>中</td>
+</tr>
+</tbody></table>
+<h3 id="gh-ost原理"><a href="#gh-ost原理" class="headerlink" title="gh-ost原理"></a>gh-ost原理</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">gh-ost执行流程：</span><br><span class="line"></span><br><span class="line">  步骤1：连接从库，获取Binlog位点</span><br><span class="line">  步骤2：创建幽灵表（_ghc配置表 + _gho新结构表）</span><br><span class="line">  步骤3：分批拷贝数据（从主库读取）</span><br><span class="line">  步骤4：实时解析Binlog，应用变更到幽灵表</span><br><span class="line">  步骤5：验证数据一致，重命名替换</span><br><span class="line"></span><br><span class="line">优势：</span><br><span class="line">- 无触发器，不影响原表性能</span><br><span class="line">- 解析Binlog更可靠</span><br><span class="line">- 支持回滚（rename前可取消）</span><br><span class="line">- 可在从库测试变更</span><br></pre></td></tr></table></figure>
+
+<h3 id="gh-ost使用"><a href="#gh-ost使用" class="headerlink" title="gh-ost使用"></a>gh-ost使用</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 智慧矿山场景：设备报警表添加字段</span></span><br><span class="line">gh-ost \</span><br><span class="line">  --host=127.0.0.1 \</span><br><span class="line">  --port=3306 \</span><br><span class="line">  --user=root \</span><br><span class="line">  --password=xxx \</span><br><span class="line">  --database=mine_db \</span><br><span class="line">  --table=t_device_alarm \</span><br><span class="line">  --alter=<span class="string">&quot;ADD COLUMN priority TINYINT DEFAULT 0 COMMENT &#x27;处理优先级&#x27;&quot;</span> \</span><br><span class="line">  --allow-on-master \</span><br><span class="line">  --execute</span><br><span class="line"></span><br><span class="line"><span class="comment"># 控制速度</span></span><br><span class="line">gh-ost \</span><br><span class="line">  --host=127.0.0.1 \</span><br><span class="line">  --database=mine_db \</span><br><span class="line">  --table=t_device_alarm \</span><br><span class="line">  --alter=<span class="string">&quot;ADD COLUMN priority TINYINT DEFAULT 0 COMMENT &#x27;处理优先级&#x27;&quot;</span> \</span><br><span class="line">  --chunk-size=500 \</span><br><span class="line">  --max-load=<span class="string">&#x27;Threads_running=20&#x27;</span> \</span><br><span class="line">  --critical-load=<span class="string">&#x27;Threads_running=50&#x27;</span> \</span><br><span class="line">  --execute</span><br></pre></td></tr></table></figure>
+
+<h2 id="MySQL-8-0-Online-DDL新特性"><a href="#MySQL-8-0-Online-DDL新特性" class="headerlink" title="MySQL 8.0 Online DDL新特性"></a>MySQL 8.0 Online DDL新特性</h2><h3 id="即时添加列"><a href="#即时添加列" class="headerlink" title="即时添加列"></a>即时添加列</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- MySQL 8.0.12+ INSTANT支持</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>, ALGORITHM<span class="operator">=</span>INSTANT;</span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">DROP</span> <span class="keyword">COLUMN</span> priority, ALGORITHM<span class="operator">=</span>INSTANT;</span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ALTER</span> <span class="keyword">COLUMN</span> priority <span class="keyword">SET</span> <span class="keyword">DEFAULT</span> <span class="number">1</span>, ALGORITHM<span class="operator">=</span>INSTANT;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- MySQL 8.0.29+ 任意位置添加列</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span> AFTER alarm_level, ALGORITHM<span class="operator">=</span>INSTANT;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看INSTANT列数</span></span><br><span class="line"><span class="keyword">SELECT</span> TABLE_NAME, INSTANT_COLS</span><br><span class="line"><span class="keyword">FROM</span> information_schema.TABLES</span><br><span class="line"><span class="keyword">WHERE</span> TABLE_SCHEMA <span class="operator">=</span> <span class="string">&#x27;mine_db&#x27;</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="隐藏列"><a href="#隐藏列" class="headerlink" title="隐藏列"></a>隐藏列</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 先添加隐藏列，应用适配后再显示</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span> INVISIBLE;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 隐藏列不参与SELECT *</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_device_alarm;  <span class="comment">-- 不包含priority</span></span><br><span class="line"><span class="keyword">SELECT</span> id, device_id, priority <span class="keyword">FROM</span> t_device_alarm;  <span class="comment">-- 显式指定可查</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 应用适配完成后设置为可见</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm MODIFY <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span> VISIBLE;</span><br></pre></td></tr></table></figure>
+
+<h3 id="降序索引"><a href="#降序索引" class="headerlink" title="降序索引"></a>降序索引</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- MySQL 8.0+ 真正支持降序索引</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_alarm_time_desc <span class="keyword">ON</span> t_device_alarm(alarm_time <span class="keyword">DESC</span>, alarm_level <span class="keyword">DESC</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- MySQL 5.7创建降序索引实际是升序，查询时还需filesort</span></span><br><span class="line"><span class="comment">-- MySQL 8.0真正降序存储，无需filesort</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="变更回滚方案"><a href="#变更回滚方案" class="headerlink" title="变更回滚方案"></a>变更回滚方案</h2><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># pt-osc变更回滚：Ctrl+C终止，自动清理</span></span><br><span class="line"><span class="comment"># gh-ost变更回滚：</span></span><br><span class="line"><span class="comment">#   暂停：echo &quot;throttle&quot; &gt; /tmp/gh-ost.throttle</span></span><br><span class="line"><span class="comment">#   恢复：echo &quot;unthrottle&quot; &gt; /tmp/gh-ost.throttle</span></span><br><span class="line"><span class="comment">#   终止：echo &quot;panic&quot; &gt; /tmp/gh-ost.panic</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 变更完成后回滚</span></span><br><span class="line">pt-online-schema-change \</span><br><span class="line">  --alter=<span class="string">&quot;DROP COLUMN priority&quot;</span> \</span><br><span class="line">  D=mine_db,t=t_device_alarm \</span><br><span class="line">  --execute</span><br></pre></td></tr></table></figure>
+
+<h2 id="DDL变更操作速查表"><a href="#DDL变更操作速查表" class="headerlink" title="DDL变更操作速查表"></a>DDL变更操作速查表</h2><table>
+<thead>
+<tr>
+<th>操作</th>
+<th>MySQL 5.7</th>
+<th>MySQL 8.0</th>
+<th>pt-osc</th>
+<th>gh-ost</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>添加列（末尾）</td>
+<td>INPLACE</td>
+<td>INSTANT</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>添加列（指定位置）</td>
+<td>COPY</td>
+<td>INSTANT(8.0.29+)</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>删除列</td>
+<td>INPLACE</td>
+<td>INSTANT</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>修改列类型</td>
+<td>COPY</td>
+<td>COPY</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>修改列默认值</td>
+<td>INPLACE</td>
+<td>INSTANT</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>添加索引</td>
+<td>INPLACE</td>
+<td>INPLACE</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>删除索引</td>
+<td>INPLACE</td>
+<td>INPLACE</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>修改字符集</td>
+<td>COPY</td>
+<td>COPY</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+</tbody></table>
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-大表加字段怎么不锁表？"><a href="#1-大表加字段怎么不锁表？" class="headerlink" title="1. 大表加字段怎么不锁表？"></a>1. 大表加字段怎么不锁表？</h3><p><strong>MySQL 8.0用INSTANT算法秒级完成（只改元数据）</strong></p>
+<ul>
+<li>MySQL 5.7用INPLACE+LOCK&#x3D;NONE（短暂锁表）</li>
+<li>或使用pt-online-schema-change&#x2F;gh-ost工具</li>
+<li>方案对比：</li>
+<li>方案      | 锁表时间 | 风险   | 适用版本</li>
+<li>INSTANT   | 0秒      | 最低   | 8.0.12+</li>
+<li>INPLACE   | &lt;1秒     | 低     | 5.6+</li>
+<li>pt-osc    | &lt;1秒     | 中     | 5.0+</li>
+<li>gh-ost    | &lt;1秒     | 低     | 5.6+</li>
+</ul>
+<h3 id="2-pt-online-schema-change的原理？"><a href="#2-pt-online-schema-change的原理？" class="headerlink" title="2. pt-online-schema-change的原理？"></a>2. pt-online-schema-change的原理？</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">1. 创建与原表结构相同的新表（_new后缀）</span><br><span class="line">2. 在新表上执行ALTER</span><br><span class="line">3. 创建触发器：原表的增删改同步到新表</span><br><span class="line">4. 分批拷贝数据（小事务，可控速度）</span><br><span class="line">5. 临时锁表 -&gt; 重命名新表为原表（&lt;1秒）</span><br><span class="line">6. 删除旧表和触发器</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-INSTANT、INPLACE、COPY的区别？"><a href="#3-INSTANT、INPLACE、COPY的区别？" class="headerlink" title="3. INSTANT、INPLACE、COPY的区别？"></a>3. INSTANT、INPLACE、COPY的区别？</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">INSTANT：只改元数据，秒级完成，不锁表</span><br><span class="line">INPLACE：在原表修改，短暂锁表</span><br><span class="line">COPY：创建临时表拷贝数据，全程锁表</span><br><span class="line">选择优先级：INSTANT &gt; INPLACE &gt; COPY</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-pt-osc和gh-ost怎么选？"><a href="#4-pt-osc和gh-ost怎么选？" class="headerlink" title="4. pt-osc和gh-ost怎么选？"></a>4. pt-osc和gh-ost怎么选？</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">优先pt-osc：表上没有触发器、常规变更场景</span><br><span class="line">优先gh-ost：表上有触发器、高并发场景、需要可回滚</span><br></pre></td></tr></table></figure>
+
+
+<h2 id="进阶内容补充"><a href="#进阶内容补充" class="headerlink" title="进阶内容补充"></a>进阶内容补充</h2><h3 id="DDL与DML的并发控制机制"><a href="#DDL与DML的并发控制机制" class="headerlink" title="DDL与DML的并发控制机制"></a>DDL与DML的并发控制机制</h3><p><strong>InnoDB DDL与DML并发控制：</strong></p>
+<ul>
+<li>DML操作                    DDL操作</li>
+<li>+——————+      +——————+</li>
+<li>获取MDL读锁      |      | 获取MDL写锁</li>
+<li>执行DML          |      | 等待MDL读锁释放</li>
+<li>释放MDL读锁      |      | 获取MDL写锁</li>
+<li>+——————+      | 执行DDL          |</li>
+<li>释放MDL写锁</li>
+<li>MDL锁类型：</li>
+<li><ul>
+<li>MDL_SHARED_READ：普通SELECT</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_SHARED_WRITE：DML操作</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_SHARED_UPGRADABLE：DML操作（可升级）</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_EXCLUSIVE：DDL操作</li>
+</ul>
+</li>
+<li>冲突规则：</li>
+<li><ul>
+<li>SELECT与SELECT：兼容</li>
+</ul>
+</li>
+<li><ul>
+<li>SELECT与DML：兼容</li>
+</ul>
+</li>
+<li><ul>
+<li>SELECT与DDL：不兼容（DDL等待SELECT完成）</li>
+</ul>
+</li>
+<li><ul>
+<li>DML与DDL：不兼容（DDL等待DML完成）</li>
+</ul>
+</li>
+<li><ul>
+<li>DDL与DDL：不兼容</li>
+</ul>
+</li>
+</ul>
+<h3 id="MDL锁导致的连锁阻塞"><a href="#MDL锁导致的连锁阻塞" class="headerlink" title="MDL锁导致的连锁阻塞"></a>MDL锁导致的连锁阻塞</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 实际项目实际案例：</span></span><br><span class="line"><span class="comment">-- 会话1：长查询（未提交的事务）</span></span><br><span class="line"><span class="keyword">START</span> TRANSACTION;</span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_device_alarm <span class="keyword">WHERE</span> alarm_level <span class="operator">&gt;=</span> <span class="number">3</span>;</span><br><span class="line"><span class="comment">-- 长时间运行（30分钟的分析查询）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 会话2：DDL操作</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>;</span><br><span class="line"><span class="comment">-- 等待会话1释放MDL锁...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 会话3：新的DML操作</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_device_alarm <span class="keyword">SET</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="comment">-- 等待会话2获取MDL写锁...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 连锁阻塞：会话1 -&gt; 会话2 -&gt; 会话3</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 解决方案：</span></span><br><span class="line"><span class="comment">-- 1. 设置DDL等待超时</span></span><br><span class="line"><span class="keyword">SET</span> SESSION lock_wait_timeout <span class="operator">=</span> <span class="number">5</span>;</span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 2. 检查是否有长事务</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> information_schema.INNODB_TRX</span><br><span class="line"><span class="keyword">WHERE</span> trx_started <span class="operator">&lt;</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">300</span> <span class="keyword">SECOND</span>);</span><br></pre></td></tr></table></figure>
+
+<h3 id="DDL操作的性能影响分析"><a href="#DDL操作的性能影响分析" class="headerlink" title="DDL操作的性能影响分析"></a>DDL操作的性能影响分析</h3><p><strong>DDL操作对性能的影响维度：</strong></p>
+<ul>
+<li>操作类型         | CPU影响  | IO影响   | 锁影响</li>
+<li>INSTANT加列      | 极低     | 无       | 无</li>
+<li>INPLACE加索引    | 中       | 高       | 低</li>
+<li>INPLACE加列      | 中       | 中       | 低</li>
+<li>COPY修改类型     | 高       | 极高     | 极高</li>
+<li>pt-osc变更       | 中       | 高       | 极低</li>
+<li>gh-ost变更       | 低       | 中       | 极低</li>
+</ul>
+<h3 id="Online-DDL的Row-Log机制"><a href="#Online-DDL的Row-Log机制" class="headerlink" title="Online DDL的Row Log机制"></a>Online DDL的Row Log机制</h3><p><strong>INPLACE算法的Row Log机制：</strong></p>
+<ul>
+<li>执行期间DML变更记录流程：</li>
+<li>DML操作</li>
+<li>INSERT&#x2F;UPDATE&#x2F;</li>
+<li>DELETE</li>
+<li>|</li>
+<li>v</li>
+<li>Row Log</li>
+<li>记录变更操作</li>
+<li>(内存+磁盘)</li>
+<li>|</li>
+<li>v</li>
+<li>应用到新索引</li>
+<li>保证数据一致</li>
+<li>Row Log大小限制：</li>
+<li><ul>
+<li>innodb_sort_buffer_size：排序缓冲区大小（默认1MB）</li>
+</ul>
+</li>
+<li><ul>
+<li>innodb_online_alter_log_max_size：在线变更日志最大大小</li>
+</ul>
+</li>
+<li>默认128MB，超过后DDL失败</li>
+</ul>
+<h3 id="大表变更的容量规划"><a href="#大表变更的容量规划" class="headerlink" title="大表变更的容量规划"></a>大表变更的容量规划</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">容量规划清单：</span><br><span class="line"></span><br><span class="line">1. 磁盘空间</span><br><span class="line">   - pt-osc/gh-ost：需要2倍表大小</span><br><span class="line">   - INPLACE：需要排序缓冲区+临时文件</span><br><span class="line">   - COPY：需要2倍表大小</span><br><span class="line"></span><br><span class="line">2. 内存</span><br><span class="line">   - innodb_sort_buffer_size * 并发数</span><br><span class="line">   - innodb_buffer_pool需要容纳热数据</span><br><span class="line"></span><br><span class="line">3. 网络</span><br><span class="line">   - 主从复制带宽</span><br><span class="line">   - gh-ost额外的Binlog解析流量</span><br><span class="line"></span><br><span class="line">4. 时间估算</span><br><span class="line">   - 估算公式：表行数 / 拷贝速度</span><br><span class="line">   - 拷贝速度参考：5000行/秒（受硬件影响）</span><br><span class="line">   - 5000万行约需3-4小时</span><br></pre></td></tr></table></figure>
+
+<h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="进阶内容补充-1"><a href="#进阶内容补充-1" class="headerlink" title="进阶内容补充"></a>进阶内容补充</h2><h3 id="DDL与DML的并发控制机制-1"><a href="#DDL与DML的并发控制机制-1" class="headerlink" title="DDL与DML的并发控制机制"></a>DDL与DML的并发控制机制</h3><p><strong>InnoDB DDL与DML并发控制：</strong></p>
+<ul>
+<li>DML操作                    DDL操作</li>
+<li>+——————+      +——————+</li>
+<li>获取MDL读锁      |      | 获取MDL写锁</li>
+<li>执行DML          |      | 等待MDL读锁释放</li>
+<li>释放MDL读锁      |      | 获取MDL写锁</li>
+<li>+——————+      | 执行DDL          |</li>
+<li>释放MDL写锁</li>
+<li>MDL锁类型：</li>
+<li><ul>
+<li>MDL_SHARED_READ：普通SELECT</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_SHARED_WRITE：DML操作</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_SHARED_UPGRADABLE：DML操作（可升级）</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_EXCLUSIVE：DDL操作</li>
+</ul>
+</li>
+<li>冲突规则：</li>
+<li><ul>
+<li>SELECT与SELECT：兼容</li>
+</ul>
+</li>
+<li><ul>
+<li>SELECT与DML：兼容</li>
+</ul>
+</li>
+<li><ul>
+<li>SELECT与DDL：不兼容（DDL等待SELECT完成）</li>
+</ul>
+</li>
+<li><ul>
+<li>DML与DDL：不兼容（DDL等待DML完成）</li>
+</ul>
+</li>
+<li><ul>
+<li>DDL与DDL：不兼容</li>
+</ul>
+</li>
+</ul>
+<h3 id="MDL锁导致的连锁阻塞-1"><a href="#MDL锁导致的连锁阻塞-1" class="headerlink" title="MDL锁导致的连锁阻塞"></a>MDL锁导致的连锁阻塞</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 实际项目实际案例：</span></span><br><span class="line"><span class="comment">-- 会话1：长查询（未提交的事务）</span></span><br><span class="line"><span class="keyword">START</span> TRANSACTION;</span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_device_alarm <span class="keyword">WHERE</span> alarm_level <span class="operator">&gt;=</span> <span class="number">3</span>;</span><br><span class="line"><span class="comment">-- 长时间运行（30分钟的分析查询）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 会话2：DDL操作</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>;</span><br><span class="line"><span class="comment">-- 等待会话1释放MDL锁...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 会话3：新的DML操作</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_device_alarm <span class="keyword">SET</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="comment">-- 等待会话2获取MDL写锁...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 连锁阻塞：会话1 -&gt; 会话2 -&gt; 会话3</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 解决方案：</span></span><br><span class="line"><span class="keyword">SET</span> SESSION lock_wait_timeout <span class="operator">=</span> <span class="number">5</span>;</span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 检查是否有长事务</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> information_schema.INNODB_TRX</span><br><span class="line"><span class="keyword">WHERE</span> trx_started <span class="operator">&lt;</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">300</span> <span class="keyword">SECOND</span>);</span><br></pre></td></tr></table></figure>
+
+<h3 id="DDL操作的性能影响分析-1"><a href="#DDL操作的性能影响分析-1" class="headerlink" title="DDL操作的性能影响分析"></a>DDL操作的性能影响分析</h3><p><strong>DDL操作对性能的影响维度：</strong></p>
+<ul>
+<li>操作类型         | CPU影响  | IO影响   | 锁影响</li>
+<li>INSTANT加列      | 极低     | 无       | 无</li>
+<li>INPLACE加索引    | 中       | 高       | 低</li>
+<li>INPLACE加列      | 中       | 中       | 低</li>
+<li>COPY修改类型     | 高       | 极高     | 极高</li>
+<li>pt-osc变更       | 中       | 高       | 极低</li>
+<li>gh-ost变更       | 低       | 中       | 极低</li>
+</ul>
+<h3 id="Online-DDL的Row-Log机制-1"><a href="#Online-DDL的Row-Log机制-1" class="headerlink" title="Online DDL的Row Log机制"></a>Online DDL的Row Log机制</h3><p><strong>INPLACE算法的Row Log机制：</strong></p>
+<ul>
+<li>执行期间DML变更记录流程：</li>
+<li>DML操作</li>
+<li>INSERT&#x2F;UPDATE&#x2F;</li>
+<li>DELETE</li>
+<li>|</li>
+<li>v</li>
+<li>Row Log</li>
+<li>记录变更操作</li>
+<li>(内存+磁盘)</li>
+<li>|</li>
+<li>v</li>
+<li>应用到新索引</li>
+<li>保证数据一致</li>
+<li>Row Log大小限制：</li>
+<li><ul>
+<li>innodb_sort_buffer_size：排序缓冲区大小（默认1MB）</li>
+</ul>
+</li>
+<li><ul>
+<li>innodb_online_alter_log_max_size：在线变更日志最大大小</li>
+</ul>
+</li>
+<li>默认128MB，超过后DDL失败</li>
+</ul>
+<h3 id="大表变更的容量规划-1"><a href="#大表变更的容量规划-1" class="headerlink" title="大表变更的容量规划"></a>大表变更的容量规划</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">容量规划清单：</span><br><span class="line"></span><br><span class="line">1. 磁盘空间</span><br><span class="line">   - pt-osc/gh-ost：需要2倍表大小</span><br><span class="line">   - INPLACE：需要排序缓冲区+临时文件</span><br><span class="line">   - COPY：需要2倍表大小</span><br><span class="line"></span><br><span class="line">2. 内存</span><br><span class="line">   - innodb_sort_buffer_size * 并发数</span><br><span class="line">   - innodb_buffer_pool需要容纳热数据</span><br><span class="line"></span><br><span class="line">3. 网络</span><br><span class="line">   - 主从复制带宽</span><br><span class="line">   - gh-ost额外的Binlog解析流量</span><br><span class="line"></span><br><span class="line">4. 时间估算</span><br><span class="line">   - 估算公式：表行数 / 拷贝速度</span><br><span class="line">   - 拷贝速度参考：5000行/秒（受硬件影响）</span><br><span class="line">   - 5000万行约需3-4小时</span><br></pre></td></tr></table></figure>
+
+<h1 id="-1"><a href="#-1" class="headerlink" title=""></a></h1><h2 id="学习资源推荐"><a href="#学习资源推荐" class="headerlink" title="学习资源推荐"></a>学习资源推荐</h2><table>
+<thead>
+<tr>
+<th>资源</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL官方文档</td>
+<td>文档</td>
+<td>最权威的参考</td>
+</tr>
+<tr>
+<td>《高性能MySQL》</td>
+<td>书籍</td>
+<td>系统化学习</td>
+</tr>
+<tr>
+<td>《MySQL技术内幕:InnoDB存储引擎》</td>
+<td>书籍</td>
+<td>深入原理</td>
+</tr>
+<tr>
+<td>阿里云RDS最佳实践</td>
+<td>实战</td>
+<td>阿里云DBA经验</td>
+</tr>
+<tr>
+<td>美团技术博客</td>
+<td>实战</td>
+<td>互联网大厂实践</td>
+</tr>
+</tbody></table>
+<h3 id="学习路径"><a href="#学习路径" class="headerlink" title="学习路径"></a>学习路径</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">阶段1：基础概念理解（1-2周）</span><br><span class="line">  -- 重点：核心概念、基本操作</span><br><span class="line"></span><br><span class="line">阶段2：实战优化练习（2-3周）</span><br><span class="line">  -- 重点：结合慢查询日志，逐一优化</span><br><span class="line"></span><br><span class="line">阶段3：深入底层原理（持续）</span><br><span class="line">  -- 重点：源码分析、底层实现</span><br><span class="line"></span><br><span class="line">阶段4：架构设计提升（持续）</span><br><span class="line">  -- 重点：高可用、分库分表、读写分离</span><br></pre></td></tr></table></figure>
+
+<h2 id="DDL与DML的并发控制机制-2"><a href="#DDL与DML的并发控制机制-2" class="headerlink" title="DDL与DML的并发控制机制"></a>DDL与DML的并发控制机制</h2><p><strong>InnoDB DDL与DML并发控制：</strong></p>
+<ul>
+<li>DML操作                    DDL操作</li>
+<li>+——————+      +——————+</li>
+<li>获取MDL读锁      |      | 获取MDL写锁</li>
+<li>执行DML          |      | 等待MDL读锁释放</li>
+<li>释放MDL读锁      |      | 获取MDL写锁</li>
+<li>+——————+      | 执行DDL          |</li>
+<li>释放MDL写锁</li>
+<li>MDL锁类型：</li>
+<li><ul>
+<li>MDL_SHARED_READ：普通SELECT</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_SHARED_WRITE：DML操作</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_SHARED_UPGRADABLE：DML操作（可升级）</li>
+</ul>
+</li>
+<li><ul>
+<li>MDL_EXCLUSIVE：DDL操作</li>
+</ul>
+</li>
+<li>冲突规则：</li>
+<li><ul>
+<li>SELECT与SELECT：兼容</li>
+</ul>
+</li>
+<li><ul>
+<li>SELECT与DML：兼容</li>
+</ul>
+</li>
+<li><ul>
+<li>SELECT与DDL：不兼容（DDL等待SELECT完成）</li>
+</ul>
+</li>
+<li><ul>
+<li>DML与DDL：不兼容（DDL等待DML完成）</li>
+</ul>
+</li>
+<li><ul>
+<li>DDL与DDL：不兼容</li>
+</ul>
+</li>
+</ul>
+<h3 id="MDL锁导致的连锁阻塞-2"><a href="#MDL锁导致的连锁阻塞-2" class="headerlink" title="MDL锁导致的连锁阻塞"></a>MDL锁导致的连锁阻塞</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 实际项目实际案例：</span></span><br><span class="line"><span class="comment">-- 会话1：长查询（未提交的事务）</span></span><br><span class="line"><span class="keyword">START</span> TRANSACTION;</span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_device_alarm <span class="keyword">WHERE</span> alarm_level <span class="operator">&gt;=</span> <span class="number">3</span>;</span><br><span class="line"><span class="comment">-- 长时间运行（30分钟的分析查询）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 会话2：DDL操作</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>;</span><br><span class="line"><span class="comment">-- 等待会话1释放MDL锁...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 会话3：新的DML操作</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_device_alarm <span class="keyword">SET</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="comment">-- 等待会话2获取MDL写锁...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 连锁阻塞：会话1 -&gt; 会话2 -&gt; 会话3</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 解决方案：</span></span><br><span class="line"><span class="keyword">SET</span> SESSION lock_wait_timeout <span class="operator">=</span> <span class="number">5</span>;</span><br><span class="line"><span class="keyword">ALTER TABLE</span> t_device_alarm <span class="keyword">ADD</span> <span class="keyword">COLUMN</span> priority TINYINT <span class="keyword">DEFAULT</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 检查长事务</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> information_schema.INNODB_TRX</span><br><span class="line"><span class="keyword">WHERE</span> trx_started <span class="operator">&lt;</span> DATE_SUB(NOW(), <span class="type">INTERVAL</span> <span class="number">300</span> <span class="keyword">SECOND</span>);</span><br></pre></td></tr></table></figure>
+
+<h3 id="DDL操作的性能影响分析-2"><a href="#DDL操作的性能影响分析-2" class="headerlink" title="DDL操作的性能影响分析"></a>DDL操作的性能影响分析</h3><p><strong>DDL操作对性能的影响维度：</strong></p>
+<ul>
+<li>操作类型         | CPU影响  | IO影响   | 锁影响</li>
+<li>INSTANT加列      | 极低     | 无       | 无</li>
+<li>INPLACE加索引    | 中       | 高       | 低</li>
+<li>INPLACE加列      | 中       | 中       | 低</li>
+<li>COPY修改类型     | 高       | 极高     | 极高</li>
+<li>pt-osc变更       | 中       | 高       | 极低</li>
+<li>gh-ost变更       | 低       | 中       | 极低</li>
+</ul>
+<h3 id="Online-DDL的Row-Log机制-2"><a href="#Online-DDL的Row-Log机制-2" class="headerlink" title="Online DDL的Row Log机制"></a>Online DDL的Row Log机制</h3><p><strong>INPLACE算法的Row Log机制：</strong></p>
+<ul>
+<li>执行期间DML变更记录流程：</li>
+<li>DML操作</li>
+<li>INSERT&#x2F;UPDATE&#x2F;</li>
+<li>DELETE</li>
+<li>|</li>
+<li>v</li>
+<li>Row Log</li>
+<li>记录变更操作</li>
+<li>(内存+磁盘)</li>
+<li>|</li>
+<li>v</li>
+<li>应用到新索引</li>
+<li>保证数据一致</li>
+<li>Row Log大小限制：</li>
+<li><ul>
+<li>innodb_sort_buffer_size：排序缓冲区大小（默认1MB）</li>
+</ul>
+</li>
+<li><ul>
+<li>innodb_online_alter_log_max_size：在线变更日志最大大小</li>
+</ul>
+</li>
+<li>默认128MB，超过后DDL失败</li>
+</ul>
+<h3 id="大表变更的容量规划-2"><a href="#大表变更的容量规划-2" class="headerlink" title="大表变更的容量规划"></a>大表变更的容量规划</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">容量规划清单：</span><br><span class="line"></span><br><span class="line">1. 磁盘空间</span><br><span class="line">   - pt-osc/gh-ost：需要2倍表大小</span><br><span class="line">   - INPLACE：需要排序缓冲区+临时文件</span><br><span class="line">   - COPY：需要2倍表大小</span><br><span class="line"></span><br><span class="line">2. 内存</span><br><span class="line">   - innodb_sort_buffer_size * 并发数</span><br><span class="line">   - innodb_buffer_pool需要容纳热数据</span><br><span class="line"></span><br><span class="line">3. 网络</span><br><span class="line">   - 主从复制带宽</span><br><span class="line">   - gh-ost额外的Binlog解析流量</span><br><span class="line"></span><br><span class="line">4. 时间估算</span><br><span class="line">   - 估算公式：表行数 / 拷贝速度</span><br><span class="line">   - 拷贝速度参考：5000行/秒（受硬件影响）</span><br><span class="line">   - 5000万行约需3-4小时</span><br></pre></td></tr></table></figure>
+
+<h1 id="-2"><a href="#-2" class="headerlink" title=""></a></h1><h2 id="变更自动化脚本"><a href="#变更自动化脚本" class="headerlink" title="变更自动化脚本"></a>变更自动化脚本</h2><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#!/bin/bash</span></span><br><span class="line"><span class="comment"># 实际项目DDL变更自动化脚本</span></span><br><span class="line"><span class="comment"># 使用前请先在测试环境验证</span></span><br><span class="line"></span><br><span class="line"><span class="built_in">set</span> -e</span><br><span class="line"></span><br><span class="line">HOST=<span class="variable">$1</span></span><br><span class="line">PORT=<span class="variable">$2</span></span><br><span class="line">USER=<span class="variable">$3</span></span><br><span class="line">PASSWORD=<span class="variable">$4</span></span><br><span class="line">DATABASE=<span class="variable">$5</span></span><br><span class="line">TABLE=<span class="variable">$6</span></span><br><span class="line">ALTER_SQL=<span class="variable">$7</span></span><br><span class="line"></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;===== DDL变更自动化脚本 =====&quot;</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Host: <span class="variable">$HOST</span>&quot;</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Database: <span class="variable">$DATABASE</span>&quot;</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Table: <span class="variable">$TABLE</span>&quot;</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Alter: <span class="variable">$ALTER_SQL</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 步骤1：检查前提条件</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;[1/5] 检查前提条件...&quot;</span></span><br><span class="line">TABLE_SIZE=$(mysql -h<span class="variable">$HOST</span> -P<span class="variable">$PORT</span> -u<span class="variable">$USER</span> -p<span class="variable">$PASSWORD</span> -N -e <span class="string">&quot;</span></span><br><span class="line"><span class="string">    SELECT ROUND((data_length+index_length)/1024/1024/1024, 2)</span></span><br><span class="line"><span class="string">    FROM information_schema.tables</span></span><br><span class="line"><span class="string">    WHERE table_schema=&#x27;<span class="variable">$DATABASE</span>&#x27; AND table_name=&#x27;<span class="variable">$TABLE</span>&#x27;&quot;</span>)</span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;  表大小: <span class="variable">$&#123;TABLE_SIZE&#125;</span>GB&quot;</span></span><br><span class="line"></span><br><span class="line">DISK_FREE=$(<span class="built_in">df</span> -h /var/lib/mysql | <span class="built_in">tail</span> -1 | awk <span class="string">&#x27;&#123;print $4&#125;&#x27;</span>)</span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;  磁盘剩余: <span class="variable">$DISK_FREE</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 步骤2：Dry Run</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;[2/5] Dry Run验证...&quot;</span></span><br><span class="line">pt-online-schema-change \</span><br><span class="line">    --host=<span class="variable">$HOST</span> --port=<span class="variable">$PORT</span> --user=<span class="variable">$USER</span> --password=<span class="variable">$PASSWORD</span> \</span><br><span class="line">    --alter=<span class="string">&quot;<span class="variable">$ALTER_SQL</span>&quot;</span> D=<span class="variable">$DATABASE</span>,t=<span class="variable">$TABLE</span> \</span><br><span class="line">    --dry-run</span><br><span class="line"></span><br><span class="line"><span class="comment"># 步骤3：执行变更</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;[3/5] 执行变更...&quot;</span></span><br><span class="line">pt-online-schema-change \</span><br><span class="line">    --host=<span class="variable">$HOST</span> --port=<span class="variable">$PORT</span> --user=<span class="variable">$USER</span> --password=<span class="variable">$PASSWORD</span> \</span><br><span class="line">    --alter=<span class="string">&quot;<span class="variable">$ALTER_SQL</span>&quot;</span> D=<span class="variable">$DATABASE</span>,t=<span class="variable">$TABLE</span> \</span><br><span class="line">    --max-load=<span class="string">&quot;Threads_running=20&quot;</span> \</span><br><span class="line">    --critical-load=<span class="string">&quot;Threads_running=50&quot;</span> \</span><br><span class="line">    --chunk-size=500 \</span><br><span class="line">    --chunk-time=0.3 \</span><br><span class="line">    --max-slave-lag=60 \</span><br><span class="line">    --execute</span><br><span class="line"></span><br><span class="line"><span class="comment"># 步骤4：验证结果</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;[4/5] 验证结果...&quot;</span></span><br><span class="line">mysql -h<span class="variable">$HOST</span> -P<span class="variable">$PORT</span> -u<span class="variable">$USER</span> -p<span class="variable">$PASSWORD</span> -e <span class="string">&quot;SHOW CREATE TABLE <span class="variable">$DATABASE</span>.<span class="variable">$TABLE</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 步骤5：完成</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;[5/5] 变更完成！&quot;</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="学习资源推荐-1"><a href="#学习资源推荐-1" class="headerlink" title="学习资源推荐"></a>学习资源推荐</h2><table>
+<thead>
+<tr>
+<th>资源</th>
+<th>类型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL官方文档 Online DDL</td>
+<td>文档</td>
+<td>最权威的参考</td>
+</tr>
+<tr>
+<td>Percona Toolkit文档</td>
+<td>文档</td>
+<td>pt-osc详细说明</td>
+</tr>
+<tr>
+<td>gh-ost GitHub Wiki</td>
+<td>文档</td>
+<td>gh-ost使用指南</td>
+</tr>
+<tr>
+<td>《高性能MySQL》</td>
+<td>书籍</td>
+<td>第4章Schema优化</td>
+</tr>
+</tbody></table>
+<h3 id="学习路径-1"><a href="#学习路径-1" class="headerlink" title="学习路径"></a>学习路径</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">阶段1：理解DDL三种算法（1周）</span><br><span class="line">  重点：INSTANT/INPLACE/COPY原理与适用场景</span><br><span class="line"></span><br><span class="line">阶段2：掌握pt-osc/gh-ost（2周）</span><br><span class="line">  重点：原理、安装、使用、速度控制</span><br><span class="line"></span><br><span class="line">阶段3：掌握变更流程（1周）</span><br><span class="line">  重点：检查清单、执行步骤、回滚方案</span><br><span class="line"></span><br><span class="line">阶段4：自动化实践（持续）</span><br><span class="line">  重点：自动化脚本、监控告警</span><br></pre></td></tr></table></figure>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/09/24/2812cb93f17e/">消息队列选型指南——RabbitMQ vs RocketMQ vs Kafka</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/10/15/468f524aa298/">JVM内存泄漏排查——从现象到根因</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E7%9B%91%E6%8E%A7%E8%BF%90%E7%BB%B4/" class="tag" aria-label="标签: #监控运维">#监控运维</a>
+            
+                <a href="/tags/MySQL/" class="tag" aria-label="标签: #MySQL">#MySQL</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(68)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/MySQL%E6%B7%B1%E5%BA%A6/" aria-label="分类: MySQL深度">
+                        MySQL深度
+                        <span>(10)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

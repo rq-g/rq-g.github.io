@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>SQL优化实战——慢查询的排查与优化 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="SQL优化实战——慢查询的排查与优化">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2022/06/24/3439dad29281/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言实际场景中，矿工考勤报表接口越来越慢，从最初的200ms到后来的3秒，用户投诉不断。排查后发现是一条SQL全表扫描导致的——10万条考勤记录没有索引，每次查询都做全表扫描。从那以后，我学会了系统化的慢查询排查和优化方法。本文将结合实际项目的实战经验，系统讲解慢查询定位、EXPLAIN分析、常见优化场景以及">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container">
+  <article class="post">
+    <h1 class="post-title">SQL优化实战——慢查询的排查与优化</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2022-06-24T05:12:24.000Z">2022-06-24</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2022/">2022</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2022/MySQL/">MySQL</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>实际场景中，矿工考勤报表接口越来越慢，从最初的200ms到后来的3秒，用户投诉不断。排查后发现是一条SQL全表扫描导致的——10万条考勤记录没有索引，每次查询都做全表扫描。从那以后，我学会了系统化的慢查询排查和优化方法。</p>
+<p>本文将结合实际项目的实战经验，系统讲解慢查询定位、EXPLAIN分析、常见优化场景以及批量操作优化。</p>
+<h2 id="慢查询定位"><a href="#慢查询定位" class="headerlink" title="慢查询定位"></a>慢查询定位</h2><h3 id="开启慢查询日志"><a href="#开启慢查询日志" class="headerlink" title="开启慢查询日志"></a>开启慢查询日志</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 查看慢查询配置</span></span><br><span class="line"><span class="keyword">SHOW</span> VARIABLES <span class="keyword">LIKE</span> <span class="string">&#x27;slow_query%&#x27;</span>;</span><br><span class="line"><span class="keyword">SHOW</span> VARIABLES <span class="keyword">LIKE</span> <span class="string">&#x27;long_query_time&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 开启慢查询日志</span></span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> slow_query_log <span class="operator">=</span> <span class="keyword">ON</span>;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> long_query_time <span class="operator">=</span> <span class="number">1</span>;  <span class="comment">-- 超过1秒记录</span></span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> log_queries_not_using_indexes <span class="operator">=</span> <span class="string">&#x27;ON&#x27;</span>;  <span class="comment">-- 记录没走索引的查询</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 慢查询日志位置</span></span><br><span class="line"><span class="keyword">SHOW</span> VARIABLES <span class="keyword">LIKE</span> <span class="string">&#x27;datadir&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看慢查询日志文件</span></span><br><span class="line"><span class="keyword">SHOW</span> VARIABLES <span class="keyword">LIKE</span> <span class="string">&#x27;slow_query_log_file&#x27;</span>;</span><br></pre></td></tr></table></figure>
+
+
+<p><strong>慢查询日志配置建议：</strong></p>
+<ul>
+<li>参数                          建议值        说明</li>
+</ul>
+<hr>
+<ul>
+<li>slow_query_log                ON           开启慢查询日志</li>
+<li>long_query_time               1            超过1秒记录</li>
+<li>log_queries_not_using_indexes  ON          记录无索引查询</li>
+<li>min_examined_row_limit        100          扫描行数&lt;100不记录</li>
+<li>log_output                    FILE         日志输出到文件</li>
+<li>实际项目配置：</li>
+<li>long_query_time &#x3D; 0.5  （核心接口要求500ms内返回）</li>
+</ul>
+<h3 id="使用mysqldumpslow分析"><a href="#使用mysqldumpslow分析" class="headerlink" title="使用mysqldumpslow分析"></a>使用mysqldumpslow分析</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 按查询时间排序，显示前10条</span></span><br><span class="line">mysqldumpslow -s t -t 10 /var/lib/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 按查询次数排序</span></span><br><span class="line">mysqldumpslow -s c -t 10 /var/lib/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 按平均查询时间排序</span></span><br><span class="line">mysqldumpslow -s at -t 10 /var/lib/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 按锁定时间排序</span></span><br><span class="line">mysqldumpslow -s l -t 10 /var/lib/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 参数说明：</span></span><br><span class="line"><span class="comment"># -s t: 按查询时间    -s c: 按查询次数</span></span><br><span class="line"><span class="comment"># -s at: 按平均时间   -s l: 按锁定时间</span></span><br><span class="line"><span class="comment"># -t 10: 显示前10条</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="使用pt-query-digest分析（更强大）"><a href="#使用pt-query-digest分析（更强大）" class="headerlink" title="使用pt-query-digest分析（更强大）"></a>使用pt-query-digest分析（更强大）</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 安装</span></span><br><span class="line"><span class="comment"># brew install percona-toolkit</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 分析慢查询日志</span></span><br><span class="line">pt-query-digest /var/lib/mysql/slow.log &gt; slow_report.txt</span><br><span class="line"></span><br><span class="line"><span class="comment"># 分析最近1小时的慢查询</span></span><br><span class="line">pt-query-digest --since <span class="string">&#x27;1h&#x27;</span> /var/lib/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 分析指定数据库的慢查询</span></span><br><span class="line">pt-query-digest --filter <span class="string">&#x27;$event-&gt;&#123;db&#125; eq &quot;mine_smart&quot;&#x27;</span> /var/lib/mysql/slow.log</span><br></pre></td></tr></table></figure>
+
+<h2 id="EXPLAIN执行计划"><a href="#EXPLAIN执行计划" class="headerlink" title="EXPLAIN执行计划"></a>EXPLAIN执行计划</h2><h3 id="EXPLAIN关键字段"><a href="#EXPLAIN关键字段" class="headerlink" title="EXPLAIN关键字段"></a>EXPLAIN关键字段</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">EXPLAIN <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> dept_id <span class="operator">=</span> <span class="number">1</span>;</span><br></pre></td></tr></table></figure>
+
+
+<p><strong>EXPLAIN关键字段解读</strong></p>
+<ul>
+<li>type（访问类型）– 最重要！</li>
+<li>&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</li>
+<li>system &gt; const &gt; eq_ref &gt; ref &gt; range &gt; index &gt; ALL</li>
+<li>system  → 系统表，只有一行</li>
+<li>const   → 主键&#x2F;唯一索引等值查询，最快</li>
+<li>eq_ref  → 关联查询主键&#x2F;唯一索引</li>
+<li>ref     → 普通索引等值查询</li>
+<li>range   → 索引范围扫描（BETWEEN, &gt;, &lt;, IN）</li>
+<li>index   → 全索引扫描</li>
+<li>ALL     → 全表扫描（必须优化！）</li>
+<li>目标：至少达到ref级别，避免ALL和index</li>
+<li>key（使用的索引）</li>
+<li>&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</li>
+<li>NULL → 没走索引，需要优化</li>
+<li>非NULL → 确认是否为期望的索引</li>
+<li>key_len（索引使用长度）</li>
+<li>&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</li>
+<li>判断组合索引使用了几个字段</li>
+<li>key_len &#x3D; 字段定义长度之和</li>
+<li>INT: 4字节, BIGINT: 8字节, VARCHAR(n): n*3+2字节(UTF8)</li>
+<li>rows（预估扫描行数）</li>
+<li>&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</li>
+<li>越小越好</li>
+<li>不是精确值，是优化器的估算</li>
+<li>Extra（额外信息）</li>
+<li>&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;&#x3D;</li>
+<li>Using index          → 覆盖索引，好</li>
+<li>Using where          → Server层过滤</li>
+<li>Using filesort       → 额外排序，需优化！</li>
+<li>Using temporary      → 使用临时表，需优化！</li>
+<li>Using index condition → 索引条件下推(ICP)，好</li>
+</ul>
+<h3 id="EXPLAIN实战分析"><a href="#EXPLAIN实战分析" class="headerlink" title="EXPLAIN实战分析"></a>EXPLAIN实战分析</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 智慧矿山：考勤报表查询分析</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化前：全表扫描</span></span><br><span class="line">EXPLAIN <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> attendance <span class="keyword">WHERE</span> check_date <span class="operator">=</span> <span class="string">&#x27;2022-06-18&#x27;</span>;</span><br><span class="line"><span class="comment">-- type: ALL, key: NULL, rows: 100000</span></span><br><span class="line"><span class="comment">-- → 需要添加索引</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 添加索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> attendance <span class="keyword">ADD</span> INDEX idx_check_date(check_date);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化后</span></span><br><span class="line">EXPLAIN <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> attendance <span class="keyword">WHERE</span> check_date <span class="operator">=</span> <span class="string">&#x27;2022-06-18&#x27;</span>;</span><br><span class="line"><span class="comment">-- type: ref, key: idx_check_date, rows: 500</span></span><br><span class="line"><span class="comment">-- → 优化成功</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 组合索引分析</span></span><br><span class="line">EXPLAIN <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> attendance </span><br><span class="line"><span class="keyword">WHERE</span> miner_id <span class="operator">=</span> <span class="number">1001</span> <span class="keyword">AND</span> check_date <span class="operator">&gt;=</span> <span class="string">&#x27;2022-06-01&#x27;</span>;</span><br><span class="line"><span class="comment">-- 如果只有idx_check_date，key_len=4，只用到了check_date</span></span><br><span class="line"><span class="comment">-- 添加组合索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> attendance <span class="keyword">ADD</span> INDEX idx_miner_date(miner_id, check_date);</span><br><span class="line"><span class="comment">-- key_len=12(8+4)，两个字段都用到</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="常见优化场景"><a href="#常见优化场景" class="headerlink" title="常见优化场景"></a>常见优化场景</h2><h3 id="1-全表扫描-→-加索引"><a href="#1-全表扫描-→-加索引" class="headerlink" title="1. 全表扫描 → 加索引"></a>1. 全表扫描 → 加索引</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 优化前</span></span><br><span class="line">EXPLAIN <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> salary_record <span class="keyword">WHERE</span> miner_id <span class="operator">=</span> <span class="number">1001</span>;</span><br><span class="line"><span class="comment">-- type: ALL, rows: 100000</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 加索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> salary_record <span class="keyword">ADD</span> INDEX idx_miner_id(miner_id);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化后</span></span><br><span class="line"><span class="comment">-- type: ref, rows: 12</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="2-文件排序-→-优化ORDER-BY"><a href="#2-文件排序-→-优化ORDER-BY" class="headerlink" title="2. 文件排序 → 优化ORDER BY"></a>2. 文件排序 → 优化ORDER BY</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 优化前：Using filesort</span></span><br><span class="line">EXPLAIN <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> safety_hazard </span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span> <span class="keyword">ORDER</span> <span class="keyword">BY</span> report_time <span class="keyword">DESC</span>;</span><br><span class="line"><span class="comment">-- Extra: Using filesort</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化：建组合索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> safety_hazard <span class="keyword">ADD</span> INDEX idx_status_time(status, report_time <span class="keyword">DESC</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化后</span></span><br><span class="line"><span class="comment">-- Extra: Using index（排序走索引）</span></span><br></pre></td></tr></table></figure>
+
+
+<p><strong>ORDER BY优化原理：</strong></p>
+<ul>
+<li>无索引排序：</li>
+<li>查询结果 → 在内存&#x2F;磁盘中排序 → 返回</li>
+<li>（Using filesort，额外开销）</li>
+<li>有索引排序：</li>
+<li>索引本身就是有序的 → 直接按索引顺序读取 → 无需额外排序</li>
+<li>（Using index，高效）</li>
+<li>组合索引 idx(status, report_time)</li>
+<li>相同status下，report_time已排序</li>
+<li>WHERE status &#x3D; 0 ORDER BY report_time → 直接按索引读</li>
+</ul>
+<h3 id="3-回表过多-→-覆盖索引"><a href="#3-回表过多-→-覆盖索引" class="headerlink" title="3. 回表过多 → 覆盖索引"></a>3. 回表过多 → 覆盖索引</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 优化前</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> dept_id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="comment">-- 走dept_id索引后还要回表查全部字段</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化：只查需要的字段</span></span><br><span class="line"><span class="keyword">SELECT</span> id, dept_id, status <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> dept_id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="comment">-- 覆盖索引，不需要回表</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 或建覆盖索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> miner_info <span class="keyword">ADD</span> INDEX idx_dept_status_id(dept_id, status, id);</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-深分页-→-延迟关联"><a href="#4-深分页-→-延迟关联" class="headerlink" title="4. 深分页 → 延迟关联"></a>4. 深分页 → 延迟关联</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 优化前：深分页扫描大量数据</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> salary_record <span class="keyword">ORDER</span> <span class="keyword">BY</span> id LIMIT <span class="number">100000</span>, <span class="number">10</span>;</span><br><span class="line"><span class="comment">-- 扫描100010行，丢弃前100000行</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化：先查ID，再关联</span></span><br><span class="line"><span class="keyword">SELECT</span> s.<span class="operator">*</span> <span class="keyword">FROM</span> salary_record s</span><br><span class="line"><span class="keyword">INNER</span> <span class="keyword">JOIN</span> (</span><br><span class="line">    <span class="keyword">SELECT</span> id <span class="keyword">FROM</span> salary_record <span class="keyword">ORDER</span> <span class="keyword">BY</span> id LIMIT <span class="number">100000</span>, <span class="number">10</span></span><br><span class="line">) t <span class="keyword">ON</span> s.id <span class="operator">=</span> t.id;</span><br><span class="line"><span class="comment">-- 子查询走覆盖索引，只查ID，速度快</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 另一种方案：游标分页（推荐）</span></span><br><span class="line"><span class="comment">-- 第一页：SELECT * FROM salary_record WHERE id &gt; 0 ORDER BY id LIMIT 10;</span></span><br><span class="line"><span class="comment">-- 第二页：SELECT * FROM salary_record WHERE id &gt; #&#123;lastId&#125; ORDER BY id LIMIT 10;</span></span><br><span class="line"><span class="comment">-- 避免了深分页问题</span></span><br></pre></td></tr></table></figure>
+
+
+<p><strong>深分页优化对比：</strong></p>
+<ul>
+<li>方案1：普通LIMIT（慢）</li>
+<li>LIMIT 100000, 10</li>
+<li>→ 扫描100010行，丢弃前100000行</li>
+<li>→ 返回10行</li>
+<li>→ 浪费了扫描100000行的时间</li>
+<li>方案2：延迟关联（快）</li>
+<li>子查询 SELECT id … LIMIT 100000, 10</li>
+<li>→ 走覆盖索引，只查ID</li>
+<li>→ 关联查询获取完整数据</li>
+<li>→ 快得多！</li>
+<li>方案3：游标分页（最快，推荐）</li>
+<li>WHERE id &gt; #{lastId} LIMIT 10</li>
+<li>→ 走主键索引，直接定位</li>
+<li>→ 无需扫描前面的行</li>
+<li>→ 缺点：不支持跳页</li>
+</ul>
+<h3 id="5-不走索引的写法优化"><a href="#5-不走索引的写法优化" class="headerlink" title="5. 不走索引的写法优化"></a>5. 不走索引的写法优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ 函数导致索引失效</span></span><br><span class="line"><span class="keyword">WHERE</span> <span class="keyword">YEAR</span>(create_time) <span class="operator">=</span> <span class="number">2022</span></span><br><span class="line"><span class="comment">-- ✅ 改为范围查询</span></span><br><span class="line"><span class="keyword">WHERE</span> create_time <span class="operator">&gt;=</span> <span class="string">&#x27;2022-01-01&#x27;</span> <span class="keyword">AND</span> create_time <span class="operator">&lt;</span> <span class="string">&#x27;2023-01-01&#x27;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ❌ 隐式类型转换</span></span><br><span class="line"><span class="keyword">WHERE</span> phone <span class="operator">=</span> <span class="number">13800138000</span>  <span class="comment">-- phone是varchar</span></span><br><span class="line"><span class="comment">-- ✅ 加引号</span></span><br><span class="line"><span class="keyword">WHERE</span> phone <span class="operator">=</span> <span class="string">&#x27;13800138000&#x27;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ❌ 前缀模糊</span></span><br><span class="line"><span class="keyword">WHERE</span> miner_name <span class="keyword">LIKE</span> <span class="string">&#x27;%张&#x27;</span></span><br><span class="line"><span class="comment">-- ✅ 后缀模糊</span></span><br><span class="line"><span class="keyword">WHERE</span> miner_name <span class="keyword">LIKE</span> <span class="string">&#x27;张%&#x27;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ❌ OR连接无索引列</span></span><br><span class="line"><span class="keyword">WHERE</span> dept_id <span class="operator">=</span> <span class="number">1</span> <span class="keyword">OR</span> status <span class="operator">=</span> <span class="number">0</span>  <span class="comment">-- status无索引</span></span><br><span class="line"><span class="comment">-- ✅ UNION ALL</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> dept_id <span class="operator">=</span> <span class="number">1</span></span><br><span class="line"><span class="keyword">UNION</span> <span class="keyword">ALL</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span> <span class="keyword">AND</span> dept_id <span class="operator">!=</span> <span class="number">1</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ❌ 不等于</span></span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">!=</span> <span class="number">1</span></span><br><span class="line"><span class="comment">-- ✅ IN</span></span><br><span class="line"><span class="keyword">WHERE</span> status <span class="keyword">IN</span> (<span class="number">0</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>)</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-JOIN优化"><a href="#6-JOIN优化" class="headerlink" title="6. JOIN优化"></a>6. JOIN优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 小表驱动大表</span></span><br><span class="line"><span class="comment">-- LEFT JOIN：左表尽量小</span></span><br><span class="line"><span class="comment">-- INNER JOIN：MySQL自动选择驱动表</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 确保JOIN字段有索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> salary_record <span class="keyword">ADD</span> INDEX idx_miner_id(miner_id);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 避免JOIN过多表</span></span><br><span class="line"><span class="comment">-- 超过3张表JOIN时考虑拆分查询</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="7-子查询优化"><a href="#7-子查询优化" class="headerlink" title="7. 子查询优化"></a>7. 子查询优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ 子查询效率低</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> salary_record</span><br><span class="line"><span class="keyword">WHERE</span> miner_id <span class="keyword">IN</span> (<span class="keyword">SELECT</span> miner_id <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 改为JOIN</span></span><br><span class="line"><span class="keyword">SELECT</span> s.<span class="operator">*</span> <span class="keyword">FROM</span> salary_record s</span><br><span class="line"><span class="keyword">INNER</span> <span class="keyword">JOIN</span> miner_info m <span class="keyword">ON</span> s.miner_id <span class="operator">=</span> m.miner_id</span><br><span class="line"><span class="keyword">WHERE</span> m.status <span class="operator">=</span> <span class="number">1</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="8-GROUP-BY优化"><a href="#8-GROUP-BY优化" class="headerlink" title="8. GROUP BY优化"></a>8. GROUP BY优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ Using temporary; Using filesort</span></span><br><span class="line"><span class="keyword">SELECT</span> dept_id, <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> miner_info <span class="keyword">GROUP</span> <span class="keyword">BY</span> dept_id;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 加索引</span></span><br><span class="line"><span class="keyword">ALTER TABLE</span> miner_info <span class="keyword">ADD</span> INDEX idx_dept_id(dept_id);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 使用WHERE减少分组数据量</span></span><br><span class="line"><span class="keyword">SELECT</span> dept_id, <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> miner_info</span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span></span><br><span class="line"><span class="keyword">GROUP</span> <span class="keyword">BY</span> dept_id;</span><br></pre></td></tr></table></figure>
+
+<h2 id="批量操作优化"><a href="#批量操作优化" class="headerlink" title="批量操作优化"></a>批量操作优化</h2><h3 id="批量插入"><a href="#批量插入" class="headerlink" title="批量插入"></a>批量插入</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ 循环单条插入</span></span><br><span class="line"><span class="keyword">INSERT INTO</span> miner_info (miner_name) <span class="keyword">VALUES</span> (<span class="string">&#x27;张三&#x27;</span>);</span><br><span class="line"><span class="keyword">INSERT INTO</span> miner_info (miner_name) <span class="keyword">VALUES</span> (<span class="string">&#x27;李四&#x27;</span>);</span><br><span class="line"><span class="comment">-- 每次都有网络IO开销</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 批量插入</span></span><br><span class="line"><span class="keyword">INSERT INTO</span> miner_info (miner_name) <span class="keyword">VALUES</span> (<span class="string">&#x27;张三&#x27;</span>), (<span class="string">&#x27;李四&#x27;</span>), (<span class="string">&#x27;王五&#x27;</span>);</span><br><span class="line"><span class="comment">-- 一次网络IO，效率高</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 大批量分批插入</span></span><br><span class="line"><span class="keyword">INSERT INTO</span> miner_info (miner_name) <span class="keyword">VALUES</span> </span><br><span class="line">(<span class="string">&#x27;张三&#x27;</span>), (<span class="string">&#x27;李四&#x27;</span>), (<span class="string">&#x27;王五&#x27;</span>), ..., (<span class="string">&#x27;赵六&#x27;</span>);  <span class="comment">-- 每批500条</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="批量删除"><a href="#批量删除" class="headerlink" title="批量删除"></a>批量删除</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ 大事务删除</span></span><br><span class="line"><span class="keyword">DELETE</span> <span class="keyword">FROM</span> attendance <span class="keyword">WHERE</span> check_date <span class="operator">&lt;</span> <span class="string">&#x27;2022-01-01&#x27;</span>;</span><br><span class="line"><span class="comment">-- 数据量太大，锁表时间长</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 分批删除</span></span><br><span class="line"><span class="keyword">DELETE</span> <span class="keyword">FROM</span> attendance <span class="keyword">WHERE</span> check_date <span class="operator">&lt;</span> <span class="string">&#x27;2022-01-01&#x27;</span> LIMIT <span class="number">1000</span>;</span><br><span class="line"><span class="comment">-- 循环执行直到影响行数为0</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 智慧矿山：分批删除实现</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DataCleanService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">int</span> <span class="variable">BATCH_SIZE</span> <span class="operator">=</span> <span class="number">1000</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">cleanOldAttendance</span><span class="params">(LocalDate beforeDate)</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">totalDeleted</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">        <span class="type">int</span> affected;</span><br><span class="line">        <span class="keyword">do</span> &#123;</span><br><span class="line">            affected = attendanceMapper.deleteOldRecords(beforeDate, BATCH_SIZE);</span><br><span class="line">            totalDeleted += affected;</span><br><span class="line">            <span class="keyword">if</span> (affected &gt; <span class="number">0</span>) &#123;</span><br><span class="line">                <span class="comment">// 短暂休息，减少对线上业务的影响</span></span><br><span class="line">                <span class="keyword">try</span> &#123; Thread.sleep(<span class="number">100</span>); &#125; <span class="keyword">catch</span> (InterruptedException e) &#123; <span class="keyword">break</span>; &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">while</span> (affected &gt; <span class="number">0</span>);</span><br><span class="line">        <span class="keyword">return</span> totalDeleted;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="COUNT优化"><a href="#COUNT优化" class="headerlink" title="COUNT优化"></a>COUNT优化</h2><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ COUNT(*) 慢（InnoDB，因为MVCC需要遍历）</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> miner_info;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 使用估算</span></span><br><span class="line"><span class="keyword">SHOW</span> <span class="keyword">TABLE</span> STATUS <span class="keyword">LIKE</span> <span class="string">&#x27;miner_info&#x27;</span>;</span><br><span class="line"><span class="comment">-- Rows列是估算值，不精确但快</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 维护计数表</span></span><br><span class="line"><span class="keyword">INSERT INTO</span> count_table (table_name, cnt) <span class="keyword">VALUES</span> (<span class="string">&#x27;miner_info&#x27;</span>, <span class="number">1</span>)</span><br><span class="line"><span class="keyword">ON</span> DUPLICATE KEY <span class="keyword">UPDATE</span> cnt <span class="operator">=</span> cnt <span class="operator">+</span> <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ COUNT(1)和COUNT(*)性能一样，推荐COUNT(*)</span></span><br><span class="line"><span class="comment">-- ✅ COUNT(具体列)只统计非NULL行</span></span><br><span class="line"><span class="comment">-- ✅ 如果只需要判断是否存在，用LIMIT 1</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="number">1</span> <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> LIMIT <span class="number">1</span>;</span><br></pre></td></tr></table></figure>
+
+<h2 id="SQL优化的步骤"><a href="#SQL优化的步骤" class="headerlink" title="SQL优化的步骤"></a>SQL优化的步骤</h2><p><strong>SQL优化流程</strong></p>
+<ul>
+<li>Step1：定位慢SQL</li>
+<li>+– 慢查询日志</li>
+<li>+– pt-query-digest分析</li>
+<li>+– 应用APM监控</li>
+<li>Step2：EXPLAIN分析</li>
+<li>+– type：确认访问类型</li>
+<li>+– key：确认使用的索引</li>
+<li>+– rows：预估扫描行数</li>
+<li>+– Extra：额外信息</li>
+<li>Step3：针对性优化</li>
+<li>+– ALL → 加索引</li>
+<li>+– Using filesort → 优化ORDER BY</li>
+<li>+– Using temporary → 优化GROUP BY</li>
+<li>+– 回表多 → 覆盖索引</li>
+<li>+– 深分页 → 延迟关联</li>
+<li>Step4：验证优化效果</li>
+<li>+– 再次EXPLAIN确认</li>
+<li>+– 对比优化前后查询时间</li>
+<li>+– 压测验证</li>
+</ul>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>SQL优化是后端开发的基本功。在实际场景中，我从”SQL慢就加索引”到”系统化排查优化”，核心方法是：<strong>慢查询日志定位 → EXPLAIN分析 → 针对性优化 → 验证效果</strong>。80%的SQL性能问题，通过加索引和避免索引失效就能解决。</p>
+<p>经过深入学习，我还理解了：</p>
+<ul>
+<li>慢查询日志是定位问题SQL的第一步，pt-query-digest是分析利器</li>
+<li>EXPLAIN的type和Extra是最重要的判断依据</li>
+<li>覆盖索引避免回表，延迟关联解决深分页</li>
+<li>批量操作要分批执行，避免长事务</li>
+<li>SQL优化是一个持续的过程，需要监控和定期维护</li>
+</ul>
+<h2 id="SQL优化高级技巧"><a href="#SQL优化高级技巧" class="headerlink" title="SQL优化高级技巧"></a>SQL优化高级技巧</h2><h3 id="窗口函数优化（MySQL-8-0-）"><a href="#窗口函数优化（MySQL-8-0-）" class="headerlink" title="窗口函数优化（MySQL 8.0+）"></a>窗口函数优化（MySQL 8.0+）</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 智慧矿山：使用窗口函数优化复杂查询</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 1. 排名查询：每个部门薪资前三的矿工</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> (</span><br><span class="line">    <span class="keyword">SELECT</span> m.miner_name, d.dept_name, m.salary_amount,</span><br><span class="line">           <span class="built_in">ROW_NUMBER</span>() <span class="keyword">OVER</span> (<span class="keyword">PARTITION</span> <span class="keyword">BY</span> m.dept_id <span class="keyword">ORDER</span> <span class="keyword">BY</span> m.salary_amount <span class="keyword">DESC</span>) <span class="keyword">AS</span> rank_num</span><br><span class="line">    <span class="keyword">FROM</span> miner_info m</span><br><span class="line">    <span class="keyword">INNER</span> <span class="keyword">JOIN</span> mine_dept d <span class="keyword">ON</span> m.dept_id <span class="operator">=</span> d.id</span><br><span class="line">) t <span class="keyword">WHERE</span> rank_num <span class="operator">&lt;=</span> <span class="number">3</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 2. 累计统计：每月累计薪资支出</span></span><br><span class="line"><span class="keyword">SELECT</span> salary_month,</span><br><span class="line">       <span class="built_in">SUM</span>(monthly_total) <span class="keyword">OVER</span> (<span class="keyword">ORDER</span> <span class="keyword">BY</span> salary_month) <span class="keyword">AS</span> cumulative_total,</span><br><span class="line">       monthly_total</span><br><span class="line"><span class="keyword">FROM</span> (</span><br><span class="line">    <span class="keyword">SELECT</span> DATE_FORMAT(salary_date, <span class="string">&#x27;%Y-%m&#x27;</span>) <span class="keyword">AS</span> salary_month,</span><br><span class="line">           <span class="built_in">SUM</span>(salary_amount) <span class="keyword">AS</span> monthly_total</span><br><span class="line">    <span class="keyword">FROM</span> salary_record</span><br><span class="line">    <span class="keyword">GROUP</span> <span class="keyword">BY</span> DATE_FORMAT(salary_date, <span class="string">&#x27;%Y-%m&#x27;</span>)</span><br><span class="line">) t;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 3. 环比分析：本月与上月对比</span></span><br><span class="line"><span class="keyword">SELECT</span> salary_month,</span><br><span class="line">       monthly_total,</span><br><span class="line">       <span class="built_in">LAG</span>(monthly_total, <span class="number">1</span>) <span class="keyword">OVER</span> (<span class="keyword">ORDER</span> <span class="keyword">BY</span> salary_month) <span class="keyword">AS</span> prev_month,</span><br><span class="line">       monthly_total <span class="operator">-</span> <span class="built_in">LAG</span>(monthly_total, <span class="number">1</span>) <span class="keyword">OVER</span> (<span class="keyword">ORDER</span> <span class="keyword">BY</span> salary_month) <span class="keyword">AS</span> diff,</span><br><span class="line">       ROUND((monthly_total <span class="operator">-</span> <span class="built_in">LAG</span>(monthly_total, <span class="number">1</span>) <span class="keyword">OVER</span> (<span class="keyword">ORDER</span> <span class="keyword">BY</span> salary_month)) </span><br><span class="line">             <span class="operator">*</span> <span class="number">100.0</span> <span class="operator">/</span> <span class="built_in">LAG</span>(monthly_total, <span class="number">1</span>) <span class="keyword">OVER</span> (<span class="keyword">ORDER</span> <span class="keyword">BY</span> salary_month), <span class="number">2</span>) <span class="keyword">AS</span> growth_rate</span><br><span class="line"><span class="keyword">FROM</span> (</span><br><span class="line">    <span class="keyword">SELECT</span> DATE_FORMAT(salary_date, <span class="string">&#x27;%Y-%m&#x27;</span>) <span class="keyword">AS</span> salary_month,</span><br><span class="line">           <span class="built_in">SUM</span>(salary_amount) <span class="keyword">AS</span> monthly_total</span><br><span class="line">    <span class="keyword">FROM</span> salary_record</span><br><span class="line">    <span class="keyword">GROUP</span> <span class="keyword">BY</span> DATE_FORMAT(salary_date, <span class="string">&#x27;%Y-%m&#x27;</span>)</span><br><span class="line">) t;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 4. 移动平均：7天移动平均安全隐患数</span></span><br><span class="line"><span class="keyword">SELECT</span> report_date,</span><br><span class="line">       daily_count,</span><br><span class="line">       <span class="built_in">AVG</span>(daily_count) <span class="keyword">OVER</span> (<span class="keyword">ORDER</span> <span class="keyword">BY</span> report_date <span class="keyword">ROWS</span> <span class="keyword">BETWEEN</span> <span class="number">6</span> PRECEDING <span class="keyword">AND</span> <span class="keyword">CURRENT</span> <span class="type">ROW</span>) <span class="keyword">AS</span> avg_7d</span><br><span class="line"><span class="keyword">FROM</span> (</span><br><span class="line">    <span class="keyword">SELECT</span> <span class="type">DATE</span>(report_time) <span class="keyword">AS</span> report_date, <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">AS</span> daily_count</span><br><span class="line">    <span class="keyword">FROM</span> safety_hazard</span><br><span class="line">    <span class="keyword">GROUP</span> <span class="keyword">BY</span> <span class="type">DATE</span>(report_time)</span><br><span class="line">) t;</span><br></pre></td></tr></table></figure>
+
+<h3 id="CTE优化（MySQL-8-0-）"><a href="#CTE优化（MySQL-8-0-）" class="headerlink" title="CTE优化（MySQL 8.0+）"></a>CTE优化（MySQL 8.0+）</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 智慧矿山：使用CTE简化复杂查询</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 1. 非递归CTE：部门薪资统计</span></span><br><span class="line"><span class="keyword">WITH</span> dept_salary <span class="keyword">AS</span> (</span><br><span class="line">    <span class="keyword">SELECT</span> dept_id, <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">AS</span> miner_count, <span class="built_in">AVG</span>(salary_amount) <span class="keyword">AS</span> avg_salary</span><br><span class="line">    <span class="keyword">FROM</span> miner_info</span><br><span class="line">    <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">AND</span> deleted <span class="operator">=</span> <span class="number">0</span></span><br><span class="line">    <span class="keyword">GROUP</span> <span class="keyword">BY</span> dept_id</span><br><span class="line">)</span><br><span class="line"><span class="keyword">SELECT</span> d.dept_name, ds.miner_count, ds.avg_salary</span><br><span class="line"><span class="keyword">FROM</span> mine_dept d</span><br><span class="line"><span class="keyword">INNER</span> <span class="keyword">JOIN</span> dept_salary ds <span class="keyword">ON</span> d.id <span class="operator">=</span> ds.dept_id</span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> ds.avg_salary <span class="keyword">DESC</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 2. 递归CTE：矿区层级查询</span></span><br><span class="line"><span class="keyword">WITH</span> <span class="keyword">RECURSIVE</span> area_tree <span class="keyword">AS</span> (</span><br><span class="line">    <span class="comment">-- 锚点：顶级矿区</span></span><br><span class="line">    <span class="keyword">SELECT</span> id, area_name, parent_id, <span class="number">1</span> <span class="keyword">AS</span> level,</span><br><span class="line">           <span class="built_in">CAST</span>(area_name <span class="keyword">AS</span> <span class="type">CHAR</span>(<span class="number">500</span>)) <span class="keyword">AS</span> path</span><br><span class="line">    <span class="keyword">FROM</span> mine_area</span><br><span class="line">    <span class="keyword">WHERE</span> parent_id <span class="keyword">IS</span> <span class="keyword">NULL</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">UNION</span> <span class="keyword">ALL</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">-- 递归：下级矿区</span></span><br><span class="line">    <span class="keyword">SELECT</span> a.id, a.area_name, a.parent_id, t.level <span class="operator">+</span> <span class="number">1</span>,</span><br><span class="line">           CONCAT(t.path, <span class="string">&#x27; &gt; &#x27;</span>, a.area_name)</span><br><span class="line">    <span class="keyword">FROM</span> mine_area a</span><br><span class="line">    <span class="keyword">INNER</span> <span class="keyword">JOIN</span> area_tree t <span class="keyword">ON</span> a.parent_id <span class="operator">=</span> t.id</span><br><span class="line">)</span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> area_tree <span class="keyword">ORDER</span> <span class="keyword">BY</span> level, id;</span><br></pre></td></tr></table></figure>
+
+<h3 id="批量操作高级优化"><a href="#批量操作高级优化" class="headerlink" title="批量操作高级优化"></a>批量操作高级优化</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 智慧矿山：大批量数据处理优化</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BatchDataProcessor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">int</span> <span class="variable">BATCH_SIZE</span> <span class="operator">=</span> <span class="number">500</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 批量插入矿工信息</span></span><br><span class="line"><span class="comment">     * 使用JDBC批量提交，减少网络IO</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Transactional(rollbackFor = Exception.class)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">batchInsertMiners</span><span class="params">(List&lt;MinerInfo&gt; miners)</span> &#123;</span><br><span class="line">        <span class="comment">// MyBatis批量插入</span></span><br><span class="line">        <span class="type">SqlSession</span> <span class="variable">sqlSession</span> <span class="operator">=</span> sqlSessionTemplate.getSqlSessionFactory().openSession(ExecutorType.BATCH);</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">MinerInfoMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> sqlSession.getMapper(MinerInfoMapper.class);</span><br><span class="line">            <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; miners.size(); i++) &#123;</span><br><span class="line">                mapper.insert(miners.get(i));</span><br><span class="line">                <span class="comment">// 每500条提交一次</span></span><br><span class="line">                <span class="keyword">if</span> ((i + <span class="number">1</span>) % BATCH_SIZE == <span class="number">0</span>) &#123;</span><br><span class="line">                    sqlSession.flushStatements();</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">            sqlSession.flushStatements();</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sqlSession.close();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 分批更新矿工薪资</span></span><br><span class="line"><span class="comment">     * 每批独立事务，避免长事务</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> PlatformTransactionManager txManager;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> BatchResult <span class="title function_">batchUpdateSalary</span><span class="params">(List&lt;SalaryUpdateDTO&gt; updates)</span> &#123;</span><br><span class="line">        <span class="type">BatchResult</span> <span class="variable">result</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">BatchResult</span>();</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; updates.size(); i += BATCH_SIZE) &#123;</span><br><span class="line">            <span class="type">int</span> <span class="variable">end</span> <span class="operator">=</span> Math.min(i + BATCH_SIZE, updates.size());</span><br><span class="line">            List&lt;SalaryUpdateDTO&gt; batch = updates.subList(i, end);</span><br><span class="line"></span><br><span class="line">            <span class="type">DefaultTransactionDefinition</span> <span class="variable">def</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">DefaultTransactionDefinition</span>();</span><br><span class="line">            def.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);</span><br><span class="line">            <span class="type">TransactionStatus</span> <span class="variable">status</span> <span class="operator">=</span> txManager.getTransaction(def);</span><br><span class="line"></span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                <span class="keyword">for</span> (SalaryUpdateDTO dto : batch) &#123;</span><br><span class="line">                    minerInfoMapper.updateSalary(dto.getMinerId(), dto.getNewSalary());</span><br><span class="line">                &#125;</span><br><span class="line">                txManager.commit(status);</span><br><span class="line">                result.addSuccess(batch.size());</span><br><span class="line">            &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">                txManager.rollback(status);</span><br><span class="line">                result.addFail(batch.size(), e.getMessage());</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="查询缓存优化"><a href="#查询缓存优化" class="headerlink" title="查询缓存优化"></a>查询缓存优化</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 智慧矿山：查询缓存优化</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MinerQueryCacheService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">CACHE_TTL</span> <span class="operator">=</span> <span class="number">30</span>; <span class="comment">// 30分钟</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 查询矿工信息（带缓存）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> MinerInfoVO <span class="title function_">getMinerInfo</span><span class="params">(Long minerId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">cacheKey</span> <span class="operator">=</span> <span class="string">&quot;miner:info:&quot;</span> + minerId;</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 1. 先查缓存</span></span><br><span class="line">        <span class="type">MinerInfoVO</span> <span class="variable">cached</span> <span class="operator">=</span> (MinerInfoVO) redisTemplate.opsForValue().get(cacheKey);</span><br><span class="line">        <span class="keyword">if</span> (cached != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span> cached;</span><br><span class="line">        &#125;</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 2. 查数据库</span></span><br><span class="line">        <span class="type">MinerInfoVO</span> <span class="variable">result</span> <span class="operator">=</span> minerInfoMapper.selectVOById(minerId);</span><br><span class="line">        <span class="keyword">if</span> (result != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="comment">// 3. 写入缓存</span></span><br><span class="line">            redisTemplate.opsForValue().set(cacheKey, result, CACHE_TTL, TimeUnit.MINUTES);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 更新矿工信息（清除缓存）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">updateMinerInfo</span><span class="params">(MinerInfoDTO dto)</span> &#123;</span><br><span class="line">        minerInfoMapper.updateById(dto);</span><br><span class="line">        <span class="comment">// 清除缓存</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">cacheKey</span> <span class="operator">=</span> <span class="string">&quot;miner:info:&quot;</span> + dto.getId();</span><br><span class="line">        redisTemplate.delete(cacheKey);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="SQL提示与优化器控制"><a href="#SQL提示与优化器控制" class="headerlink" title="SQL提示与优化器控制"></a>SQL提示与优化器控制</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 1. STRAIGHT_JOIN：强制MySQL按FROM顺序执行JOIN</span></span><br><span class="line"><span class="keyword">SELECT</span> STRAIGHT_JOIN m.miner_name, s.salary_amount</span><br><span class="line"><span class="keyword">FROM</span> miner_info m</span><br><span class="line"><span class="keyword">INNER</span> <span class="keyword">JOIN</span> salary_record s <span class="keyword">ON</span> m.miner_id <span class="operator">=</span> s.miner_id</span><br><span class="line"><span class="keyword">WHERE</span> m.dept_id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 2. SQL_BIG_RESULT / SQL_SMALL_RESULT：提示结果集大小</span></span><br><span class="line"><span class="keyword">SELECT</span> SQL_BIG_RESULT dept_id, <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> miner_info <span class="keyword">GROUP</span> <span class="keyword">BY</span> dept_id;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 3. SQL_CACHE / SQL_NO_CACHE：控制查询缓存</span></span><br><span class="line"><span class="keyword">SELECT</span> SQL_NO_CACHE <span class="operator">*</span> <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> dept_id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 4. optimizer_switch：控制优化器行为</span></span><br><span class="line"><span class="comment">-- 关闭索引条件下推（ICP）</span></span><br><span class="line"><span class="keyword">SET</span> SESSION optimizer_switch <span class="operator">=</span> <span class="string">&#x27;index_condition_pushdown=off&#x27;</span>;</span><br><span class="line"><span class="comment">-- 关闭MRR</span></span><br><span class="line"><span class="keyword">SET</span> SESSION optimizer_switch <span class="operator">=</span> <span class="string">&#x27;mrr=off&#x27;</span>;</span><br></pre></td></tr></table></figure>
+
+<h2 id="性能测试与验证"><a href="#性能测试与验证" class="headerlink" title="性能测试与验证"></a>性能测试与验证</h2><h3 id="优化效果验证方法"><a href="#优化效果验证方法" class="headerlink" title="优化效果验证方法"></a>优化效果验证方法</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 方法1：SQL直接计时</span></span><br><span class="line"><span class="keyword">SET</span> profiling <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> miner_info <span class="keyword">WHERE</span> dept_id <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"><span class="keyword">SHOW</span> PROFILES;</span><br><span class="line"><span class="comment">-- 对比优化前后的Query_Duration</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 方法2：慢查询日志对比</span></span><br><span class="line"><span class="comment">-- 优化前记录慢查询，优化后对比</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 方法3：EXPLAIN对比</span></span><br><span class="line"><span class="comment">-- 优化前：type=ALL, rows=100000</span></span><br><span class="line"><span class="comment">-- 优化后：type=ref, rows=500</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 方法4：Performance Schema</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> performance_schema.events_statements_summary_by_digest</span><br><span class="line"><span class="keyword">WHERE</span> DIGEST_TEXT <span class="keyword">LIKE</span> <span class="string">&#x27;%miner_info%&#x27;</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> SUM_TIMER_WAIT <span class="keyword">DESC</span></span><br><span class="line">LIMIT <span class="number">10</span>;</span><br></pre></td></tr></table></figure>
+
+<h3 id="压测验证脚本"><a href="#压测验证脚本" class="headerlink" title="压测验证脚本"></a>压测验证脚本</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># sysbench压测</span></span><br><span class="line"><span class="comment"># 安装：brew install sysbench</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># OLTP读写压测</span></span><br><span class="line">sysbench oltp_read_write \</span><br><span class="line">  --mysql-host=127.0.0.1 \</span><br><span class="line">  --mysql-port=3306 \</span><br><span class="line">  --mysql-user=root \</span><br><span class="line">  --mysql-password=xxx \</span><br><span class="line">  --mysql-db=mine_smart \</span><br><span class="line">  --tables=10 \</span><br><span class="line">  --table-size=100000 \</span><br><span class="line">  --threads=16 \</span><br><span class="line">  --<span class="keyword">time</span>=300 \</span><br><span class="line">  run</span><br><span class="line"></span><br><span class="line"><span class="comment"># 只读压测</span></span><br><span class="line">sysbench oltp_read_only \</span><br><span class="line">  --mysql-host=127.0.0.1 \</span><br><span class="line">  --tables=10 \</span><br><span class="line">  --table-size=100000 \</span><br><span class="line">  --threads=32 \</span><br><span class="line">  --<span class="keyword">time</span>=60 \</span><br><span class="line">  run</span><br></pre></td></tr></table></figure>
+
+
+<h2 id="SQL优化工具链"><a href="#SQL优化工具链" class="headerlink" title="SQL优化工具链"></a>SQL优化工具链</h2><h3 id="在线分析工具"><a href="#在线分析工具" class="headerlink" title="在线分析工具"></a>在线分析工具</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 智慧矿山：SQL优化常用工具链</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 1. MySQL Workbench：可视化EXPLAIN</span></span><br><span class="line"><span class="comment">-- 2. pt-query-digest：慢查询分析</span></span><br><span class="line"><span class="comment">-- 3. pt-index-usage：索引使用分析</span></span><br><span class="line"><span class="comment">-- 4. pt-mysql-summary：MySQL配置汇总</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- pt-index-usage：分析索引使用率</span></span><br><span class="line"><span class="comment">-- pt-index-usage /var/lib/mysql/slow.log --host=localhost</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- pt-mysql-summary：MySQL配置汇总</span></span><br><span class="line"><span class="comment">-- pt-mysql-summary --host=localhost --user=root --password=xxx</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="优化效果评估"><a href="#优化效果评估" class="headerlink" title="优化效果评估"></a>优化效果评估</h3><p><strong>优化效果评估维度：</strong></p>
+<ul>
+<li>维度1：查询时间</li>
+<li>+– 优化前：3000ms</li>
+<li>+– 优化后：50ms</li>
+<li>+– 提升：60倍</li>
+<li>维度2：扫描行数</li>
+<li>+– 优化前：100000行(ALL)</li>
+<li>+– 优化后：500行(ref)</li>
+<li>+– 减少：200倍</li>
+<li>维度3：CPU使用率</li>
+<li>+– 优化前：80%</li>
+<li>+– 优化后：15%</li>
+<li>+– 降低：5.3倍</li>
+<li>维度4：数据库连接数</li>
+<li>+– 优化前：连接池经常耗尽</li>
+<li>+– 优化后：连接使用率&lt;60%</li>
+</ul>
+<h2 id="SQL优化完整流程"><a href="#SQL优化完整流程" class="headerlink" title="SQL优化完整流程"></a>SQL优化完整流程</h2><p><strong>SQL优化完整流程图：</strong></p>
+<ul>
+<li>Step 1: 慢查询定位</li>
+<li>+– 开启slow_query_log</li>
+<li>+– pt-query-digest分析Top N慢SQL</li>
+<li>+– 按执行时间&#x2F;次数&#x2F;影响行数排序</li>
+<li>|</li>
+<li>v</li>
+<li>Step 2: EXPLAIN分析</li>
+<li>+– type: ALL&#x2F;index&#x2F;range&#x2F;ref&#x2F;eq_ref&#x2F;const</li>
+<li>+– key: 实际使用索引</li>
+<li>+– rows: 预估扫描行数</li>
+<li>+– Extra: Using index&#x2F;Using filesort&#x2F;Using temporary</li>
+<li>|</li>
+<li>v</li>
+<li>Step 3: 针对性优化</li>
+<li>+– type&#x3D;ALL -&gt; 添加索引</li>
+<li>+– Using filesort -&gt; 排序字段建索引</li>
+<li>+– Using temporary -&gt; 分组字段建索引</li>
+<li>+– 回表过多 -&gt; 覆盖索引</li>
+<li>+– 深分页 -&gt; 延迟关联</li>
+<li>+– 索引失效 -&gt; 修复写法</li>
+<li>|</li>
+<li>v</li>
+<li>Step 4: 验证效果</li>
+<li>+– 再次EXPLAIN确认优化效果</li>
+<li>+– 压测验证性能提升</li>
+<li>+– 上线观察慢查询日志</li>
+<li>|</li>
+<li>v</li>
+<li>Step 5: 持续监控</li>
+<li>+– 定期查看慢查询Top N</li>
+<li>+– 新SQL上线前EXPLAIN审查</li>
+<li>+– 定期ANALYZE TABLE更新统计信息</li>
+</ul>
+<h2 id="索引优化策略对比"><a href="#索引优化策略对比" class="headerlink" title="索引优化策略对比"></a>索引优化策略对比</h2><table>
+<thead>
+<tr>
+<th>优化策略</th>
+<th>适用场景</th>
+<th>优化效果</th>
+<th>代价</th>
+<th>智慧矿山案例</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>添加单列索引</td>
+<td>等值查询条件</td>
+<td>高</td>
+<td>写入变慢</td>
+<td>考勤日期索引</td>
+</tr>
+<tr>
+<td>组合索引</td>
+<td>多条件查询</td>
+<td>高</td>
+<td>写入变慢</td>
+<td>状态+时间索引</td>
+</tr>
+<tr>
+<td>覆盖索引</td>
+<td>查询列少</td>
+<td>中</td>
+<td>索引变大</td>
+<td>设备ID+状态查询</td>
+</tr>
+<tr>
+<td>前缀索引</td>
+<td>长字符串</td>
+<td>中</td>
+<td>精度降低</td>
+<td>设备名称前缀索引</td>
+</tr>
+<tr>
+<td>函数索引</td>
+<td>函数查询(MySQL 8.0+)</td>
+<td>高</td>
+<td>写入变慢</td>
+<td>DATE函数索引</td>
+</tr>
+<tr>
+<td>延迟关联</td>
+<td>深分页</td>
+<td>高</td>
+<td>SQL复杂</td>
+<td>隐患列表分页</td>
+</tr>
+<tr>
+<td>FORCE INDEX</td>
+<td>优化器选错索引</td>
+<td>中</td>
+<td>硬编码</td>
+<td>物资统计查询</td>
+</tr>
+</tbody></table>
+<h2 id="面试题精选"><a href="#面试题精选" class="headerlink" title="面试题精选"></a>面试题精选</h2><table>
+<thead>
+<tr>
+<th>序号</th>
+<th>面试题</th>
+<th>关键答案</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>如何定位慢查询？</td>
+<td>slow_query_log + pt-query-digest</td>
+</tr>
+<tr>
+<td>2</td>
+<td>EXPLAIN的type有哪些？</td>
+<td>system&#x2F;const&#x2F;eq_ref&#x2F;ref&#x2F;range&#x2F;index&#x2F;ALL</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Using filesort一定慢吗？</td>
+<td>不一定，数据量小时可接受</td>
+</tr>
+<tr>
+<td>4</td>
+<td>覆盖索引是什么？</td>
+<td>查询字段都在索引中，不需要回表</td>
+</tr>
+<tr>
+<td>5</td>
+<td>深分页怎么优化？</td>
+<td>延迟关联、游标分页</td>
+</tr>
+<tr>
+<td>6</td>
+<td>为什么索引列不能用函数？</td>
+<td>函数导致索引失效，改为范围查询</td>
+</tr>
+<tr>
+<td>7</td>
+<td>隐式转换是什么？</td>
+<td>字段和值类型不一致，导致索引失效</td>
+</tr>
+<tr>
+<td>8</td>
+<td>FORCE INDEX什么时候用？</td>
+<td>优化器选错索引时，但要慎用</td>
+</tr>
+<tr>
+<td>9</td>
+<td>批量插入怎么优化？</td>
+<td>INSERT…VALUES批量、LOAD DATA</td>
+</tr>
+<tr>
+<td>10</td>
+<td>COUNT(*)和COUNT(1)区别？</td>
+<td>InnoDB下无区别，都遍历</td>
+</tr>
+<tr>
+<td>11</td>
+<td>ORDER BY怎么优化？</td>
+<td>排序字段建索引、覆盖索引</td>
+</tr>
+<tr>
+<td>12</td>
+<td>GROUP BY怎么优化？</td>
+<td>分组字段建索引、WHERE先过滤</td>
+</tr>
+<tr>
+<td>13</td>
+<td>子查询和JOIN哪个快？</td>
+<td>通常JOIN更快，但看场景</td>
+</tr>
+<tr>
+<td>14</td>
+<td>索引越多越好吗？</td>
+<td>不是，影响写入性能和存储</td>
+</tr>
+<tr>
+<td>15</td>
+<td>如何监控SQL性能？</td>
+<td>slow_query_log + performance_schema</td>
+</tr>
+</tbody></table>
+<h3 id="优化检查清单"><a href="#优化检查清单" class="headerlink" title="优化检查清单"></a>优化检查清单</h3><table>
+<thead>
+<tr>
+<th>序号</th>
+<th>检查项</th>
+<th>检查方法</th>
+<th>优化建议</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>是否全表扫描</td>
+<td>EXPLAIN type&#x3D;ALL</td>
+<td>添加索引</td>
+</tr>
+<tr>
+<td>2</td>
+<td>是否Using filesort</td>
+<td>EXPLAIN Extra</td>
+<td>排序字段建索引</td>
+</tr>
+<tr>
+<td>3</td>
+<td>是否Using temporary</td>
+<td>EXPLAIN Extra</td>
+<td>分组字段建索引</td>
+</tr>
+<tr>
+<td>4</td>
+<td>是否回表过多</td>
+<td>EXPLAIN Extra无Using index</td>
+<td>覆盖索引</td>
+</tr>
+<tr>
+<td>5</td>
+<td>索引是否失效</td>
+<td>EXPLAIN key&#x3D;NULL</td>
+<td>修复查询写法</td>
+</tr>
+<tr>
+<td>6</td>
+<td>深分页是否优化</td>
+<td>LIMIT&gt;10000</td>
+<td>延迟关联</td>
+</tr>
+<tr>
+<td>7</td>
+<td>JOIN是否有索引</td>
+<td>EXPLAIN被驱动表</td>
+<td>JOIN字段建索引</td>
+</tr>
+<tr>
+<td>8</td>
+<td>子查询是否优化</td>
+<td>EXPLAIN select_type</td>
+<td>改为JOIN</td>
+</tr>
+<tr>
+<td>9</td>
+<td>是否SELECT *</td>
+<td>代码review</td>
+<td>只查需要的列</td>
+</tr>
+<tr>
+<td>10</td>
+<td>慢查询是否监控</td>
+<td>slow_query_log</td>
+<td>开启监控</td>
+</tr>
+</tbody></table>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2022/06/07/56f52eaac53f/">MyBatis-Plus逻辑删除与乐观锁——数据安全双保险</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2022/06/30/d100ed77f10a/">MySQL建表规范——从野路子到工程化</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/MySQL/" class="tag" aria-label="标签: #MySQL">#MySQL</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(255)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2022/" aria-label="分类: 2022">
+                        2022
+                        <span>(75)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2022/MySQL/" aria-label="分类: MySQL">
+                        MySQL
+                        <span>(3)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+    <footer>
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>
