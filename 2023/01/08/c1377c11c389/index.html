@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2023-01-08T10:48:49.000Z">
   <article class="post">
     <h1 class="post-title">Spring IOC容器初始化流程——从refresh到Bean就绪</h1>
 
@@ -211,18 +211,24 @@ article: http://ogp.me/ns/article#">
 <p>在实际场景中，系统包含上百个Bean，启动时需要加载设备配置、初始化MQTT连接、预热缓存、注册定时任务。深入理解IOC容器初始化流程后，能准确定位启动失败属于refresh的哪个阶段，排查效率大幅提升。</p>
 <p>实际项目技术栈：SpringBoot 2.7 + SpringCloud + Nacos + MyBatis-Plus + Redis + MQTT + 时序数据库。整个系统涉及设备监控、安全预警、人员定位、生产调度等模块。</p>
 <h2 id="IOC容器的本质"><a href="#IOC容器的本质" class="headerlink" title="IOC容器的本质"></a>IOC容器的本质</h2><p>IOC（Inversion of Control）控制反转，本质是将对象的创建、依赖管理从代码中剥离，交给容器统一管理。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│                  IOC容器核心概念                           │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  传统开发：主动new对象，自己管理依赖                       │</span><br><span class="line">│  ┌─────────┐  new   ┌─────────┐  new   ┌─────────┐    │</span><br><span class="line">│  │UserService│──────→│UserMapper│──────→│DataSource│    │</span><br><span class="line">│  └─────────┘       └─────────┘       └─────────┘    │</span><br><span class="line">│  问题：对象之间强耦合，改一个牵一发动全身                   │</span><br><span class="line">│                                                          │</span><br><span class="line">│  IOC容器：声明需要什么，容器负责创建和注入                  │</span><br><span class="line">│  ┌─────────┐          ┌──────────────────┐             │</span><br><span class="line">│  │UserService│←───────│  IOC 容器          │             │</span><br><span class="line">│  │@Autowired │  注入   │  创建+管理+注入    │             │</span><br><span class="line">│  └─────────┘          └──────────────────┘             │</span><br><span class="line">│       ↑                      ↑                          │</span><br><span class="line">│       │                      │                          │</span><br><span class="line">│  ┌─────────┐          ┌─────────┐                      │</span><br><span class="line">│  │UserMapper│          │DataSource│                      │</span><br><span class="line">│  └─────────┘          └─────────┘                      │</span><br><span class="line">│  好处：对象解耦，只声明依赖，容器负责装配                    │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;IOC容器核心概念&quot;]</span><br><span class="line">    N2[&quot;UserService&quot;]</span><br><span class="line">    N3[&quot;UserMapper&quot;]</span><br><span class="line">    N4[&quot;DataSource&quot;]</span><br><span class="line">    N5[&quot;UserService IOC 容器 Autowired 注入 创建&quot;]</span><br><span class="line">    N6[&quot;管理&quot;]</span><br><span class="line">    N7[&quot;注入&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N5 --&gt; N3</span><br><span class="line">    N5 --&gt; N4</span><br><span class="line">    N6 --&gt; N3</span><br><span class="line">    N6 --&gt; N4</span><br><span class="line">    N7 --&gt; N3</span><br><span class="line">    N7 --&gt; N4</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h2 id="容器初始化全流程"><a href="#容器初始化全流程" class="headerlink" title="容器初始化全流程"></a>容器初始化全流程</h2><h3 id="核心入口：AbstractApplicationContext-refresh"><a href="#核心入口：AbstractApplicationContext-refresh" class="headerlink" title="核心入口：AbstractApplicationContext.refresh()"></a>核心入口：AbstractApplicationContext.refresh()</h3><p>这是Spring容器初始化的核心方法，所有关键步骤都在这里：</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│              AbstractApplicationContext.refresh() 12步流程    │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                             │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 1. prepareRefresh()                                  │   │</span><br><span class="line">│  │    准备工作：记录启动时间、设置状态标志、初始化属性源    │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 2. obtainFreshBeanFactory()                          │   │</span><br><span class="line">│  │    创建BeanFactory，读取BeanDefinition                │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 3. prepareBeanFactory(beanFactory)                   │   │</span><br><span class="line">│  │    对BeanFactory进行功能填充                           │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 4. postProcessBeanFactory(beanFactory)               │   │</span><br><span class="line">│  │    子类扩展点：允许修改BeanFactory                     │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 5. invokeBeanFactoryPostProcessors(beanFactory)      │   │</span><br><span class="line">│  │    ★ 执行BeanFactoryPostProcessor（修改BeanDefinition）│   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 6. registerBeanPostProcessors(beanFactory)           │   │</span><br><span class="line">│  │    注册BeanPostProcessor（Bean创建前后的钩子）         │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 7. initMessageSource()                               │   │</span><br><span class="line">│  │    初始化国际化资源                                    │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 8. initApplicationEventMulticaster()                 │   │</span><br><span class="line">│  │    初始化事件广播器                                    │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 9. onRefresh()                                       │   │</span><br><span class="line">│  │    子类扩展点：初始化特殊Bean                          │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 10. registerListeners()                              │   │</span><br><span class="line">│  │     注册监听器                                        │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 11. finishBeanFactoryInitialization(beanFactory)     │   │</span><br><span class="line">│  │     ★★ 关键步骤：实例化所有非懒加载的单例Bean         │   │</span><br><span class="line">│  └─────────────────────┬───────────────────────────────┘   │</span><br><span class="line">│                        ▼                                     │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │ 12. finishRefresh()                                  │   │</span><br><span class="line">│  │     完成刷新：发布相应事件                            │   │</span><br><span class="line">│  └─────────────────────────────────────────────────────┘   │</span><br><span class="line">│                                                             │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;AbstractApplicationContext.refresh()&quot;]</span><br><span class="line">    N2[&quot;1. prepareRefresh() 准备工作记录启动时间&quot;]</span><br><span class="line">    N3[&quot;设置状态标志&quot;]</span><br><span class="line">    N4[&quot;初始化属性源&quot;]</span><br><span class="line">    N5[&quot;12步流程&quot;]</span><br><span class="line">    N6[&quot;2. obtainFreshBeanFactory() 创建BeanFactory&quot;]</span><br><span class="line">    N7[&quot;读取BeanDefinition&quot;]</span><br><span class="line">    N8[&quot;3.&quot;]</span><br><span class="line">    N9[&quot;prepareBeanFactory(beanFactory)&quot;]</span><br><span class="line">    N10[&quot;对BeanFactory进行功能填充&quot;]</span><br><span class="line">    N11[&quot;4. postProcessBeanFactory(beanFactory) 子类扩展点&quot;]</span><br><span class="line">    N12[&quot;允许修改BeanFactory&quot;]</span><br><span class="line">    N13[&quot;5.&quot;]</span><br><span class="line">    N14[&quot;invokeBeanFactoryPostProcessors(beanFactory)&quot;]</span><br><span class="line">    N15[&quot;执行BeanFactoryPostProcessor修改BeanDefinition&quot;]</span><br><span class="line">    N16[&quot;6.&quot;]</span><br><span class="line">    N17[&quot;registerBeanPostProcessors(beanFactory)&quot;]</span><br><span class="line">    N18[&quot;注册BeanPostProcessorBean创建前后的钩子&quot;]</span><br><span class="line">    N19[&quot;7.&quot;]</span><br><span class="line">    N20[&quot;initMessageSource()&quot;]</span><br><span class="line">    N21[&quot;初始化国际化资源&quot;]</span><br><span class="line">    N22[&quot;8.&quot;]</span><br><span class="line">    N23[&quot;initApplicationEventMulticaster()&quot;]</span><br><span class="line">    N24[&quot;初始化事件广播器&quot;]</span><br><span class="line">    N25[&quot;9. onRefresh() 子类扩展点&quot;]</span><br><span class="line">    N26[&quot;初始化特殊Bean&quot;]</span><br><span class="line">    N27[&quot;10.&quot;]</span><br><span class="line">    N28[&quot;registerListeners()&quot;]</span><br><span class="line">    N29[&quot;注册监听器&quot;]</span><br><span class="line">    N30[&quot;实例化所有非懒加载的单例Bean&quot;]</span><br><span class="line">    N31[&quot;12. finishRefresh() 完成刷新&quot;]</span><br><span class="line">    N32[&quot;发布相应事件&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N5 --&gt; N2</span><br><span class="line">    N5 --&gt; N3</span><br><span class="line">    N5 --&gt; N4</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N2 --&gt; N7</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N3 --&gt; N7</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N6 --&gt; N9</span><br><span class="line">    N6 --&gt; N10</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line">    N7 --&gt; N10</span><br><span class="line">    N8 --&gt; N11</span><br><span class="line">    N8 --&gt; N12</span><br><span class="line">    N9 --&gt; N11</span><br><span class="line">    N9 --&gt; N12</span><br><span class="line">    N10 --&gt; N11</span><br><span class="line">    N10 --&gt; N12</span><br><span class="line">    N11 --&gt; N13</span><br><span class="line">    N11 --&gt; N14</span><br><span class="line">    N11 --&gt; N15</span><br><span class="line">    N12 --&gt; N13</span><br><span class="line">    N12 --&gt; N14</span><br><span class="line">    N12 --&gt; N15</span><br><span class="line">    N13 --&gt; N16</span><br><span class="line">    N13 --&gt; N17</span><br><span class="line">    N13 --&gt; N18</span><br><span class="line">    N14 --&gt; N16</span><br><span class="line">    N14 --&gt; N17</span><br><span class="line">    N14 --&gt; N18</span><br><span class="line">    N15 --&gt; N16</span><br><span class="line">    N15 --&gt; N17</span><br><span class="line">    N15 --&gt; N18</span><br><span class="line">    N16 --&gt; N19</span><br><span class="line">    N16 --&gt; N20</span><br><span class="line">    N16 --&gt; N21</span><br><span class="line">    N17 --&gt; N19</span><br><span class="line">    N17 --&gt; N20</span><br><span class="line">    N17 --&gt; N21</span><br><span class="line">    N18 --&gt; N19</span><br><span class="line">    N18 --&gt; N20</span><br><span class="line">    N18 --&gt; N21</span><br><span class="line">    N19 --&gt; N22</span><br><span class="line">    N19 --&gt; N23</span><br><span class="line">    N19 --&gt; N24</span><br><span class="line">    N20 --&gt; N22</span><br><span class="line">    N20 --&gt; N23</span><br><span class="line">    N20 --&gt; N24</span><br><span class="line">    N21 --&gt; N22</span><br><span class="line">    N21 --&gt; N23</span><br><span class="line">    N21 --&gt; N24</span><br><span class="line">    N22 --&gt; N25</span><br><span class="line">    N22 --&gt; N26</span><br><span class="line">    N23 --&gt; N25</span><br><span class="line">    N23 --&gt; N26</span><br><span class="line">    N24 --&gt; N25</span><br><span class="line">    N24 --&gt; N26</span><br><span class="line">    N25 --&gt; N27</span><br><span class="line">    N25 --&gt; N28</span><br><span class="line">    N25 --&gt; N29</span><br><span class="line">    N26 --&gt; N27</span><br><span class="line">    N26 --&gt; N28</span><br><span class="line">    N26 --&gt; N29</span><br><span class="line">    N27 --&gt; N30</span><br><span class="line">    N28 --&gt; N30</span><br><span class="line">    N29 --&gt; N30</span><br><span class="line">    N30 --&gt; N31</span><br><span class="line">    N30 --&gt; N32</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="refresh-源码"><a href="#refresh-源码" class="headerlink" title="refresh()源码"></a>refresh()源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">refresh</span><span class="params">()</span> <span class="keyword">throws</span> BeansException, IllegalStateException &#123;</span><br><span class="line">    <span class="keyword">synchronized</span> (<span class="built_in">this</span>.startupShutdownMonitor) &#123;</span><br><span class="line">        <span class="comment">// 1. 准备工作：记录启动时间、设置状态标志、初始化属性源</span></span><br><span class="line">        prepareRefresh();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 创建BeanFactory，读取BeanDefinition</span></span><br><span class="line">        <span class="type">ConfigurableListableBeanFactory</span> <span class="variable">beanFactory</span> <span class="operator">=</span> obtainFreshBeanFactory();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 对BeanFactory进行功能填充</span></span><br><span class="line">        prepareBeanFactory(beanFactory);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 4. 子类扩展点：允许修改BeanFactory</span></span><br><span class="line">            postProcessBeanFactory(beanFactory);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 5. 执行BeanFactoryPostProcessor（修改BeanDefinition）</span></span><br><span class="line">            invokeBeanFactoryPostProcessors(beanFactory);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 6. 注册BeanPostProcessor（Bean创建前后的钩子）</span></span><br><span class="line">            registerBeanPostProcessors(beanFactory);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 7. 初始化国际化资源</span></span><br><span class="line">            initMessageSource();</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 8. 初始化事件广播器</span></span><br><span class="line">            initApplicationEventMulticaster();</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 9. 子类扩展点：初始化特殊Bean</span></span><br><span class="line">            onRefresh();</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 10. 注册监听器</span></span><br><span class="line">            registerListeners();</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 11. 关键步骤：实例化所有非懒加载的单例Bean</span></span><br><span class="line">            finishBeanFactoryInitialization(beanFactory);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 12. 完成刷新：发布相应事件</span></span><br><span class="line">            finishRefresh();</span><br><span class="line">        &#125; <span class="keyword">catch</span> (BeansException ex) &#123;</span><br><span class="line">            destroyBeans();</span><br><span class="line">            cancelRefresh(ex);</span><br><span class="line">            <span class="keyword">throw</span> ex;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="第2步详解：BeanDefinition的加载"><a href="#第2步详解：BeanDefinition的加载" class="headerlink" title="第2步详解：BeanDefinition的加载"></a>第2步详解：BeanDefinition的加载</h3><p>BeanDefinition是Bean的”图纸”，描述了Bean的所有元信息：</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BeanDefinition核心属性</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">BeanDefinition</span> &#123;</span><br><span class="line">    String <span class="title function_">getBeanClassName</span><span class="params">()</span>;       <span class="comment">// 类名</span></span><br><span class="line">    <span class="type">boolean</span> <span class="title function_">isSingleton</span><span class="params">()</span>;           <span class="comment">// 是否单例</span></span><br><span class="line">    <span class="type">boolean</span> <span class="title function_">isLazyInit</span><span class="params">()</span>;            <span class="comment">// 是否懒加载</span></span><br><span class="line">    String[] getDependsOn();         <span class="comment">// 依赖的Bean</span></span><br><span class="line">    ConstructorArgumentValues <span class="title function_">getConstructorArgumentValues</span><span class="params">()</span>;  <span class="comment">// 构造参数</span></span><br><span class="line">    MutablePropertyValues <span class="title function_">getPropertyValues</span><span class="params">()</span>;                 <span class="comment">// 属性值</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="BeanDefinition加载流程图"><a href="#BeanDefinition加载流程图" class="headerlink" title="BeanDefinition加载流程图"></a>BeanDefinition加载流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│            BeanDefinition 加载流程                        │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  ┌──────────────────┐  ┌──────────────────┐            │</span><br><span class="line">│  │ 配置文件(XML)     │  │ 注解(@Component)  │            │</span><br><span class="line">│  └────────┬─────────┘  └────────┬─────────┘            │</span><br><span class="line">│           │                      │                        │</span><br><span class="line">│           ▼                      ▼                        │</span><br><span class="line">│  ┌──────────────────┐  ┌──────────────────┐            │</span><br><span class="line">│  │XmlBeanDefinition │  │ClassPathBeanDef  │            │</span><br><span class="line">│  │Reader            │  │Scanner           │            │</span><br><span class="line">│  └────────┬─────────┘  └────────┬─────────┘            │</span><br><span class="line">│           │                      │                        │</span><br><span class="line">│           ▼                      ▼                        │</span><br><span class="line">│  ┌──────────────────────────────────────────────┐       │</span><br><span class="line">│  │         BeanDefinition (Bean的图纸)            │       │</span><br><span class="line">│  │  - className: com.mine.DeviceService          │       │</span><br><span class="line">│  │  - scope: singleton                           │       │</span><br><span class="line">│  │  - lazyInit: false                            │       │</span><br><span class="line">│  │  - dependsOn: []                              │       │</span><br><span class="line">│  └──────────────────────┬───────────────────────┘       │</span><br><span class="line">│                         │                                │</span><br><span class="line">│                         ▼                                │</span><br><span class="line">│  ┌──────────────────────────────────────────────┐       │</span><br><span class="line">│  │    BeanDefinitionRegistry (注册中心)           │       │</span><br><span class="line">│  │    ConcurrentHashMap&lt;beanName, BeanDefinition&gt;│       │</span><br><span class="line">│  └──────────────────────────────────────────────┘       │</span><br><span class="line">│                                                          │</span><br><span class="line">│  SpringBoot方式：@EnableAutoConfiguration触发             │</span><br><span class="line">│  自动配置类的BeanDefinition加载                           │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="BeanDefinition加载流程图"><a href="#BeanDefinition加载流程图" class="headerlink" title="BeanDefinition加载流程图"></a>BeanDefinition加载流程图</h3><ul>
+<li>className: com.mine.DeviceService</li>
+<li>scope: singleton</li>
+<li>lazyInit: false</li>
+<li>dependsOn: []</li>
+</ul>
 <h3 id="第5步详解：BeanFactoryPostProcessor"><a href="#第5步详解：BeanFactoryPostProcessor" class="headerlink" title="第5步详解：BeanFactoryPostProcessor"></a>第5步详解：BeanFactoryPostProcessor</h3><p>这是修改BeanDefinition的扩展点，SpringBoot自动配置的核心就在这里：</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 自定义BeanFactoryPostProcessor</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MyBeanFactoryPostProcessor</span> <span class="keyword">implements</span> <span class="title class_">BeanFactoryPostProcessor</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">postProcessBeanFactory</span><span class="params">(ConfigurableListableBeanFactory beanFactory)</span> &#123;</span><br><span class="line">        <span class="type">BeanDefinition</span> <span class="variable">bd</span> <span class="operator">=</span> beanFactory.getBeanDefinition(<span class="string">&quot;deviceService&quot;</span>);</span><br><span class="line">        <span class="comment">// 动态修改Bean的属性</span></span><br><span class="line">        bd.setScope(ConfigurableBeanFactory.SCOPE_PROTOTYPE);</span><br><span class="line">        bd.setLazyInit(<span class="literal">true</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
@@ -230,14 +236,23 @@ article: http://ogp.me/ns/article#">
 <h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="getBean核心流程"><a href="#getBean核心流程" class="headerlink" title="getBean核心流程"></a>getBean核心流程</h2><p>getBean → doGetBean 是Bean获取和创建的核心方法：</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">protected</span> &lt;T&gt; T <span class="title function_">doGetBean</span><span class="params">(String name, Class&lt;T&gt; requiredType,</span></span><br><span class="line"><span class="params">                          Object[] args, <span class="type">boolean</span> typeCheckOnly)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 转换Bean名称（处理别名、&amp;前缀）</span></span><br><span class="line">    <span class="type">String</span> <span class="variable">beanName</span> <span class="operator">=</span> transformedBeanName(name);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 2. 尝试从三级缓存获取（解决循环依赖的关键）</span></span><br><span class="line">    <span class="type">Object</span> <span class="variable">sharedInstance</span> <span class="operator">=</span> getSingleton(beanName);</span><br><span class="line">    <span class="keyword">if</span> (sharedInstance != <span class="literal">null</span> &amp;&amp; args == <span class="literal">null</span>) &#123;</span><br><span class="line">        bean = getObjectForBeanInstance(sharedInstance, name, beanName, <span class="literal">null</span>);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">// 3. 检查是否存在循环依赖</span></span><br><span class="line">        <span class="keyword">if</span> (isPrototypeCurrentlyInCreation(beanName)) &#123;</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BeanCurrentlyInCreationException</span>(beanName);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 4. 如果有父容器，委托父容器创建</span></span><br><span class="line">        <span class="type">BeanFactory</span> <span class="variable">parentBeanFactory</span> <span class="operator">=</span> getParentBeanFactory();</span><br><span class="line">        <span class="keyword">if</span> (parentBeanFactory != <span class="literal">null</span> &amp;&amp; !containsBeanDefinition(beanName)) &#123;</span><br><span class="line">            <span class="keyword">return</span> parentBeanFactory.getBean(nameToLookup, requiredType);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 5. 标记Bean正在创建</span></span><br><span class="line">        <span class="keyword">if</span> (!typeCheckOnly) &#123;</span><br><span class="line">            markBeanAsCreated(beanName);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 6. 获取依赖的Bean，先创建依赖</span></span><br><span class="line">        String[] dependsOn = mbd.getDependsOn();</span><br><span class="line">        <span class="keyword">if</span> (dependsOn != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">for</span> (String dep : dependsOn) &#123;</span><br><span class="line">                getBean(dep);  <span class="comment">// 递归创建依赖Bean</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 7. 创建Bean实例</span></span><br><span class="line">        <span class="keyword">if</span> (mbd.isSingleton()) &#123;</span><br><span class="line">            sharedInstance = getSingleton(beanName,</span><br><span class="line">                () -&gt; createBean(beanName, mbd, args));</span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (mbd.isPrototype()) &#123;</span><br><span class="line">            <span class="type">Object</span> <span class="variable">prototypeInstance</span> <span class="operator">=</span> createBean(beanName, mbd, args);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> adaptBeanInstance(name, bean, requiredType);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="getBean流程图"><a href="#getBean流程图" class="headerlink" title="getBean流程图"></a>getBean流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    getBean 核心流程                            │</span><br><span class="line">├──────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                              │</span><br><span class="line">│  getBean(beanName)                                           │</span><br><span class="line">│       │                                                      │</span><br><span class="line">│       ▼                                                      │</span><br><span class="line">│  ┌────────────────────────────────────┐                     │</span><br><span class="line">│  │ 1. 转换Bean名称                     │                     │</span><br><span class="line">│  │    处理别名、&amp;前缀                   │                     │</span><br><span class="line">│  └────────────────┬───────────────────┘                     │</span><br><span class="line">│                   ▼                                          │</span><br><span class="line">│  ┌────────────────────────────────────┐                     │</span><br><span class="line">│  │ 2. 从缓存获取                       │                     │</span><br><span class="line">│  │    一级→二级→三级缓存               │                     │</span><br><span class="line">│  └────────┬──────────────┬────────────┘                     │</span><br><span class="line">│           │              │                                   │</span><br><span class="line">│       缓存命中        缓存未命中                              │</span><br><span class="line">│           │              │                                   │</span><br><span class="line">│           ▼              ▼                                   │</span><br><span class="line">│     返回缓存对象   ┌─────────────────────┐                  │</span><br><span class="line">│                   │ 3. 检查循环依赖       │                  │</span><br><span class="line">│                   │    prototype报错      │                  │</span><br><span class="line">│                   └────────┬────────────┘                    │</span><br><span class="line">│                            ▼                                 │</span><br><span class="line">│                   ┌─────────────────────┐                   │</span><br><span class="line">│                   │ 4. 委托父容器        │                   │</span><br><span class="line">│                   │    (如果有父容器)     │                   │</span><br><span class="line">│                   └────────┬────────────┘                    │</span><br><span class="line">│                            ▼                                 │</span><br><span class="line">│                   ┌─────────────────────┐                   │</span><br><span class="line">│                   │ 5. 创建依赖Bean      │                   │</span><br><span class="line">│                   │    getBean(dep)      │                   │</span><br><span class="line">│                   └────────┬────────────┘                    │</span><br><span class="line">│                            ▼                                 │</span><br><span class="line">│                   ┌─────────────────────┐                   │</span><br><span class="line">│                   │ 6. 创建Bean实例      │                   │</span><br><span class="line">│                   │    singleton: 缓存   │                   │</span><br><span class="line">│                   │    prototype: 新建   │                   │</span><br><span class="line">│                   └─────────────────────┘                   │</span><br><span class="line">│                                                              │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="getBean流程图"><a href="#getBean流程图" class="headerlink" title="getBean流程图"></a>getBean流程图</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;getBean 核心流程&quot;]</span><br><span class="line">    N2[&quot;1. 转换Bean名称 处理别名&quot;]</span><br><span class="line">    N3[&quot;前缀&quot;]</span><br><span class="line">    N4[&quot;2. 从缓存获取 一级&quot;]</span><br><span class="line">    N5[&quot;二级&quot;]</span><br><span class="line">    N6[&quot;三级缓存&quot;]</span><br><span class="line">    N7[&quot;3. 检查循环依赖&quot;]</span><br><span class="line">    N8[&quot;prototype报错&quot;]</span><br><span class="line">    N9[&quot;4. 委托父容器 (如果有父容器)&quot;]</span><br><span class="line">    N10[&quot;5. 创建依赖Bean&quot;]</span><br><span class="line">    N11[&quot;getBean(dep)&quot;]</span><br><span class="line">    N12[&quot;6. 创建Bean实例 singleton&quot;]</span><br><span class="line">    N13[&quot;缓存 prototype&quot;]</span><br><span class="line">    N14[&quot;新建&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line">    N9 --&gt; N10</span><br><span class="line">    N9 --&gt; N11</span><br><span class="line">    N10 --&gt; N12</span><br><span class="line">    N10 --&gt; N13</span><br><span class="line">    N10 --&gt; N14</span><br><span class="line">    N11 --&gt; N12</span><br><span class="line">    N11 --&gt; N13</span><br><span class="line">    N11 --&gt; N14</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h2 id="线上问题排查：循环依赖"><a href="#线上问题排查：循环依赖" class="headerlink" title="线上问题排查：循环依赖"></a>线上问题排查：循环依赖</h2><h3 id="问题场景"><a href="#问题场景" class="headerlink" title="问题场景"></a>问题场景</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">实际项目启动报错：</span><br><span class="line">The dependencies of some of the beans in the application context form a cycle:</span><br><span class="line"></span><br><span class="line">   ┌─────┐</span><br><span class="line">   |  deviceService (field private AlertService)</span><br><span class="line">   ↑     ↓</span><br><span class="line">   |  alertService (field private DeviceService)</span><br><span class="line">   └─────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="线上问题排查：循环依赖"><a href="#线上问题排查：循环依赖" class="headerlink" title="线上问题排查：循环依赖"></a>线上问题排查：循环依赖</h2><h3 id="问题场景"><a href="#问题场景" class="headerlink" title="问题场景"></a>问题场景</h3><p><strong>流程步骤</strong>：</p>
+<ol>
+<li>实际项目启动报错：</li>
+<li>The dependencies of some of the beans in the application context form a cycle:</li>
+<li>┌─────┐</li>
+<li>|  deviceService (field private AlertService)</li>
+<li>↑     ↓</li>
+<li>|  alertService (field private DeviceService) → ┘</li>
+</ol>
 <h3 id="Spring如何解决循环依赖"><a href="#Spring如何解决循环依赖" class="headerlink" title="Spring如何解决循环依赖"></a>Spring如何解决循环依赖</h3><p>Spring通过三级缓存解决单例Bean的循环依赖：</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// DefaultSingletonBeanRegistry</span></span><br><span class="line"><span class="comment">// 一级缓存：存放完全初始化好的Bean</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, Object&gt; singletonObjects = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line"><span class="comment">// 二级缓存：存放早期暴露的Bean（已实例化，未填充属性）</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, Object&gt; earlySingletonObjects = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line"><span class="comment">// 三级缓存：存放Bean的工厂对象（用于生成早期引用）</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, ObjectFactory&lt;?&gt;&gt; singletonFactories = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br></pre></td></tr></table></figure>
 
-<h3 id="三级缓存解决循环依赖流程图"><a href="#三级缓存解决循环依赖流程图" class="headerlink" title="三级缓存解决循环依赖流程图"></a>三级缓存解决循环依赖流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│           三级缓存解决 DeviceService ↔ AlertService 循环依赖   │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                             │</span><br><span class="line">│  创建 DeviceService:                                        │</span><br><span class="line">│  ┌────────────────────────────────────────────────┐        │</span><br><span class="line">│  │ 1. 实例化 DeviceService (new DeviceService())   │        │</span><br><span class="line">│  │ 2. 将ObjectFactory放入三级缓存                   │        │</span><br><span class="line">│  │    singletonFactories.put(&quot;deviceService&quot;,      │        │</span><br><span class="line">│  │      () -&gt; getEarlyBeanReference(&quot;deviceService&quot;))│      │</span><br><span class="line">│  │ 3. 填充属性 → 发现需要 AlertService              │        │</span><br><span class="line">│  └──────────────────────┬─────────────────────────┘        │</span><br><span class="line">│                         ▼                                   │</span><br><span class="line">│  创建 AlertService:                                         │</span><br><span class="line">│  ┌────────────────────────────────────────────────┐        │</span><br><span class="line">│  │ 4. 实例化 AlertService (new AlertService())     │        │</span><br><span class="line">│  │ 5. 将ObjectFactory放入三级缓存                   │        │</span><br><span class="line">│  │ 6. 填充属性 → 发现需要 DeviceService             │        │</span><br><span class="line">│  └──────────────────────┬─────────────────────────┘        │</span><br><span class="line">│                         ▼                                   │</span><br><span class="line">│  获取 DeviceService 早期引用:                                │</span><br><span class="line">│  ┌────────────────────────────────────────────────┐        │</span><br><span class="line">│  │ 7. 从三级缓存获取ObjectFactory                   │        │</span><br><span class="line">│  │ 8. 调用getObject() → 获取早期引用                │        │</span><br><span class="line">│  │    （如果需要AOP代理，这里返回代理对象）           │        │</span><br><span class="line">│  │ 9. 将早期引用放入二级缓存                         │        │</span><br><span class="line">│  │    earlySingletonObjects.put(&quot;deviceService&quot;, ref)│      │</span><br><span class="line">│  │ 10. 删除三级缓存                                  │        │</span><br><span class="line">│  │    singletonFactories.remove(&quot;deviceService&quot;)    │        │</span><br><span class="line">│  └──────────────────────┬─────────────────────────┘        │</span><br><span class="line">│                         ▼                                   │</span><br><span class="line">│  AlertService 完成初始化:                                    │</span><br><span class="line">│  ┌────────────────────────────────────────────────┐        │</span><br><span class="line">│  │ 11. AlertService属性填充完成                      │        │</span><br><span class="line">│  │ 12. AlertService初始化完成                        │        │</span><br><span class="line">│  │ 13. 放入一级缓存                                  │        │</span><br><span class="line">│  │     singletonObjects.put(&quot;alertService&quot;, ...)   │        │</span><br><span class="line">│  └──────────────────────┬─────────────────────────┘        │</span><br><span class="line">│                         ▼                                   │</span><br><span class="line">│  DeviceService 完成初始化:                                   │</span><br><span class="line">│  ┌────────────────────────────────────────────────┐        │</span><br><span class="line">│  │ 14. DeviceService注入AlertService                │        │</span><br><span class="line">│  │ 15. DeviceService初始化完成                       │        │</span><br><span class="line">│  │ 16. 放入一级缓存                                  │        │</span><br><span class="line">│  │ 17. 删除二级缓存                                  │        │</span><br><span class="line">│  └────────────────────────────────────────────────┘        │</span><br><span class="line">│                                                             │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="三级缓存解决循环依赖流程图"><a href="#三级缓存解决循环依赖流程图" class="headerlink" title="三级缓存解决循环依赖流程图"></a>三级缓存解决循环依赖流程图</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;三级缓存解决 DeviceService&quot;]</span><br><span class="line">    N2[&quot;1. 实例化 DeviceService&quot;]</span><br><span class="line">    N3[&quot;(new&quot;]</span><br><span class="line">    N4[&quot;DeviceService()) 2.&quot;]</span><br><span class="line">    N5[&quot;将ObjectFactory放入三级缓存&quot;]</span><br><span class="line">    N6[&quot;singletonFactories.put(deviceService,&quot;]</span><br><span class="line">    N7[&quot;() -&quot;]</span><br><span class="line">    N8[&quot;getEarlyBeanReference(deviceService))&quot;]</span><br><span class="line">    N9[&quot;3. 填充属性&quot;]</span><br><span class="line">    N10[&quot;AlertService 循环依赖&quot;]</span><br><span class="line">    N11[&quot;发现需要 AlertService&quot;]</span><br><span class="line">    N12[&quot;4. 实例化 AlertService&quot;]</span><br><span class="line">    N13[&quot;(new AlertService())&quot;]</span><br><span class="line">    N14[&quot;5.&quot;]</span><br><span class="line">    N15[&quot;6. 填充属性&quot;]</span><br><span class="line">    N16[&quot;发现需要 DeviceService&quot;]</span><br><span class="line">    N17[&quot;7.&quot;]</span><br><span class="line">    N18[&quot;从三级缓存获取ObjectFactory&quot;]</span><br><span class="line">    N19[&quot;8. 调用getObject()&quot;]</span><br><span class="line">    N20[&quot;获取早期引用 如果需要AOP代理&quot;]</span><br><span class="line">    N21[&quot;11.&quot;]</span><br><span class="line">    N22[&quot;AlertService属性填充完成&quot;]</span><br><span class="line">    N23[&quot;12.&quot;]</span><br><span class="line">    N24[&quot;AlertService初始化完成&quot;]</span><br><span class="line">    N25[&quot;13. 放入一级缓存&quot;]</span><br><span class="line">    N26[&quot;singletonObjects.put(alertService,&quot;]</span><br><span class="line">    N27[&quot;...)&quot;]</span><br><span class="line">    N28[&quot;14.&quot;]</span><br><span class="line">    N29[&quot;DeviceService注入AlertService&quot;]</span><br><span class="line">    N30[&quot;15.&quot;]</span><br><span class="line">    N31[&quot;DeviceService初始化完成&quot;]</span><br><span class="line">    N32[&quot;16. 放入一级缓存 17.&quot;]</span><br><span class="line">    N33[&quot;删除二级缓存&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N1 --&gt; N5</span><br><span class="line">    N1 --&gt; N6</span><br><span class="line">    N1 --&gt; N7</span><br><span class="line">    N1 --&gt; N8</span><br><span class="line">    N1 --&gt; N9</span><br><span class="line">    N10 --&gt; N2</span><br><span class="line">    N10 --&gt; N3</span><br><span class="line">    N10 --&gt; N4</span><br><span class="line">    N10 --&gt; N5</span><br><span class="line">    N10 --&gt; N6</span><br><span class="line">    N10 --&gt; N7</span><br><span class="line">    N10 --&gt; N8</span><br><span class="line">    N10 --&gt; N9</span><br><span class="line">    N2 --&gt; N11</span><br><span class="line">    N3 --&gt; N11</span><br><span class="line">    N4 --&gt; N11</span><br><span class="line">    N5 --&gt; N11</span><br><span class="line">    N6 --&gt; N11</span><br><span class="line">    N7 --&gt; N11</span><br><span class="line">    N8 --&gt; N11</span><br><span class="line">    N9 --&gt; N11</span><br><span class="line">    N11 --&gt; N12</span><br><span class="line">    N11 --&gt; N13</span><br><span class="line">    N11 --&gt; N14</span><br><span class="line">    N11 --&gt; N5</span><br><span class="line">    N11 --&gt; N15</span><br><span class="line">    N12 --&gt; N16</span><br><span class="line">    N13 --&gt; N16</span><br><span class="line">    N14 --&gt; N16</span><br><span class="line">    N5 --&gt; N16</span><br><span class="line">    N15 --&gt; N16</span><br><span class="line">    N16 --&gt; N17</span><br><span class="line">    N16 --&gt; N18</span><br><span class="line">    N16 --&gt; N19</span><br><span class="line">    N17 --&gt; N20</span><br><span class="line">    N18 --&gt; N20</span><br><span class="line">    N19 --&gt; N20</span><br><span class="line">    N20 --&gt; N21</span><br><span class="line">    N20 --&gt; N22</span><br><span class="line">    N20 --&gt; N23</span><br><span class="line">    N20 --&gt; N24</span><br><span class="line">    N20 --&gt; N25</span><br><span class="line">    N20 --&gt; N26</span><br><span class="line">    N20 --&gt; N27</span><br><span class="line">    N21 --&gt; N28</span><br><span class="line">    N21 --&gt; N29</span><br><span class="line">    N21 --&gt; N30</span><br><span class="line">    N21 --&gt; N31</span><br><span class="line">    N21 --&gt; N32</span><br><span class="line">    N21 --&gt; N33</span><br><span class="line">    N22 --&gt; N28</span><br><span class="line">    N22 --&gt; N29</span><br><span class="line">    N22 --&gt; N30</span><br><span class="line">    N22 --&gt; N31</span><br><span class="line">    N22 --&gt; N32</span><br><span class="line">    N22 --&gt; N33</span><br><span class="line">    N23 --&gt; N28</span><br><span class="line">    N23 --&gt; N29</span><br><span class="line">    N23 --&gt; N30</span><br><span class="line">    N23 --&gt; N31</span><br><span class="line">    N23 --&gt; N32</span><br><span class="line">    N23 --&gt; N33</span><br><span class="line">    N24 --&gt; N28</span><br><span class="line">    N24 --&gt; N29</span><br><span class="line">    N24 --&gt; N30</span><br><span class="line">    N24 --&gt; N31</span><br><span class="line">    N24 --&gt; N32</span><br><span class="line">    N24 --&gt; N33</span><br><span class="line">    N25 --&gt; N28</span><br><span class="line">    N25 --&gt; N29</span><br><span class="line">    N25 --&gt; N30</span><br><span class="line">    N25 --&gt; N31</span><br><span class="line">    N25 --&gt; N32</span><br><span class="line">    N25 --&gt; N33</span><br><span class="line">    N26 --&gt; N28</span><br><span class="line">    N26 --&gt; N29</span><br><span class="line">    N26 --&gt; N30</span><br><span class="line">    N26 --&gt; N31</span><br><span class="line">    N26 --&gt; N32</span><br><span class="line">    N26 --&gt; N33</span><br><span class="line">    N27 --&gt; N28</span><br><span class="line">    N27 --&gt; N29</span><br><span class="line">    N27 --&gt; N30</span><br><span class="line">    N27 --&gt; N31</span><br><span class="line">    N27 --&gt; N32</span><br><span class="line">    N27 --&gt; N33</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="三级缓存为什么不能是两级？"><a href="#三级缓存为什么不能是两级？" class="headerlink" title="三级缓存为什么不能是两级？"></a>三级缓存为什么不能是两级？</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 三级缓存存的是ObjectFactory，不是直接存对象</span></span><br><span class="line"><span class="comment">// 原因：如果Bean需要AOP代理，必须在获取早期引用时判断</span></span><br><span class="line">singletonFactories.put(beanName, () -&gt; getEarlyBeanReference(beanName, mbd, bean));</span><br><span class="line"></span><br><span class="line"><span class="comment">// getEarlyBeanReference会判断是否需要创建代理</span></span><br><span class="line"><span class="comment">// 如果只有两级缓存，就无法区分&quot;正常创建代理&quot;和&quot;循环依赖时提前创建代理&quot;</span></span><br><span class="line"><span class="comment">// 可能导致代理对象不一致</span></span><br></pre></td></tr></table></figure>
 
@@ -308,13 +323,36 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="第12步：finishRefresh"><a href="#第12步：finishRefresh" class="headerlink" title="第12步：finishRefresh()"></a>第12步：finishRefresh()</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title function_">finishRefresh</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="comment">// 清除资源缓存</span></span><br><span class="line">    clearResourceCaches();</span><br><span class="line">    <span class="comment">// 初始化LifecycleProcessor</span></span><br><span class="line">    initLifecycleProcessor();</span><br><span class="line">    <span class="comment">// 通知LifecycleProcessor刷新</span></span><br><span class="line">    getLifecycleProcessor().onRefresh();</span><br><span class="line">    <span class="comment">// 发布ContextRefreshedEvent</span></span><br><span class="line">    publishEvent(<span class="keyword">new</span> <span class="title class_">ContextRefreshedEvent</span>(<span class="built_in">this</span>));</span><br><span class="line">    <span class="comment">// 注册到LiveBeansView（JMX监控）</span></span><br><span class="line">    LiveBeansView.registerApplicationContext(<span class="built_in">this</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h2 id="Bean创建完整流程图"><a href="#Bean创建完整流程图" class="headerlink" title="Bean创建完整流程图"></a>Bean创建完整流程图</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                Bean 创建完整流程                               │</span><br><span class="line">├──────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                              │</span><br><span class="line">│  getBean(beanName)                                           │</span><br><span class="line">│       │                                                      │</span><br><span class="line">│       ▼                                                      │</span><br><span class="line">│  doGetBean()                                                 │</span><br><span class="line">│       │                                                      │</span><br><span class="line">│       ├─ 1. 从三级缓存获取 → 有则返回                         │</span><br><span class="line">│       │                                                      │</span><br><span class="line">│       └─ 2. 缓存未命中 → 创建Bean                            │</span><br><span class="line">│              │                                               │</span><br><span class="line">│              ▼                                               │</span><br><span class="line">│         createBean()                                         │</span><br><span class="line">│              │                                               │</span><br><span class="line">│              ▼                                               │</span><br><span class="line">│         doCreateBean()                                       │</span><br><span class="line">│              │                                               │</span><br><span class="line">│              ├── createBeanInstance()  → 实例化              │</span><br><span class="line">│              │    ├── 工厂方法                               │</span><br><span class="line">│              │    ├── 构造函数自动注入                        │</span><br><span class="line">│              │    └── 无参构造函数                            │</span><br><span class="line">│              │                                               │</span><br><span class="line">│              ├── addSingletonFactory() → 提前暴露到三级缓存   │</span><br><span class="line">│              │                                               │</span><br><span class="line">│              ├── populateBean()  → 属性注入                   │</span><br><span class="line">│              │    ├── @Autowired                             │</span><br><span class="line">│              │    ├── @Resource                              │</span><br><span class="line">│              │    └── @Value                                 │</span><br><span class="line">│              │                                               │</span><br><span class="line">│              ├── initializeBean() → 初始化                   │</span><br><span class="line">│              │    ├── invokeAwareMethods()                    │</span><br><span class="line">│              │    ├── applyBeanPostProcessorsBeforeInit()     │</span><br><span class="line">│              │    ├── invokeInitMethods()                     │</span><br><span class="line">│              │    │    ├── @PostConstruct                     │</span><br><span class="line">│              │    │    ├── afterPropertiesSet()               │</span><br><span class="line">│              │    │    └── init-method                        │</span><br><span class="line">│              │    └── applyBeanPostProcessorsAfterInit()      │</span><br><span class="line">│              │         └── AOP代理创建                        │</span><br><span class="line">│              │                                               │</span><br><span class="line">│              └── addSingleton() → 放入一级缓存               │</span><br><span class="line">│                                                              │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-
+<h2 id="Bean创建完整流程图"><a href="#Bean创建完整流程图" class="headerlink" title="Bean创建完整流程图"></a>Bean创建完整流程图</h2><p><strong>Bean 创建完整流程</strong>：</p>
+<p><strong>getBean(beanName)</strong>：</p>
+<ul>
+<li>▼</li>
+<li>doGetBean()</li>
+</ul>
+<p><strong>└─ 2. 缓存未命中 → 创建Bean</strong>：</p>
+<ul>
+<li>▼</li>
+<li>createBean()</li>
+<li>▼</li>
+<li>doCreateBean()</li>
+</ul>
+<p><strong>└── 无参构造函数</strong>：</p>
+<p><strong>└── @Value</strong>：</p>
+<p><strong>└── init-method</strong>：</p>
+<ul>
+<li>└── applyBeanPostProcessorsAfterInit()</li>
+<li>└── AOP代理创建</li>
+<li>└── addSingleton() → 放入一级缓存</li>
+</ul>
 <h2 id="面试加分题：如何手动触发refresh？"><a href="#面试加分题：如何手动触发refresh？" class="headerlink" title="面试加分题：如何手动触发refresh？"></a>面试加分题：如何手动触发refresh？</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 在某些场景下需要手动刷新容器</span></span><br><span class="line"><span class="comment">// 例如：动态修改配置后重新加载Bean</span></span><br><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RefreshConfig</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> ApplicationContext applicationContext;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">refreshContext</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (applicationContext <span class="keyword">instanceof</span> ConfigurableApplicationContext) &#123;</span><br><span class="line">            <span class="type">ConfigurableApplicationContext</span> <span class="variable">ctx</span> <span class="operator">=</span> (ConfigurableApplicationContext) applicationContext;</span><br><span class="line">            ctx.refresh();  <span class="comment">// 重新刷新容器</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h2 id="BeanFactoryPostProcessor执行顺序"><a href="#BeanFactoryPostProcessor执行顺序" class="headerlink" title="BeanFactoryPostProcessor执行顺序"></a>BeanFactoryPostProcessor执行顺序</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│         BeanFactoryPostProcessor 执行顺序                 │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  1. BeanDefinitionRegistryPostProcessor                  │</span><br><span class="line">│     .postProcessBeanDefinitionRegistry()                 │</span><br><span class="line">│     - 优先级最高，可以注册新的BeanDefinition              │</span><br><span class="line">│     - 按实现PriorityOrdered、Ordered、无顺序排序          │</span><br><span class="line">│                                                          │</span><br><span class="line">│  2. BeanDefinitionRegistryPostProcessor                  │</span><br><span class="line">│     .postProcessBeanFactory()                            │</span><br><span class="line">│     - 在所有RegistryPostProcessor的Registry回调后执行     │</span><br><span class="line">│                                                          │</span><br><span class="line">│  3. BeanFactoryPostProcessor                             │</span><br><span class="line">│     .postProcessBeanFactory()                            │</span><br><span class="line">│     - 最后执行                                           │</span><br><span class="line">│     - 同样按PriorityOrdered、Ordered、无顺序排序          │</span><br><span class="line">│                                                          │</span><br><span class="line">│  实际项目中的PostProcessor:                           │</span><br><span class="line">│  ┌────────────────────────────────────────────┐         │</span><br><span class="line">│  │ ConfigurationClassPostProcessor              │         │</span><br><span class="line">│  │ 处理@Configuration、@ComponentScan等          │         │</span><br><span class="line">│  │ 优先级最高(PriorityOrdered)                  │         │</span><br><span class="line">│  ├────────────────────────────────────────────┤         │</span><br><span class="line">│  │ PropertySourcesPlaceholderConfigurer         │         │</span><br><span class="line">│  │ 处理$&#123;&#125;占位符                                │         │</span><br><span class="line">│  ├────────────────────────────────────────────┤         │</span><br><span class="line">│  │ 自定义DeviceServicePostProcessor             │         │</span><br><span class="line">│  │ 动态注册设备服务Bean                         │         │</span><br><span class="line">│  └────────────────────────────────────────────┘         │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="BeanFactoryPostProcessor执行顺序"><a href="#BeanFactoryPostProcessor执行顺序" class="headerlink" title="BeanFactoryPostProcessor执行顺序"></a>BeanFactoryPostProcessor执行顺序</h2><ul>
+<li>优先级最高，可以注册新的BeanDefinition</li>
+<li>按实现PriorityOrdered、Ordered、无顺序排序</li>
+<li>在所有RegistryPostProcessor的Registry回调后执行</li>
+<li>最后执行</li>
+<li>同样按PriorityOrdered、Ordered、无顺序排序</li>
+</ul>
 <h2 id="finishBeanFactoryInitialization详解"><a href="#finishBeanFactoryInitialization详解" class="headerlink" title="finishBeanFactoryInitialization详解"></a>finishBeanFactoryInitialization详解</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">protected</span> <span class="keyword">void</span> <span class="title function_">finishBeanFactoryInitialization</span><span class="params">(ConfigurableListableBeanFactory beanFactory)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 初始化ConversionService（类型转换服务）</span></span><br><span class="line">    <span class="keyword">if</span> (beanFactory.containsBean(CONVERSION_SERVICE_BEAN_NAME) &amp;&amp;</span><br><span class="line">        beanFactory.isTypeMatch(CONVERSION_SERVICE_BEAN_NAME, ConversionService.class)) &#123;</span><br><span class="line">        beanFactory.setConversionService(</span><br><span class="line">            beanFactory.getBean(CONVERSION_SERVICE_BEAN_NAME, ConversionService.class));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 2. 注册默认的嵌入式值解析器（处理@Value中的$&#123;&#125;）</span></span><br><span class="line">    <span class="keyword">if</span> (!beanFactory.hasEmbeddedValueResolver()) &#123;</span><br><span class="line">        beanFactory.addEmbeddedValueResolver(strVal -&gt;</span><br><span class="line">            getEnvironment().resolvePlaceholders(strVal));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 3. 提前初始化LoadTimeWeaverAware</span></span><br><span class="line">    String[] weaverAwareNames = beanFactory.getBeanNamesForType(LoadTimeWeaverAware.class);</span><br><span class="line">    <span class="keyword">for</span> (String weaverAwareName : weaverAwareNames) &#123;</span><br><span class="line">        getBean(weaverAwareName);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 4. 停止使用临时ClassLoader</span></span><br><span class="line">    beanFactory.setTempClassLoader(<span class="literal">null</span>);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 5. 冻结配置（不允许再修改BeanDefinition）</span></span><br><span class="line">    beanFactory.freezeConfiguration();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 6. 实例化所有非懒加载的单例Bean</span></span><br><span class="line">    beanFactory.preInstantiateSingletons();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h2 id="IOC容器初始化排错指南"><a href="#IOC容器初始化排错指南" class="headerlink" title="IOC容器初始化排错指南"></a>IOC容器初始化排错指南</h2><table>
@@ -468,14 +506,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
                         2023
-                        <span>(68)</span>
+                        <span>(61)</span>
                     </a>
                 </div>
             
@@ -641,7 +679,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2023-12-10T04:24:32.000Z">
   <article class="post">
     <h1 class="post-title">MyBatis动态SQL源码——XmlScriptBuilder解析</h1>
 
@@ -209,11 +209,48 @@ article: http://ogp.me/ns/article#">
       <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
 <p>实际项目的告警查询接口需求极其复杂：需要根据告警类型、级别、设备、区域、时间范围、处理状态等多达10个条件进行组合查询，且每个条件都是可选的。最初用Java代码拼接SQL字符串，代码又长又乱，稍不注意就拼出语法错误的SQL。后来全面改用MyBatis动态SQL，if&#x2F;choose&#x2F;foreach&#x2F;where&#x2F;set的组合让代码简洁了很多，但一直没搞懂这些标签底层是怎么工作的——为什么where标签能自动去掉开头的AND？为什么foreach生成的参数映射叫做__frch_item？</p>
 <p>深入XmlScriptBuilder源码后，理解了动态SQL的解析和执行原理：每个动态标签对应一个SqlNode实现类，执行时递归apply拼接SQL，OGNL表达式做条件判断。理解了SqlNode体系，动态SQL不再是黑盒。</p>
-<h2 id="动态SQL解析入口"><a href="#动态SQL解析入口" class="headerlink" title="动态SQL解析入口"></a>动态SQL解析入口</h2><h3 id="XML解析流程"><a href="#XML解析流程" class="headerlink" title="XML解析流程"></a>XML解析流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                 MyBatis 动态SQL解析全流程                       │</span><br><span class="line">│                                                               │</span><br><span class="line">│  1. XMLMapperBuilder.parse()                                  │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  2. configurationElement() → 解析&lt;mapper&gt;标签                  │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  3. buildStatementFromContext() → 解析select/insert/update/delete│</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  4. XMLStatementBuilder.parseStatementNode()                  │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  5. XMLScriptBuilder.parseScriptNode() → 解析SQL内容           │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  6. 判断是否是动态SQL                                          │</span><br><span class="line">│     ├─ 包含$&#123;&#125;或动态标签 → DynamicSqlSource                    │</span><br><span class="line">│     └─ 纯静态文本+#&#123; &#125;      → RawSqlSource                    │</span><br><span class="line">│                                                               │</span><br><span class="line">│  关键区别：                                                    │</span><br><span class="line">│  DynamicSqlSource → 每次执行都重新解析SqlNode树                 │</span><br><span class="line">│  RawSqlSource     → 只解析一次，缓存BoundSql                   │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="动态SQL解析入口"><a href="#动态SQL解析入口" class="headerlink" title="动态SQL解析入口"></a>动态SQL解析入口</h2><h3 id="XML解析流程"><a href="#XML解析流程" class="headerlink" title="XML解析流程"></a>XML解析流程</h3><p><strong>MyBatis 动态SQL解析全流程</strong>：</p>
+<ul>
+<li><ol>
+<li>XMLMapperBuilder.parse()</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="2">
+<li>configurationElement() → 解析<mapper>标签</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="3">
+<li>buildStatementFromContext() → 解析select&#x2F;insert&#x2F;update&#x2F;delete</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="4">
+<li>XMLStatementBuilder.parseStatementNode()</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="5">
+<li>XMLScriptBuilder.parseScriptNode() → 解析SQL内容</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="6">
+<li>判断是否是动态SQL</li>
+</ol>
+</li>
+</ul>
+<p><strong>└─ 纯静态文本+#{ }      → RawSqlSource</strong>：</p>
+<ul>
+<li>关键区别：</li>
+<li>DynamicSqlSource → 每次执行都重新解析SqlNode树</li>
+<li>RawSqlSource     → 只解析一次，缓存BoundSql</li>
+</ul>
 <h3 id="XMLScriptBuilder-parseDynamicNode-源码"><a href="#XMLScriptBuilder-parseDynamicNode-源码" class="headerlink" title="XMLScriptBuilder.parseDynamicNode()源码"></a>XMLScriptBuilder.parseDynamicNode()源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// XMLScriptBuilder.parseDynamicNode()</span></span><br><span class="line"><span class="comment">// 解析SQL节点，构建SqlNode树</span></span><br><span class="line"><span class="keyword">public</span> MixedSqlNode <span class="title function_">parseDynamicNode</span><span class="params">(XNode node)</span> &#123;</span><br><span class="line">    List&lt;SqlNode&gt; contents = <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    <span class="type">NodeList</span> <span class="variable">children</span> <span class="operator">=</span> node.getNode().getChildNodes();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; children.getLength(); i++) &#123;</span><br><span class="line">        <span class="type">XNode</span> <span class="variable">child</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">XNode</span>(configuration, children.item(i));</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">if</span> (child.getNode().getNodeType() == Node.CDATA_SECTION_NODE || </span><br><span class="line">            child.getNode().getNodeType() == Node.TEXT_NODE) &#123;</span><br><span class="line">            <span class="comment">// 文本节点</span></span><br><span class="line">            <span class="type">String</span> <span class="variable">data</span> <span class="operator">=</span> child.getStringBody(<span class="string">&quot;&quot;</span>);</span><br><span class="line">            <span class="type">TextSqlNode</span> <span class="variable">textSqlNode</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TextSqlNode</span>(data);</span><br><span class="line">            <span class="keyword">if</span> (textSqlNode.isDynamic()) &#123;</span><br><span class="line">                <span class="comment">// 包含$&#123;&#125; → 动态文本节点</span></span><br><span class="line">                contents.add(textSqlNode);</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                <span class="comment">// 纯文本或含#&#123;&#125; → 静态文本节点</span></span><br><span class="line">                contents.add(<span class="keyword">new</span> <span class="title class_">StaticTextSqlNode</span>(data));</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (child.getNode().getNodeType() == Node.ELEMENT_NODE) &#123;</span><br><span class="line">            <span class="comment">// 标签节点：if/choose/foreach/set/where/trim</span></span><br><span class="line">            <span class="type">String</span> <span class="variable">nodeName</span> <span class="operator">=</span> child.getNode().getNodeName();</span><br><span class="line">            <span class="type">SqlNode</span> <span class="variable">sqlNode</span> <span class="operator">=</span> parseNode(child, nodeName);</span><br><span class="line">            contents.add(sqlNode);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">MixedSqlNode</span>(contents);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> SqlNode <span class="title function_">parseNode</span><span class="params">(XNode node, String nodeName)</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">switch</span> (nodeName) &#123;</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;if&quot;</span>      -&gt; parseIfNode(node);</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;choose&quot;</span>  -&gt; parseChooseNode(node);</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;when&quot;</span>    -&gt; parseIfNode(node);      <span class="comment">// when等价于if</span></span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;otherwise&quot;</span> -&gt; parseOtherwiseNode(node);</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;foreach&quot;</span> -&gt; parseForeachNode(node);</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;set&quot;</span>     -&gt; parseSetNode(node);</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;where&quot;</span>   -&gt; parseWhereNode(node);</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;trim&quot;</span>    -&gt; parseTrimNode(node);</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;bind&quot;</span>    -&gt; parseBindNode(node);</span><br><span class="line">        <span class="keyword">default</span> -&gt; <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BuilderException</span>(<span class="string">&quot;Unknown dynamic SQL tag: &quot;</span> + nodeName);</span><br><span class="line">    &#125;;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h2 id="SqlNode体系"><a href="#SqlNode体系" class="headerlink" title="SqlNode体系"></a>SqlNode体系</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    SqlNode 继承体系                             │</span><br><span class="line">│                                                               │</span><br><span class="line">│  SqlNode（接口）                                               │</span><br><span class="line">│    ├── boolean apply(DynamicContext context)                  │</span><br><span class="line">│    │                                                          │</span><br><span class="line">│    ├── MixedSqlNode         → 混合节点（包含多个SqlNode）       │</span><br><span class="line">│    ├── StaticTextSqlNode    → 静态文本（纯文本或含#&#123;&#125;）         │</span><br><span class="line">│    ├── TextSqlNode          → 动态文本（含$&#123;&#125;）                 │</span><br><span class="line">│    ├── IfSqlNode            → &lt;if&gt;标签                         │</span><br><span class="line">│    ├── ChooseSqlNode        → &lt;choose&gt;标签                     │</span><br><span class="line">│    ├── ForEachSqlNode       → &lt;foreach&gt;标签                    │</span><br><span class="line">│    ├── WhereSqlNode         → &lt;where&gt;标签                      │</span><br><span class="line">│    ├── SetSqlNode           → &lt;set&gt;标签                        │</span><br><span class="line">│    ├── TrimSqlNode          → &lt;trim&gt;标签                       │</span><br><span class="line">│    ├── VarDeclSqlNode       → &lt;bind&gt;标签                       │</span><br><span class="line">│    └── ChooseSqlNode        → &lt;choose&gt;/&lt;when&gt;/&lt;otherwise&gt;     │</span><br><span class="line">│                                                               │</span><br><span class="line">│  核心方法：apply(DynamicContext context)                       │</span><br><span class="line">│  → 将当前节点生成的SQL追加到DynamicContext的StringBuilder中     │</span><br><span class="line">│  → 返回true表示追加成功，false表示条件不满足                    │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">动态SQL执行流程：</span><br><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│  DynamicSqlSource.getBoundSql()                               │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  创建 DynamicContext (绑定参数 + StringBuilder)               │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  rootSqlNode.apply(context) → 递归遍历SqlNode树               │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  MixedSqlNode.apply() → 遍历子节点依次apply                   │</span><br><span class="line">│    ├── StaticTextSqlNode.apply() → 追加纯文本                 │</span><br><span class="line">│    ├── TextSqlNode.apply() → 替换$&#123;&#125;后追加                    │</span><br><span class="line">│    ├── IfSqlNode.apply() → OGNL判断，条件成立则追加子节点SQL   │</span><br><span class="line">│    ├── ForEachSqlNode.apply() → 遍历集合，每个元素追加子节点SQL│</span><br><span class="line">│    ├── WhereSqlNode.apply() → TrimSqlNode处理前缀后缀         │</span><br><span class="line">│    └── SetSqlNode.apply() → TrimSqlNode处理前缀后缀           │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  得到完整SQL字符串 + 附加参数                                   │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  SqlSourceBuilder.parse() → #&#123;&#125;替换为? + 生成ParameterMapping │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  返回 BoundSql                                                │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h2 id="SqlNode体系"><a href="#SqlNode体系" class="headerlink" title="SqlNode体系"></a>SqlNode体系</h2><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;SqlNode 继承体系&quot;]</span><br><span class="line">    N2[&quot;StringBuilder)  rootSqlNode.apply(context)&quot;]</span><br><span class="line">    N3[&quot;SqlNode接口&quot;]</span><br><span class="line">    N4[&quot;递归遍历SqlNode树&quot;]</span><br><span class="line">    N5[&quot;MixedSqlNode.apply()&quot;]</span><br><span class="line">    N6[&quot;遍历子节点依次apply&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h2 id="if标签源码"><a href="#if标签源码" class="headerlink" title="if标签源码"></a>if标签源码</h2><h3 id="解析"><a href="#解析" class="headerlink" title="解析"></a>解析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// XMLScriptBuilder.parseIfNode()</span></span><br><span class="line"><span class="keyword">private</span> SqlNode <span class="title function_">parseIfNode</span><span class="params">(XNode node)</span> &#123;</span><br><span class="line">    <span class="type">String</span> <span class="variable">test</span> <span class="operator">=</span> node.getStringAttribute(<span class="string">&quot;test&quot;</span>);</span><br><span class="line">    <span class="type">SqlNode</span> <span class="variable">contents</span> <span class="operator">=</span> parseDynamicNode(node);  <span class="comment">// 递归解析子节点</span></span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">IfSqlNode</span>(contents, test);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
@@ -223,26 +260,116 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="执行-1"><a href="#执行-1" class="headerlink" title="执行"></a>执行</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ForEachSqlNode</span> <span class="keyword">implements</span> <span class="title class_">SqlNode</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> ExpressionEvaluator evaluator;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlNode contents;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String collectionExpression;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String open;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String close;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String separator;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String item;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String index;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">apply</span><span class="params">(DynamicContext context)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 获取集合参数</span></span><br><span class="line">        Iterable&lt;?&gt; iterable = evaluator.evaluateIterable(</span><br><span class="line">            collectionExpression, context.getBindings());</span><br><span class="line"></span><br><span class="line">        <span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">        <span class="type">boolean</span> <span class="variable">first</span> <span class="operator">=</span> <span class="literal">true</span>;</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 2. 追加open</span></span><br><span class="line">        applyOpen(context);</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">for</span> (Object o : iterable) &#123;</span><br><span class="line">            <span class="type">DynamicContext</span> <span class="variable">oldContext</span> <span class="operator">=</span> context;</span><br><span class="line">            <span class="comment">// 3. 为每个元素创建子上下文</span></span><br><span class="line">            <span class="keyword">if</span> (first || separator == <span class="literal">null</span>) &#123;</span><br><span class="line">                context = <span class="keyword">new</span> <span class="title class_">PrefixedContext</span>(context, <span class="string">&quot;&quot;</span>);</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                context = <span class="keyword">new</span> <span class="title class_">PrefixedContext</span>(context, separator);</span><br><span class="line">            &#125;</span><br><span class="line">            first = <span class="literal">false</span>;</span><br><span class="line">            </span><br><span class="line">            <span class="comment">// 4. 设置item和index变量到上下文</span></span><br><span class="line">            <span class="type">int</span> <span class="variable">uniqueNumber</span> <span class="operator">=</span> context.getUniqueNumber();</span><br><span class="line">            <span class="keyword">if</span> (item != <span class="literal">null</span>) &#123;</span><br><span class="line">                <span class="comment">// item绑定：#&#123;item.xxx&#125; → 实际参数值</span></span><br><span class="line">                context.bind(item, o);</span><br><span class="line">                <span class="comment">// 同时绑定附加参数（用于foreach内部的#&#123;&#125;映射）</span></span><br><span class="line">                context.getBindings().put(<span class="string">&quot;item&quot;</span>, o);</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">if</span> (index != <span class="literal">null</span>) &#123;</span><br><span class="line">                context.bind(index, i);</span><br><span class="line">            &#125;</span><br><span class="line">            </span><br><span class="line">            <span class="comment">// 5. 应用子节点（追加SQL片段）</span></span><br><span class="line">            contents.apply(context);</span><br><span class="line">            </span><br><span class="line">            <span class="comment">// 6. 追加separator</span></span><br><span class="line">            <span class="keyword">if</span> (i &lt; iterableSize - <span class="number">1</span> &amp;&amp; separator != <span class="literal">null</span>) &#123;</span><br><span class="line">                context.appendSql(separator);</span><br><span class="line">            &#125;</span><br><span class="line">            i++;</span><br><span class="line">            context = oldContext;</span><br><span class="line">        &#125;</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 7. 追加close</span></span><br><span class="line">        applyClose(context);</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="foreach参数映射内部机制"><a href="#foreach参数映射内部机制" class="headerlink" title="foreach参数映射内部机制"></a>foreach参数映射内部机制</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│             foreach 参数映射内部变量名生成规则                    │</span><br><span class="line">│                                                               │</span><br><span class="line">│  XML:                                                         │</span><br><span class="line">│  &lt;foreach collection=&quot;ids&quot; item=&quot;id&quot; open=&quot;(&quot; close=&quot;)&quot;      │</span><br><span class="line">│           separator=&quot;,&quot;&gt;                                      │</span><br><span class="line">│      #&#123;id&#125;                                                    │</span><br><span class="line">│  &lt;/foreach&gt;                                                   │</span><br><span class="line">│                                                               │</span><br><span class="line">│  生成的SQL和参数映射：                                          │</span><br><span class="line">│  SQL: (?, ?, ?)                                               │</span><br><span class="line">│  ParameterMappings:                                           │</span><br><span class="line">│    [__frch_id_0, __frch_id_1, __frch_id_2]                   │</span><br><span class="line">│                                                               │</span><br><span class="line">│  命名规则：__frch_&#123;item&#125;_&#123;index&#125;                              │</span><br><span class="line">│  __frch_ → foreach前缀                                        │</span><br><span class="line">│  id      → item属性名                                         │</span><br><span class="line">│  0/1/2   → 元素索引                                           │</span><br><span class="line">│                                                               │</span><br><span class="line">│  这就是为什么DefaultParameterHandler                            │</span><br><span class="line">│  要优先从boundSql.additionalParameters取值                    │</span><br><span class="line">│  因为foreach生成的参数名是__frch_xxx格式                       │</span><br><span class="line">│  不在原始参数对象中                                             │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="foreach参数映射内部机制"><a href="#foreach参数映射内部机制" class="headerlink" title="foreach参数映射内部机制"></a>foreach参数映射内部机制</h3><p><strong>foreach 参数映射内部变量名生成规则</strong>：</p>
+<ul>
+<li>XML:</li>
+<li>&lt;foreach collection&#x3D;”ids” item&#x3D;”id” open&#x3D;”(“ close&#x3D;”)”</li>
+<li>separator&#x3D;”,”&gt;</li>
+<li>#{id}</li>
+<li></foreach></li>
+<li>生成的SQL和参数映射：</li>
+<li>SQL: (?, ?, ?)</li>
+<li>ParameterMappings:</li>
+<li>[__frch_id_0, __frch_id_1, __frch_id_2]</li>
+<li>命名规则：_<em>frch</em>{item}_{index}</li>
+<li>_<em>frch</em> → foreach前缀</li>
+<li>id      → item属性名</li>
+<li>0&#x2F;1&#x2F;2   → 元素索引</li>
+<li>这就是为什么DefaultParameterHandler</li>
+<li>要优先从boundSql.additionalParameters取值</li>
+<li>因为foreach生成的参数名是__frch_xxx格式</li>
+<li>不在原始参数对象中</li>
+</ul>
 <h1 id="-1"><a href="#-1" class="headerlink" title=""></a></h1><h2 id="where标签源码"><a href="#where标签源码" class="headerlink" title="where标签源码"></a>where标签源码</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// WhereSqlNode继承TrimSqlNode</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">WhereSqlNode</span> <span class="keyword">extends</span> <span class="title class_">TrimSqlNode</span> &#123;</span><br><span class="line">    <span class="comment">// 需要去除的前缀列表</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> List&lt;String&gt; prefixList = Arrays.asList(</span><br><span class="line">        <span class="string">&quot;AND &quot;</span>, <span class="string">&quot;OR &quot;</span>, <span class="string">&quot;AND\n&quot;</span>, <span class="string">&quot;OR\n&quot;</span>, <span class="string">&quot;AND\r&quot;</span>, <span class="string">&quot;OR\r&quot;</span>, <span class="string">&quot;AND\t&quot;</span>, <span class="string">&quot;OR\t&quot;</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="title function_">WhereSqlNode</span><span class="params">(Configuration configuration, SqlNode contents)</span> &#123;</span><br><span class="line">        <span class="built_in">super</span>(configuration, contents, <span class="string">&quot;WHERE&quot;</span>, prefixList, <span class="literal">null</span>, prefixList);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// TrimSqlNode：前缀后缀处理的通用实现</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">TrimSqlNode</span> <span class="keyword">implements</span> <span class="title class_">SqlNode</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlNode contents;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String prefix;              <span class="comment">// 要添加的前缀 &quot;WHERE&quot;</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String suffix;              <span class="comment">// 要添加的后缀 null</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> List&lt;String&gt; prefixesToOverride;  <span class="comment">// 要去除的前缀 [&quot;AND &quot;, &quot;OR &quot;]</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> List&lt;String&gt; suffixesToOverride;  <span class="comment">// 要去除的后缀</span></span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">apply</span><span class="params">(DynamicContext context)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 先收集子节点生成的SQL</span></span><br><span class="line">        <span class="type">FilteredDynamicContext</span> <span class="variable">filteredContext</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">FilteredDynamicContext</span>(</span><br><span class="line">            context, prefix, suffix, prefixesToOverride, suffixesToOverride);</span><br><span class="line">        contents.apply(filteredContext);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 2. 处理前缀后缀</span></span><br><span class="line">        filteredContext.applyAll();</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// where标签的等价trim：</span></span><br><span class="line"><span class="comment">// &lt;trim prefix=&quot;WHERE&quot; prefixOverrides=&quot;AND |OR &quot;&gt;</span></span><br><span class="line"><span class="comment">//   ...</span></span><br><span class="line"><span class="comment">// &lt;/trim&gt;</span></span><br><span class="line"><span class="comment">//</span></span><br><span class="line"><span class="comment">// 执行过程：</span></span><br><span class="line"><span class="comment">// 1. 子节点生成SQL: &quot;AND alert_type = ? AND level = ?&quot;</span></span><br><span class="line"><span class="comment">// 2. 去除开头AND: &quot;alert_type = ? AND level = ?&quot;</span></span><br><span class="line"><span class="comment">// 3. 添加WHERE前缀: &quot;WHERE alert_type = ? AND level = ?&quot;</span></span><br></pre></td></tr></table></figure>
 
-<h3 id="where标签-vs-1-1"><a href="#where标签-vs-1-1" class="headerlink" title="where标签 vs 1&#x3D;1"></a>where标签 vs 1&#x3D;1</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              where标签 vs WHERE 1=1 对比                       │</span><br><span class="line">│                                                               │</span><br><span class="line">│  ❌ WHERE 1=1 写法：                                          │</span><br><span class="line">│  SELECT * FROM alert WHERE 1=1                               │</span><br><span class="line">│    AND alert_type = ?                                         │</span><br><span class="line">│    AND level = ?                                              │</span><br><span class="line">│  问题：1=1导致数据库无法优化查询计划                             │</span><br><span class="line">│  某些数据库优化器会将1=1视为恒真条件                             │</span><br><span class="line">│  可能导致全表扫描而非走索引                                     │</span><br><span class="line">│                                                               │</span><br><span class="line">│  ✅ where标签写法：                                            │</span><br><span class="line">│  SELECT * FROM alert                                          │</span><br><span class="line">│  &lt;where&gt;                                                      │</span><br><span class="line">│    &lt;if test=&quot;alertType != null&quot;&gt;AND alert_type = ?&lt;/if&gt;      │</span><br><span class="line">│    &lt;if test=&quot;level != null&quot;&gt;AND level = ?&lt;/if&gt;               │</span><br><span class="line">│  &lt;/where&gt;                                                     │</span><br><span class="line">│  生成SQL: SELECT * FROM alert WHERE alert_type = ? AND level = ?│</span><br><span class="line">│  无1=1干扰，索引正常使用                                       │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="where标签-vs-1-1"><a href="#where标签-vs-1-1" class="headerlink" title="where标签 vs 1&#x3D;1"></a>where标签 vs 1&#x3D;1</h3><p><strong>where标签 vs WHERE 1&#x3D;1 对比</strong>：</p>
+<ul>
+<li>❌ WHERE 1&#x3D;1 写法：</li>
+<li>SELECT * FROM alert WHERE 1&#x3D;1</li>
+<li>AND alert_type &#x3D; ?</li>
+<li>AND level &#x3D; ?</li>
+<li>问题：1&#x3D;1导致数据库无法优化查询计划</li>
+<li>某些数据库优化器会将1&#x3D;1视为恒真条件</li>
+<li>可能导致全表扫描而非走索引</li>
+<li>✅ where标签写法：</li>
+<li>SELECT * FROM alert</li>
+<li><where></li>
+<li><if test="alertType != null">AND alert_type &#x3D; ?</if></li>
+<li><if test="level != null">AND level &#x3D; ?</if></li>
+<li></where></li>
+<li>生成SQL: SELECT * FROM alert WHERE alert_type &#x3D; ? AND level &#x3D; ?</li>
+<li>无1&#x3D;1干扰，索引正常使用</li>
+</ul>
 <h2 id="set标签源码"><a href="#set标签源码" class="headerlink" title="set标签源码"></a>set标签源码</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// SetSqlNode继承TrimSqlNode</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SetSqlNode</span> <span class="keyword">extends</span> <span class="title class_">TrimSqlNode</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> List&lt;String&gt; COMMA = Arrays.asList(<span class="string">&quot;,&quot;</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="title function_">SetSqlNode</span><span class="params">(Configuration configuration, SqlNode contents)</span> &#123;</span><br><span class="line">        <span class="built_in">super</span>(configuration, contents, <span class="string">&quot;SET&quot;</span>, <span class="literal">null</span>, <span class="literal">null</span>, COMMA);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// set标签的等价trim：</span></span><br><span class="line"><span class="comment">// &lt;trim prefix=&quot;SET&quot; suffixOverrides=&quot;,&quot;&gt;</span></span><br><span class="line"><span class="comment">//   ...</span></span><br><span class="line"><span class="comment">// &lt;/trim&gt;</span></span><br><span class="line"><span class="comment">//</span></span><br><span class="line"><span class="comment">// 执行过程：</span></span><br><span class="line"><span class="comment">// 1. 子节点生成SQL: &quot;name = ?, age = ?,&quot;</span></span><br><span class="line"><span class="comment">// 2. 去除末尾逗号: &quot;name = ?, age = ?&quot;</span></span><br><span class="line"><span class="comment">// 3. 添加SET前缀: &quot;SET name = ?, age = ?&quot;</span></span><br></pre></td></tr></table></figure>
 
 <h1 id="-2"><a href="#-2" class="headerlink" title=""></a></h1><h2 id="choose标签源码"><a href="#choose标签源码" class="headerlink" title="choose标签源码"></a>choose标签源码</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// XMLScriptBuilder.parseChooseNode()</span></span><br><span class="line"><span class="keyword">private</span> SqlNode <span class="title function_">parseChooseNode</span><span class="params">(XNode node)</span> &#123;</span><br><span class="line">    List&lt;SqlNode&gt; whenNodes = <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    <span class="type">SqlNode</span> <span class="variable">otherwiseNode</span> <span class="operator">=</span> <span class="literal">null</span>;</span><br><span class="line">    </span><br><span class="line">    <span class="type">NodeList</span> <span class="variable">children</span> <span class="operator">=</span> node.getNode().getChildNodes();</span><br><span class="line">    <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; children.getLength(); i++) &#123;</span><br><span class="line">        <span class="type">XNode</span> <span class="variable">child</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">XNode</span>(configuration, children.item(i));</span><br><span class="line">        <span class="type">String</span> <span class="variable">nodeName</span> <span class="operator">=</span> child.getNode().getNodeName();</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">if</span> (<span class="string">&quot;when&quot;</span>.equals(nodeName)) &#123;</span><br><span class="line">            whenNodes.add(parseIfNode(child));  <span class="comment">// when等价于if</span></span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (<span class="string">&quot;otherwise&quot;</span>.equals(nodeName)) &#123;</span><br><span class="line">            otherwiseNode = parseOtherwiseNode(child);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">ChooseSqlNode</span>(whenNodes, otherwiseNode);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ChooseSqlNode</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ChooseSqlNode</span> <span class="keyword">implements</span> <span class="title class_">SqlNode</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> List&lt;SqlNode&gt; ifNodes;      <span class="comment">// when节点列表</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlNode defaultNode;        <span class="comment">// otherwise节点</span></span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">apply</span><span class="params">(DynamicContext context)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 依次判断when条件</span></span><br><span class="line">        <span class="keyword">for</span> (SqlNode ifNode : ifNodes) &#123;</span><br><span class="line">            <span class="keyword">if</span> (ifNode.apply(context)) &#123;</span><br><span class="line">                <span class="keyword">return</span> <span class="literal">true</span>;  <span class="comment">// 第一个成立的when，后续不再判断</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 2. 所有when都不成立，执行otherwise</span></span><br><span class="line">        <span class="keyword">if</span> (defaultNode != <span class="literal">null</span>) &#123;</span><br><span class="line">            defaultNode.apply(context);</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h1 id="-3"><a href="#-3" class="headerlink" title=""></a></h1><h2 id="trim标签源码"><a href="#trim标签源码" class="headerlink" title="trim标签源码"></a>trim标签源码</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// TrimSqlNode — 前缀后缀处理的通用实现</span></span><br><span class="line"><span class="comment">// where和set都是trim的语法糖</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">TrimSqlNode</span> <span class="keyword">implements</span> <span class="title class_">SqlNode</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlNode contents;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String prefix;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String suffix;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> List&lt;String&gt; prefixesToOverride;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> List&lt;String&gt; suffixesToOverride;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">apply</span><span class="params">(DynamicContext context)</span> &#123;</span><br><span class="line">        <span class="type">FilteredDynamicContext</span> <span class="variable">filteredContext</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">FilteredDynamicContext</span>(</span><br><span class="line">            context, prefix, suffix, prefixesToOverride, suffixesToOverride);</span><br><span class="line">        contents.apply(filteredContext);</span><br><span class="line">        filteredContext.applyAll();</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">class</span> <span class="title class_">FilteredDynamicContext</span> <span class="keyword">extends</span> <span class="title class_">DynamicContext</span> &#123;</span><br><span class="line">        <span class="keyword">private</span> DynamicContext delegate;</span><br><span class="line">        <span class="keyword">private</span> String prefix;</span><br><span class="line">        <span class="keyword">private</span> String suffix;</span><br><span class="line">        <span class="keyword">private</span> List&lt;String&gt; prefixesToOverride;</span><br><span class="line">        <span class="keyword">private</span> List&lt;String&gt; suffixesToOverride;</span><br><span class="line">        <span class="keyword">private</span> <span class="type">StringBuilder</span> <span class="variable">sqlBuffer</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">StringBuilder</span>();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">applyAll</span><span class="params">()</span> &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> sqlBuffer.toString().trim();</span><br><span class="line">            <span class="keyword">if</span> (sql.length() &gt; <span class="number">0</span>) &#123;</span><br><span class="line">                <span class="comment">// 去除指定的前缀</span></span><br><span class="line">                <span class="keyword">for</span> (String toRemove : prefixesToOverride) &#123;</span><br><span class="line">                    <span class="keyword">if</span> (sql.toUpperCase().startsWith(toRemove.toUpperCase())) &#123;</span><br><span class="line">                        sql = sql.substring(toRemove.length());</span><br><span class="line">                        <span class="keyword">break</span>;</span><br><span class="line">                    &#125;</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="comment">// 去除指定的后缀</span></span><br><span class="line">                <span class="keyword">for</span> (String toRemove : suffixesToOverride) &#123;</span><br><span class="line">                    <span class="keyword">if</span> (sql.toUpperCase().endsWith(toRemove.toUpperCase())) &#123;</span><br><span class="line">                        sql = sql.substring(<span class="number">0</span>, sql.length() - toRemove.length());</span><br><span class="line">                        <span class="keyword">break</span>;</span><br><span class="line">                    &#125;</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="comment">// 添加前缀和后缀</span></span><br><span class="line">                <span class="keyword">if</span> (prefix != <span class="literal">null</span>) sql = prefix + <span class="string">&quot; &quot;</span> + sql;</span><br><span class="line">                <span class="keyword">if</span> (suffix != <span class="literal">null</span>) sql = sql + <span class="string">&quot; &quot;</span> + suffix;</span><br><span class="line">            &#125;</span><br><span class="line">            delegate.appendSql(sql);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 等价关系对照表：</span></span><br><span class="line"><span class="comment">// ┌──────────┬────────────────────────────────────────────────┐</span></span><br><span class="line"><span class="comment">// │ 标签      │ 等价trim                                        │</span></span><br><span class="line"><span class="comment">// ├──────────┼────────────────────────────────────────────────┤</span></span><br><span class="line"><span class="comment">// │ &lt;where&gt;  │ &lt;trim prefix=&quot;WHERE&quot; prefixOverrides=&quot;AND|OR&quot;&gt; │</span></span><br><span class="line"><span class="comment">// │ &lt;set&gt;    │ &lt;trim prefix=&quot;SET&quot; suffixOverrides=&quot;,&quot;&gt;        │</span></span><br><span class="line"><span class="comment">// └──────────┴────────────────────────────────────────────────┘</span></span><br></pre></td></tr></table></figure>
-
+<h1 id="-3"><a href="#-3" class="headerlink" title=""></a></h1><h2 id="trim标签源码"><a href="#trim标签源码" class="headerlink" title="trim标签源码"></a>trim标签源码</h2><table>
+<thead>
+<tr>
+<th>&#x2F;&#x2F;</th>
+<th>标签</th>
+<th>等价trim</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>&#x2F;&#x2F;</td>
+<td><where></td>
+<td>&lt;trim prefix&#x3D;”WHERE” prefixOverrides&#x3D;”AND</td>
+</tr>
+<tr>
+<td>&#x2F;&#x2F;</td>
+<td><set></td>
+<td><trim prefix="SET" suffixOverrides=","></td>
+</tr>
+</tbody></table>
 <h2 id="bind标签源码"><a href="#bind标签源码" class="headerlink" title="bind标签源码"></a>bind标签源码</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// VarDeclSqlNode — bind标签，声明OGNL变量</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">VarDeclSqlNode</span> <span class="keyword">implements</span> <span class="title class_">SqlNode</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String name;     <span class="comment">// 变量名</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> String expression;  <span class="comment">// OGNL表达式</span></span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">apply</span><span class="params">(DynamicContext context)</span> &#123;</span><br><span class="line">        <span class="comment">// 计算OGNL表达式值，绑定到上下文</span></span><br><span class="line">        <span class="type">Object</span> <span class="variable">value</span> <span class="operator">=</span> OgnlCache.getValue(expression, context.getBindings());</span><br><span class="line">        context.bind(name, value);</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h1 id="-4"><a href="#-4" class="headerlink" title=""></a></h1><h2 id="动态SQL执行流程"><a href="#动态SQL执行流程" class="headerlink" title="动态SQL执行流程"></a>动态SQL执行流程</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// DynamicSqlSource.getBoundSql()</span></span><br><span class="line"><span class="keyword">public</span> BoundSql <span class="title function_">getBoundSql</span><span class="params">(Object parameterObject)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 创建DynamicContext</span></span><br><span class="line">    <span class="type">DynamicContext</span> <span class="variable">context</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">DynamicContext</span>(configuration, parameterObject);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 2. 递归应用所有SqlNode — 构建SQL字符串</span></span><br><span class="line">    rootSqlNode.apply(context);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 3. 处理#&#123;&#125;占位符 — 替换为?并生成ParameterMapping</span></span><br><span class="line">    <span class="type">SqlSourceBuilder</span> <span class="variable">sqlSourceParser</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">SqlSourceBuilder</span>(configuration);</span><br><span class="line">    <span class="type">SqlSource</span> <span class="variable">sqlSource</span> <span class="operator">=</span> sqlSourceParser.parse(</span><br><span class="line">        context.getSql(), parameterType, context.getBindings());</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 4. 创建BoundSql</span></span><br><span class="line">    <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> sqlSource.getBoundSql(parameterObject);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 5. 绑定附加参数（foreach生成的__frch_xxx等）</span></span><br><span class="line">    <span class="keyword">for</span> (Map.Entry&lt;String, Object&gt; entry : context.getBindings().entrySet()) &#123;</span><br><span class="line">        boundSql.setAdditionalParameter(entry.getKey(), entry.getValue());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> boundSql;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="完整执行时序图"><a href="#完整执行时序图" class="headerlink" title="完整执行时序图"></a>完整执行时序图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              动态SQL完整执行时序                                 │</span><br><span class="line">│                                                               │</span><br><span class="line">│  Mapper.selectAlerts(queryDTO)                                │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  MapperProxy.invoke()                                         │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  MapperMethod.execute() → sqlSession.selectList()            │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  MappedStatement.getBoundSql(parameterObject)                │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  DynamicSqlSource.getBoundSql()                               │</span><br><span class="line">│    ├─ 1. new DynamicContext(configuration, parameter)        │</span><br><span class="line">│    ├─ 2. rootSqlNode.apply(context)                          │</span><br><span class="line">│    │     ├─ MixedSqlNode.apply()                             │</span><br><span class="line">│    │     │   ├─ StaticTextSqlNode.apply() → &quot;SELECT ...&quot;     │</span><br><span class="line">│    │     │   ├─ WhereSqlNode.apply() → TrimSqlNode           │</span><br><span class="line">│    │     │   │   ├─ IfSqlNode.apply() → OGNL求值             │</span><br><span class="line">│    │     │   │   │   └─ 条件成立 → StaticTextSqlNode.apply() │</span><br><span class="line">│    │     │   │   └─ 处理前缀后缀 → &quot;WHERE ...&quot;               │</span><br><span class="line">│    │     │   └─ StaticTextSqlNode.apply() → &quot;ORDER BY ...&quot;   │</span><br><span class="line">│    │     └─ 得到完整SQL(含#&#123;&#125;占位符)                          │</span><br><span class="line">│    ├─ 3. SqlSourceBuilder.parse() → #&#123;&#125;替换为?                │</span><br><span class="line">│    ├─ 4. 创建BoundSql                                         │</span><br><span class="line">│    └─ 5. 绑定附加参数                                          │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  Executor.query() → StatementHandler → JDBC执行               │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h2 id="RawSqlSource-vs-DynamicSqlSource"><a href="#RawSqlSource-vs-DynamicSqlSource" class="headerlink" title="RawSqlSource vs DynamicSqlSource"></a>RawSqlSource vs DynamicSqlSource</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│           RawSqlSource vs DynamicSqlSource                    │</span><br><span class="line">├──────────────────┬───────────────────────────────────────────┤</span><br><span class="line">│  维度             │ 对比                                     │</span><br><span class="line">├──────────────────┼───────────────────────────────────────────┤</span><br><span class="line">│  RawSqlSource     │ SQL中只有#&#123;&#125;，没有$&#123;&#125;和动态标签            │</span><br><span class="line">│                  │ 解析一次，缓存BoundSql                      │</span><br><span class="line">│                  │ 每次调用直接返回缓存的BoundSql               │</span><br><span class="line">│                  │ 性能更好                                   │</span><br><span class="line">├──────────────────┼───────────────────────────────────────────┤</span><br><span class="line">│  DynamicSqlSource│ SQL中有$&#123;&#125;或动态标签(if/foreach等)         │</span><br><span class="line">│                  │ 每次调用都重新解析SqlNode树                  │</span><br><span class="line">│                  │ 根据参数动态生成不同的SQL                    │</span><br><span class="line">│                  │ 性能稍差（但通常可忽略）                     │</span><br><span class="line">├──────────────────┼───────────────────────────────────────────┤</span><br><span class="line">│  判断逻辑         │ parseDynamicNode()中                      │</span><br><span class="line">│                  │ 含$&#123;&#125; → TextSqlNode → DynamicSqlSource    │</span><br><span class="line">│                  │ 含动态标签 → DynamicSqlSource              │</span><br><span class="line">│                  │ 纯文本+#&#123;&#125; → StaticTextSqlNode → Raw      │</span><br><span class="line">└──────────────────┴───────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">性能影响：</span><br><span class="line">  DynamicSqlSource每次执行都遍历SqlNode树</span><br><span class="line">  但对于简单if判断，性能损耗在微秒级，可以忽略</span><br><span class="line">  真正影响性能的是foreach生成超大SQL（如IN列表含数万元素）</span><br></pre></td></tr></table></figure>
-
+<h3 id="完整执行时序图"><a href="#完整执行时序图" class="headerlink" title="完整执行时序图"></a>完整执行时序图</h3><p><strong>动态SQL完整执行时序</strong>：</p>
+<ul>
+<li>Mapper.selectAlerts(queryDTO)</li>
+<li>↓</li>
+<li>MapperProxy.invoke()</li>
+<li>↓</li>
+<li>MapperMethod.execute() → sqlSession.selectList()</li>
+<li>↓</li>
+<li>MappedStatement.getBoundSql(parameterObject)</li>
+<li>↓</li>
+<li>DynamicSqlSource.getBoundSql()</li>
+</ul>
+<p><strong>└─ 条件成立 → StaticTextSqlNode.apply()</strong>：</p>
+<ul>
+<li>└─ 处理前缀后缀 → “WHERE …”</li>
+<li>└─ StaticTextSqlNode.apply() → “ORDER BY …”</li>
+<li>└─ 得到完整SQL(含#{}占位符)</li>
+</ul>
+<p><strong>└─ 5. 绑定附加参数</strong>：</p>
+<ul>
+<li>↓</li>
+<li>Executor.query() → StatementHandler → JDBC执行</li>
+</ul>
+<h2 id="RawSqlSource-vs-DynamicSqlSource"><a href="#RawSqlSource-vs-DynamicSqlSource" class="headerlink" title="RawSqlSource vs DynamicSqlSource"></a>RawSqlSource vs DynamicSqlSource</h2><p><strong>RawSqlSource vs DynamicSqlSource</strong>：</p>
+<p><strong>维度              对比</strong>：</p>
+<p><strong>RawSqlSource      SQL中只有#{}，没有${}和动态标签</strong>：</p>
+<ul>
+<li>解析一次，缓存BoundSql</li>
+<li>每次调用直接返回缓存的BoundSql</li>
+<li>性能更好</li>
+</ul>
+<p><strong>DynamicSqlSource SQL中有${}或动态标签(if&#x2F;foreach等)</strong>：</p>
+<ul>
+<li>每次调用都重新解析SqlNode树</li>
+<li>根据参数动态生成不同的SQL</li>
+<li>性能稍差（但通常可忽略）</li>
+</ul>
+<p><strong>判断逻辑          parseDynamicNode()中</strong>：</p>
+<ul>
+<li>含${} → TextSqlNode → DynamicSqlSource</li>
+<li>含动态标签 → DynamicSqlSource</li>
+<li>纯文本+#{} → StaticTextSqlNode → Raw</li>
+</ul>
 <h2 id="SQL片段复用"><a href="#SQL片段复用" class="headerlink" title="SQL片段复用"></a>SQL片段复用</h2><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">&lt;!-- 定义SQL片段 --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">sql</span> <span class="attr">id</span>=<span class="string">&quot;alertColumns&quot;</span>&gt;</span></span><br><span class="line">    id, alert_type, level, device_id, area_code, </span><br><span class="line">    alert_time, status, handler, handle_time</span><br><span class="line"><span class="tag">&lt;/<span class="name">sql</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">sql</span> <span class="attr">id</span>=<span class="string">&quot;alertCondition&quot;</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;alertType != null and alertType != &#x27;&#x27;&quot;</span>&gt;</span></span><br><span class="line">        AND alert_type = #&#123;alertType&#125;</span><br><span class="line">    <span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;level != null&quot;</span>&gt;</span></span><br><span class="line">        AND level = #&#123;level&#125;</span><br><span class="line">    <span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;areaCode != null and areaCode != &#x27;&#x27;&quot;</span>&gt;</span></span><br><span class="line">        AND area_code = #&#123;areaCode&#125;</span><br><span class="line">    <span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;startTime != null&quot;</span>&gt;</span></span><br><span class="line">        AND alert_time &gt;= #&#123;startTime&#125;</span><br><span class="line">    <span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;endTime != null&quot;</span>&gt;</span></span><br><span class="line">        AND alert_time <span class="symbol">&amp;lt;</span>= #&#123;endTime&#125;</span><br><span class="line">    <span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">sql</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">&lt;!-- 引用SQL片段 --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">select</span> <span class="attr">id</span>=<span class="string">&quot;selectAlerts&quot;</span> <span class="attr">resultType</span>=<span class="string">&quot;Alert&quot;</span>&gt;</span></span><br><span class="line">    SELECT <span class="tag">&lt;<span class="name">include</span> <span class="attr">refid</span>=<span class="string">&quot;alertColumns&quot;</span>/&gt;</span></span><br><span class="line">    FROM alert_record</span><br><span class="line">    <span class="tag">&lt;<span class="name">where</span>&gt;</span></span><br><span class="line">        <span class="tag">&lt;<span class="name">include</span> <span class="attr">refid</span>=<span class="string">&quot;alertCondition&quot;</span>/&gt;</span></span><br><span class="line">    <span class="tag">&lt;/<span class="name">where</span>&gt;</span></span><br><span class="line">    ORDER BY alert_time DESC</span><br><span class="line"><span class="tag">&lt;/<span class="name">select</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">select</span> <span class="attr">id</span>=<span class="string">&quot;countAlerts&quot;</span> <span class="attr">resultType</span>=<span class="string">&quot;long&quot;</span>&gt;</span></span><br><span class="line">    SELECT COUNT(*)</span><br><span class="line">    FROM alert_record</span><br><span class="line">    <span class="tag">&lt;<span class="name">where</span>&gt;</span></span><br><span class="line">        <span class="tag">&lt;<span class="name">include</span> <span class="attr">refid</span>=<span class="string">&quot;alertCondition&quot;</span>/&gt;</span></span><br><span class="line">    <span class="tag">&lt;/<span class="name">where</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">select</span>&gt;</span></span><br></pre></td></tr></table></figure>
 
 <h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-MyBatis动态SQL的原理？"><a href="#1-MyBatis动态SQL的原理？" class="headerlink" title="1. MyBatis动态SQL的原理？"></a>1. MyBatis动态SQL的原理？</h3><p>XML解析时将动态标签解析为SqlNode树，执行时通过OGNL表达式判断条件，递归apply拼接SQL。每个标签对应一个SqlNode实现类：IfSqlNode、ForEachSqlNode、WhereSqlNode等。最终由DynamicSqlSource汇总生成BoundSql。</p>
@@ -253,12 +380,32 @@ article: http://ogp.me/ns/article#">
 
 <h2 id="多数据库方言动态SQL"><a href="#多数据库方言动态SQL" class="headerlink" title="多数据库方言动态SQL"></a>多数据库方言动态SQL</h2><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">&lt;!-- 实际项目：支持MySQL和Oracle双数据库 --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">select</span> <span class="attr">id</span>=<span class="string">&quot;selectAlerts&quot;</span> <span class="attr">resultType</span>=<span class="string">&quot;Alert&quot;</span>&gt;</span></span><br><span class="line">    SELECT id, alert_type, level, device_id, area_code, alert_time</span><br><span class="line">    FROM alert_record</span><br><span class="line">    <span class="tag">&lt;<span class="name">where</span>&gt;</span></span><br><span class="line">        <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;alertType != null&quot;</span>&gt;</span>AND alert_type = #&#123;alertType&#125;<span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line">        <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;level != null&quot;</span>&gt;</span>AND level = #&#123;level&#125;<span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;/<span class="name">where</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;_databaseId == &#x27;mysql&#x27;&quot;</span>&gt;</span></span><br><span class="line">        ORDER BY alert_time DESC LIMIT #&#123;limit&#125;</span><br><span class="line">    <span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">if</span> <span class="attr">test</span>=<span class="string">&quot;_databaseId == &#x27;oracle&#x27;&quot;</span>&gt;</span></span><br><span class="line">        AND ROWNUM <span class="symbol">&amp;lt;</span>= #&#123;limit&#125; ORDER BY alert_time DESC</span><br><span class="line">    <span class="tag">&lt;/<span class="name">if</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">select</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">&lt;!-- 使用databaseId区分数据库方言 --&gt;</span></span><br><span class="line"><span class="comment">&lt;!-- _databaseId 是 DynamicContext 中绑定的内置变量 --&gt;</span></span><br></pre></td></tr></table></figure>
 
-<h2 id="嵌套查询与延迟加载"><a href="#嵌套查询与延迟加载" class="headerlink" title="嵌套查询与延迟加载"></a>嵌套查询与延迟加载</h2><h3 id="嵌套查询的N-1问题"><a href="#嵌套查询的N-1问题" class="headerlink" title="嵌套查询的N+1问题"></a>嵌套查询的N+1问题</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              嵌套查询的N+1问题                                  │</span><br><span class="line">│                                                               │</span><br><span class="line">│  查询10条Alert记录 → 每条Alert关联一个Device                  │</span><br><span class="line">│                                                               │</span><br><span class="line">│  无延迟加载：                                                  │</span><br><span class="line">│  1条主查询: SELECT * FROM alert_record WHERE ...              │</span><br><span class="line">│  10条子查询: SELECT * FROM device WHERE id = ?               │</span><br><span class="line">│  ────────────────────────────────                             │</span><br><span class="line">│  总计: 11条SQL → N+1问题                                      │</span><br><span class="line">│                                                               │</span><br><span class="line">│  有延迟加载：                                                  │</span><br><span class="line">│  1条主查询: SELECT * FROM alert_record WHERE ...              │</span><br><span class="line">│  子查询只在访问device属性时执行                                │</span><br><span class="line">│  如果不访问device → 只执行1条SQL                              │</span><br><span class="line">│                                                               │</span><br><span class="line">│  配置：                                                       │</span><br><span class="line">│  mybatis.configuration.lazy-loading-enabled=true              │</span><br><span class="line">│  mybatis.configuration.aggressive-lazy-loading=false          │</span><br><span class="line">│                                                               │</span><br><span class="line">│  实际项目建议：                                            │</span><br><span class="line">│  优先使用JOIN替代嵌套查询                                      │</span><br><span class="line">│  只有确实需要延迟加载时才使用嵌套查询                           │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="嵌套查询与延迟加载"><a href="#嵌套查询与延迟加载" class="headerlink" title="嵌套查询与延迟加载"></a>嵌套查询与延迟加载</h2><h3 id="嵌套查询的N-1问题"><a href="#嵌套查询的N-1问题" class="headerlink" title="嵌套查询的N+1问题"></a>嵌套查询的N+1问题</h3><p><strong>嵌套查询的N+1问题</strong>：</p>
+<ul>
+<li>查询10条Alert记录 → 每条Alert关联一个Device</li>
+<li>无延迟加载：</li>
+<li>1条主查询: SELECT * FROM alert_record WHERE …</li>
+<li>10条子查询: SELECT * FROM device WHERE id &#x3D; ?</li>
+<li>────────────────────────────────</li>
+<li>总计: 11条SQL → N+1问题</li>
+<li>有延迟加载：</li>
+<li>1条主查询: SELECT * FROM alert_record WHERE …</li>
+<li>子查询只在访问device属性时执行</li>
+<li>如果不访问device → 只执行1条SQL</li>
+<li>配置：</li>
+<li>mybatis.configuration.lazy-loading-enabled&#x3D;true</li>
+<li>mybatis.configuration.aggressive-lazy-loading&#x3D;false</li>
+<li>实际项目建议：</li>
+<li>优先使用JOIN替代嵌套查询</li>
+<li>只有确实需要延迟加载时才使用嵌套查询</li>
+</ul>
 <h3 id="嵌套结果映射-vs-嵌套查询"><a href="#嵌套结果映射-vs-嵌套查询" class="headerlink" title="嵌套结果映射 vs 嵌套查询"></a>嵌套结果映射 vs 嵌套查询</h3><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">&lt;!-- 方式1：嵌套结果映射（JOIN，推荐） --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">resultMap</span> <span class="attr">id</span>=<span class="string">&quot;alertWithDeviceResult&quot;</span> <span class="attr">type</span>=<span class="string">&quot;AlertVO&quot;</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">id</span> <span class="attr">property</span>=<span class="string">&quot;id&quot;</span> <span class="attr">column</span>=<span class="string">&quot;id&quot;</span>/&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">result</span> <span class="attr">property</span>=<span class="string">&quot;alertType&quot;</span> <span class="attr">column</span>=<span class="string">&quot;alert_type&quot;</span>/&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">result</span> <span class="attr">property</span>=<span class="string">&quot;level&quot;</span> <span class="attr">column</span>=<span class="string">&quot;level&quot;</span>/&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">association</span> <span class="attr">property</span>=<span class="string">&quot;device&quot;</span> <span class="attr">javaType</span>=<span class="string">&quot;Device&quot;</span>&gt;</span></span><br><span class="line">        <span class="tag">&lt;<span class="name">id</span> <span class="attr">property</span>=<span class="string">&quot;id&quot;</span> <span class="attr">column</span>=<span class="string">&quot;device_id&quot;</span>/&gt;</span></span><br><span class="line">        <span class="tag">&lt;<span class="name">result</span> <span class="attr">property</span>=<span class="string">&quot;deviceName&quot;</span> <span class="attr">column</span>=<span class="string">&quot;device_name&quot;</span>/&gt;</span></span><br><span class="line">        <span class="tag">&lt;<span class="name">result</span> <span class="attr">property</span>=<span class="string">&quot;status&quot;</span> <span class="attr">column</span>=<span class="string">&quot;device_status&quot;</span>/&gt;</span></span><br><span class="line">    <span class="tag">&lt;/<span class="name">association</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">resultMap</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">select</span> <span class="attr">id</span>=<span class="string">&quot;selectAlertWithDevice&quot;</span> <span class="attr">resultMap</span>=<span class="string">&quot;alertWithDeviceResult&quot;</span>&gt;</span></span><br><span class="line">    SELECT a.id, a.alert_type, a.level,</span><br><span class="line">           d.id as device_id, d.device_name, d.status as device_status</span><br><span class="line">    FROM alert_record a</span><br><span class="line">    LEFT JOIN device d ON a.device_id = d.id</span><br><span class="line">    WHERE a.level &gt;= #&#123;level&#125;</span><br><span class="line"><span class="tag">&lt;/<span class="name">select</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">&lt;!-- 方式2：嵌套查询（可能N+1，不推荐） --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">resultMap</span> <span class="attr">id</span>=<span class="string">&quot;alertWithDeviceNested&quot;</span> <span class="attr">type</span>=<span class="string">&quot;AlertVO&quot;</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">id</span> <span class="attr">property</span>=<span class="string">&quot;id&quot;</span> <span class="attr">column</span>=<span class="string">&quot;id&quot;</span>/&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">result</span> <span class="attr">property</span>=<span class="string">&quot;alertType&quot;</span> <span class="attr">column</span>=<span class="string">&quot;alert_type&quot;</span>/&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">association</span> <span class="attr">property</span>=<span class="string">&quot;device&quot;</span> <span class="attr">column</span>=<span class="string">&quot;device_id&quot;</span></span></span><br><span class="line"><span class="tag">                 <span class="attr">select</span>=<span class="string">&quot;com.mine.mapper.DeviceMapper.selectById&quot;</span></span></span><br><span class="line"><span class="tag">                 <span class="attr">fetchType</span>=<span class="string">&quot;lazy&quot;</span>/&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">resultMap</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">select</span> <span class="attr">id</span>=<span class="string">&quot;selectAlertWithDeviceNested&quot;</span> <span class="attr">resultMap</span>=<span class="string">&quot;alertWithDeviceNested&quot;</span>&gt;</span></span><br><span class="line">    SELECT id, alert_type, level, device_id</span><br><span class="line">    FROM alert_record WHERE level &gt;= #&#123;level&#125;</span><br><span class="line"><span class="tag">&lt;/<span class="name">select</span>&gt;</span></span><br></pre></td></tr></table></figure>
 
-<h2 id="动态SQL性能优化"><a href="#动态SQL性能优化" class="headerlink" title="动态SQL性能优化"></a>动态SQL性能优化</h2><h3 id="SqlNode树缓存"><a href="#SqlNode树缓存" class="headerlink" title="SqlNode树缓存"></a>SqlNode树缓存</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│           SqlNode树缓存机制                                    │</span><br><span class="line">│                                                               │</span><br><span class="line">│  DynamicSqlSource.getBoundSql()                               │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  每次查询都重新执行 rootSqlNode.apply(context)                │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  但是SqlNode树本身是缓存的：                                   │</span><br><span class="line">│  - XML解析时构建SqlNode树 → 存入MappedStatement              │</span><br><span class="line">│  - 后续调用直接使用缓存的SqlNode树                             │</span><br><span class="line">│  - 只是apply()需要每次执行（因为参数不同）                     │</span><br><span class="line">│                                                               │</span><br><span class="line">│  RawSqlSource vs DynamicSqlSource：                           │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐      │</span><br><span class="line">│  │ RawSqlSource:                                       │      │</span><br><span class="line">│  │   SQL固定，#&#123;&#125;解析一次 → 缓存BoundSql               │      │</span><br><span class="line">│  │   后续查询直接返回缓存的BoundSql                      │      │</span><br><span class="line">│  │   性能：O(1)                                        │      │</span><br><span class="line">│  ├─────────────────────────────────────────────────────┤      │</span><br><span class="line">│  │ DynamicSqlSource:                                   │      │</span><br><span class="line">│  │   SQL动态，每次都遍历SqlNode树                       │      │</span><br><span class="line">│  │   SqlNode树本身缓存，但apply()每次执行               │      │</span><br><span class="line">│  │   性能：O(n) n=SqlNode数量                           │      │</span><br><span class="line">│  └─────────────────────────────────────────────────────┘      │</span><br><span class="line">│                                                               │</span><br><span class="line">│  实际性能差异：微秒级，可忽略                                   │</span><br><span class="line">│  真正影响性能的是foreach生成超大SQL                             │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="动态SQL性能优化"><a href="#动态SQL性能优化" class="headerlink" title="动态SQL性能优化"></a>动态SQL性能优化</h2><h3 id="SqlNode树缓存"><a href="#SqlNode树缓存" class="headerlink" title="SqlNode树缓存"></a>SqlNode树缓存</h3><ul>
+<li>XML解析时构建SqlNode树 → 存入MappedStatement</li>
+<li>后续调用直接使用缓存的SqlNode树</li>
+<li>只是apply()需要每次执行（因为参数不同）</li>
+</ul>
 <h3 id="foreach性能优化"><a href="#foreach性能优化" class="headerlink" title="foreach性能优化"></a>foreach性能优化</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：大批量IN查询优化</span></span><br><span class="line"><span class="comment">// ❌ 直接使用foreach生成大IN列表</span></span><br><span class="line"><span class="comment">// SELECT * FROM device WHERE id IN (1,2,...,10000)</span></span><br><span class="line"><span class="comment">// 问题：SQL过长、解析慢、可能不走索引</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 优化方案1：分批查询</span></span><br><span class="line"><span class="keyword">public</span> List&lt;Device&gt; <span class="title function_">selectByDeviceIds</span><span class="params">(List&lt;Long&gt; ids)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (ids.isEmpty()) <span class="keyword">return</span> Collections.emptyList();</span><br><span class="line">    <span class="keyword">return</span> Lists.partition(ids, <span class="number">500</span>).stream()</span><br><span class="line">        .flatMap(batch -&gt; deviceMapper.selectByDeviceIds(batch).stream())</span><br><span class="line">        .collect(Collectors.toList());</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 优化方案2：临时表JOIN</span></span><br><span class="line"><span class="comment">// 1. 批量INSERT到临时表</span></span><br><span class="line"><span class="comment">// 2. JOIN查询</span></span><br><span class="line"><span class="comment">// 3. 清理临时表</span></span><br><span class="line"><span class="keyword">public</span> List&lt;Device&gt; <span class="title function_">selectByDeviceIdsWithTempTable</span><span class="params">(List&lt;Long&gt; ids)</span> &#123;</span><br><span class="line">    <span class="type">String</span> <span class="variable">tempTable</span> <span class="operator">=</span> <span class="string">&quot;tmp_device_ids_&quot;</span> + ThreadLocalRandom.current().nextInt(<span class="number">10000</span>);</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="comment">// 创建临时表</span></span><br><span class="line">        deviceMapper.createTempIdTable(tempTable);</span><br><span class="line">        <span class="comment">// 批量插入ID</span></span><br><span class="line">        deviceMapper.batchInsertTempIds(tempTable, ids);</span><br><span class="line">        <span class="comment">// JOIN查询</span></span><br><span class="line">        <span class="keyword">return</span> deviceMapper.selectByTempTableJoin(tempTable);</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        deviceMapper.dropTempIdTable(tempTable);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h2 id="自定义动态SQL标签"><a href="#自定义动态SQL标签" class="headerlink" title="自定义动态SQL标签"></a>自定义动态SQL标签</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// MyBatis支持自定义动态标签</span></span><br><span class="line"><span class="comment">// 实现LanguageDriver</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MineLanguageDriver</span> <span class="keyword">extends</span> <span class="title class_">XMLLanguageDriver</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> SqlSource <span class="title function_">createSqlSource</span><span class="params">(Configuration configuration, XNode script, </span></span><br><span class="line"><span class="params">            Class&lt;?&gt; parameterType)</span> &#123;</span><br><span class="line">        <span class="comment">// 自定义解析逻辑</span></span><br><span class="line">        <span class="comment">// 可以添加自定义标签如 &lt;mine:sharding&gt;</span></span><br><span class="line">        <span class="keyword">return</span> <span class="built_in">super</span>.createSqlSource(configuration, script, parameterType);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 注册</span></span><br><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MyBatisConfig</span> &#123;</span><br><span class="line">    <span class="meta">@Bean</span></span><br><span class="line">    <span class="keyword">public</span> LanguageDriver <span class="title function_">mineLanguageDriver</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">MineLanguageDriver</span>();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -372,14 +519,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
                         2023
-                        <span>(68)</span>
+                        <span>(61)</span>
                     </a>
                 </div>
             
@@ -545,7 +692,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

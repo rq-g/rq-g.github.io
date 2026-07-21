@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2023-04-09T14:17:06.000Z">
   <article class="post">
     <h1 class="post-title">Redis过期策略与内存淘汰——数据不会永远存在</h1>
 
@@ -210,20 +210,97 @@ article: http://ogp.me/ns/article#">
 <p>实际项目运行半年后，运维发现Redis内存使用率从2GB持续增长到8GB，最终触发了内存淘汰策略，导致大量设备实时状态数据被误删，监控大屏出现大面积空白。排查发现是大量传感器缓存key没有设置过期时间，导致过期数据永远占着内存。更严重的是，内存淘汰策略配置为volatile-lru，但很多没设过期时间的key也参与了淘汰。2023年深入理解Redis过期策略和内存淘汰机制后，终于能合理规划实际项目的Redis内存使用。本文系统地总结过期策略、淘汰机制和内存优化在实际项目中的实战经验。</p>
 <h2 id="过期策略"><a href="#过期策略" class="headerlink" title="过期策略"></a>过期策略</h2><h3 id="设置过期时间"><a href="#设置过期时间" class="headerlink" title="设置过期时间"></a>设置过期时间</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># =====================================================</span></span><br><span class="line"><span class="comment"># Redis过期时间设置命令大全</span></span><br><span class="line"><span class="comment"># =====================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 1. 设置key的同时设置过期（推荐）</span></span><br><span class="line">SET key value EX 300           <span class="comment"># 300秒过期</span></span><br><span class="line">SET key value PX 300000        <span class="comment"># 300000毫秒过期</span></span><br><span class="line">SET key value EXAT 1700000000  <span class="comment"># 指定Unix时间戳过期</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 给已有key设置过期</span></span><br><span class="line">EXPIRE key 300                 <span class="comment"># 300秒后过期</span></span><br><span class="line">PEXPIRE key 300000             <span class="comment"># 300000毫秒后过期</span></span><br><span class="line">EXPIREAT key 1700000000        <span class="comment"># 指定时间戳过期</span></span><br><span class="line">PEXPIREAT key 1700000000000    <span class="comment"># 毫秒级时间戳</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 查看剩余时间</span></span><br><span class="line">TTL key                        <span class="comment"># 返回秒数，-1永不过期，-2已过期/不存在</span></span><br><span class="line">PTTL key                       <span class="comment"># 返回毫秒数</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 4. 取消过期</span></span><br><span class="line">PERSIST key                    <span class="comment"># 变为永不过期</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># =====================================================</span></span><br><span class="line"><span class="comment"># 智慧矿山场景：不同数据的TTL设置</span></span><br><span class="line"><span class="comment"># =====================================================</span></span><br><span class="line"><span class="comment"># 传感器实时数据     → 5分钟</span></span><br><span class="line">SET sensor:data:TEMP001 &#123;...&#125; EX 300</span><br><span class="line"><span class="comment"># 设备状态缓存       → 30分钟</span></span><br><span class="line">SET device:status:CR001 &#123;...&#125; EX 1800</span><br><span class="line"><span class="comment"># 告警去重标记       → 5分钟（去重窗口）</span></span><br><span class="line">SET alert:current:CR001:TEMP 85.5 EX 300</span><br><span class="line"><span class="comment"># 限流计数器         → 60秒（限流窗口）</span></span><br><span class="line">SET rate:<span class="built_in">limit</span>:api:query:127.0.0.1 1 EX 60</span><br><span class="line"><span class="comment"># 日榜数据           → 7天</span></span><br><span class="line">SET rank:score:20230716 &#123;...&#125; EX 604800</span><br><span class="line"><span class="comment"># 告警阈值配置       → 365天（长期存储也要设TTL）</span></span><br><span class="line">SET config:threshold:TEMP 80 EX 31536000</span><br></pre></td></tr></table></figure>
 
-<h3 id="惰性删除"><a href="#惰性删除" class="headerlink" title="惰性删除"></a>惰性删除</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│                    惰性删除机制                        │</span><br><span class="line">├─────────────────────────────────────────────────────┤</span><br><span class="line">│                                                     │</span><br><span class="line">│ 访问key时才检查是否过期                                │</span><br><span class="line">│                                                     │</span><br><span class="line">│  客户端请求 GET sensor:data:TEMP001                  │</span><br><span class="line">│       │                                             │</span><br><span class="line">│       ▼                                             │</span><br><span class="line">│  ┌──────────┐                                       │</span><br><span class="line">│  │ 检查是否过期│                                     │</span><br><span class="line">│  └────┬─────┘                                       │</span><br><span class="line">│       │                                             │</span><br><span class="line">│   ┌───┴───┐                                         │</span><br><span class="line">│   │       │                                         │</span><br><span class="line">│ 未过期  已过期                                        │</span><br><span class="line">│   │       │                                         │</span><br><span class="line">│   ▼       ▼                                         │</span><br><span class="line">│ 返回值   删除key + 返回null                           │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 优点：CPU友好，不额外消耗资源                           │</span><br><span class="line">│ 缺点：内存不友好，过期数据可能长期占内存                  │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 智慧矿山案例：                                        │</span><br><span class="line">│ 传感器数据key设了5分钟TTL                              │</span><br><span class="line">│ 但5分钟后如果没有被访问 → 仍然占内存                    │</span><br><span class="line">│ 直到下次GET时才被删除                                 │</span><br><span class="line">│ 这就是为什么内存会持续增长                              │</span><br><span class="line">│                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="惰性删除"><a href="#惰性删除" class="headerlink" title="惰性删除"></a>惰性删除</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;惰性删除机制&quot;]</span><br><span class="line">    N2[&quot;检查是否过期&quot;]</span><br><span class="line">    N3[&quot;未过期 已过期   返回值 删除key&quot;]</span><br><span class="line">    N4[&quot;仍然占内存 直到下次GET时才被删除&quot;]</span><br><span class="line">    N5[&quot;这就是为什么内存会持续增长&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h3 id="定期删除"><a href="#定期删除" class="headerlink" title="定期删除"></a>定期删除</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│                    定期删除机制                        │</span><br><span class="line">├─────────────────────────────────────────────────────┤</span><br><span class="line">│                                                     │</span><br><span class="line">│ 每隔一段时间随机检查一批key，删除过期的                  │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 流程：                                               │</span><br><span class="line">│ ┌──────────────────────────────────────────────┐   │</span><br><span class="line">│ │ 1. 每隔100ms（由hz参数控制）执行一次              │   │</span><br><span class="line">│ │ 2. 随机抽取一批设置了过期时间的key                 │   │</span><br><span class="line">│ │ 3. 检查是否过期，过期则删除                       │   │</span><br><span class="line">│ │ 4. 如果过期key比例 &gt; 25%，立即再检查一批          │   │</span><br><span class="line">│ │ 5. 重复直到过期key比例 &lt;= 25% 或超过时间限制       │   │</span><br><span class="line">│ └──────────────────────────────────────────────┘   │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 参数配置：                                           │</span><br><span class="line">│ hz 10        # 每秒执行10次定期删除（默认）            │</span><br><span class="line">│ hz 20        # 更积极删除，CPU消耗更多但内存更干净      │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 智慧矿山场景：                                        │</span><br><span class="line">│ 将hz从10调整为20后，过期传感器数据清理更及时             │</span><br><span class="line">│ 内存使用率从85%降到70%                                │</span><br><span class="line">│ 但CPU使用率从2%升到3.5%（可接受）                      │</span><br><span class="line">│                                                     │</span><br><span class="line">│ Redis 7.0+新增：                                     │</span><br><span class="line">│ lazy-expire no       # 过期删除是否异步               │</span><br><span class="line">│ lazy-expire yes      # 异步删除，减少主线程阻塞        │</span><br><span class="line">│                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="定期删除"><a href="#定期删除" class="headerlink" title="定期删除"></a>定期删除</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;定期删除机制&quot;]</span><br><span class="line">    N2[&quot;过期则删除 4. 如果过期key比例  25&quot;]</span><br><span class="line">    N3[&quot;立即再检查一批 5. 重复直到过期key比例  25 或超过时间限制&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h3 id="定期删除源码分析"><a href="#定期删除源码分析" class="headerlink" title="定期删除源码分析"></a>定期删除源码分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│              Redis定期删除源码分析                                      │</span><br><span class="line">├──────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                      │</span><br><span class="line">│  核心函数：server.c / activeExpireCycle()                            │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  入口：serverCron() 每隔 1000/hz 毫秒调用一次                        │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  activeExpireCycle() 核心逻辑：                                       │</span><br><span class="line">│  1. 遍历所有数据库（CRON_DBS_PER_CALL=16个）                        │</span><br><span class="line">│  2. 对每个数据库：                                                    │</span><br><span class="line">│     a. 随机抽取 ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP=20 个key       │</span><br><span class="line">│     b. 检查是否过期，过期则删除                                        │</span><br><span class="line">│     c. 统计过期比例                                                    │</span><br><span class="line">│     d. 如果过期比例 &gt; 25%，重复步骤a                                  │</span><br><span class="line">│     e. 如果过期比例 &lt;= 25%，处理下一个数据库                           │</span><br><span class="line">│  3. 总执行时间不超过 ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC=25% 的      │</span><br><span class="line">│     服务器周期时间                                                     │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  关键常量：                                                           │</span><br><span class="line">│  ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP = 20  // 每次抽查20个key      │</span><br><span class="line">│  ACTIVE_EXPIRE_CYCLE_FAST_DURATION = 1000   // 快速模式1ms限时       │</span><br><span class="line">│  ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC = 25    // 慢速模式25%时间       │</span><br><span class="line">│  ACTIVE_EXPIRE_CYCLE_SLOW = 0               // 慢速模式标志          │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  为什么是25%？                                                        │</span><br><span class="line">│  如果过期key比例超过25%，说明有大量key过期未被清理                     │</span><br><span class="line">│  需要继续清理，否则内存会持续增长                                      │</span><br><span class="line">│  如果比例低于25%，说明清理效果良好，可以停下了                         │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  智慧矿山调优：                                                       │</span><br><span class="line">│  hz=10：每秒10次，每次最多20个key，每秒最多200个key                  │</span><br><span class="line">│  hz=20：每秒20次，每次最多20个key，每秒最多400个key                  │</span><br><span class="line">│  传感器数据5分钟过期，每秒新增约1000条                                 │</span><br><span class="line">│  hz=10时：每秒只能清理200条 → 清理速度 &lt; 新增速度 → 内存增长         │</span><br><span class="line">│  hz=20时：每秒清理400条 → 清理速度接近新增速度 → 内存稳定            │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="定期删除源码分析"><a href="#定期删除源码分析" class="headerlink" title="定期删除源码分析"></a>定期删除源码分析</h3><p><strong>Redis定期删除源码分析</strong>：</p>
+<p><strong>核心函数：server.c &#x2F; activeExpireCycle()</strong>：</p>
+<ul>
+<li>入口：serverCron() 每隔 1000&#x2F;hz 毫秒调用一次</li>
+<li>activeExpireCycle() 核心逻辑：</li>
+<li><ol>
+<li>遍历所有数据库（CRON_DBS_PER_CALL&#x3D;16个）</li>
+</ol>
+</li>
+<li><ol start="2">
+<li>对每个数据库：</li>
+</ol>
+</li>
+<li>a. 随机抽取 ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP&#x3D;20 个key</li>
+<li>b. 检查是否过期，过期则删除</li>
+<li>c. 统计过期比例</li>
+<li>d. 如果过期比例 &gt; 25%，重复步骤a</li>
+<li>e. 如果过期比例 &lt;&#x3D; 25%，处理下一个数据库</li>
+<li><ol start="3">
+<li>总执行时间不超过 ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC&#x3D;25% 的</li>
+</ol>
+</li>
+<li>服务器周期时间</li>
+<li>关键常量：</li>
+<li>ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP &#x3D; 20  &#x2F;&#x2F; 每次抽查20个key</li>
+<li>ACTIVE_EXPIRE_CYCLE_FAST_DURATION &#x3D; 1000   &#x2F;&#x2F; 快速模式1ms限时</li>
+<li>ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC &#x3D; 25    &#x2F;&#x2F; 慢速模式25%时间</li>
+<li>ACTIVE_EXPIRE_CYCLE_SLOW &#x3D; 0               &#x2F;&#x2F; 慢速模式标志</li>
+<li>为什么是25%？</li>
+<li>如果过期key比例超过25%，说明有大量key过期未被清理</li>
+<li>需要继续清理，否则内存会持续增长</li>
+<li>如果比例低于25%，说明清理效果良好，可以停下了</li>
+<li>智慧矿山调优：</li>
+<li>hz&#x3D;10：每秒10次，每次最多20个key，每秒最多200个key</li>
+<li>hz&#x3D;20：每秒20次，每次最多20个key，每秒最多400个key</li>
+<li>传感器数据5分钟过期，每秒新增约1000条</li>
+<li>hz&#x3D;10时：每秒只能清理200条 → 清理速度 &lt; 新增速度 → 内存增长</li>
+<li>hz&#x3D;20时：每秒清理400条 → 清理速度接近新增速度 → 内存稳定</li>
+</ul>
+<h3 id="Redis过期策略-惰性删除-定期删除"><a href="#Redis过期策略-惰性删除-定期删除" class="headerlink" title="Redis过期策略 &#x3D; 惰性删除 + 定期删除"></a>Redis过期策略 &#x3D; 惰性删除 + 定期删除</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;为什么需要两种策略结合&quot;]</span><br><span class="line">    N2[&quot;定期删除 惰性删除 主动清理过期key&quot;]</span><br><span class="line">    N3[&quot;访问时保证有效 减少内存占用&quot;]</span><br><span class="line">    N4[&quot;保证数据正确性&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h3 id="Redis过期策略-惰性删除-定期删除"><a href="#Redis过期策略-惰性删除-定期删除" class="headerlink" title="Redis过期策略 &#x3D; 惰性删除 + 定期删除"></a>Redis过期策略 &#x3D; 惰性删除 + 定期删除</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│           为什么需要两种策略结合？                       │</span><br><span class="line">├─────────────────────────────────────────────────────┤</span><br><span class="line">│                                                     │</span><br><span class="line">│ 只用定期删除？                                        │</span><br><span class="line">│   频率太高 → CPU消耗大，影响处理请求                    │</span><br><span class="line">│   频率太低 → 过期key占内存太久                         │</span><br><span class="line">│   而且定期删除是随机抽查，可能漏掉部分过期key             │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 只用惰性删除？                                        │</span><br><span class="line">│   不被访问的过期key永远不会被删除 → 内存泄漏             │</span><br><span class="line">│   智慧矿山：有些传感器数据写入后从未被读取                │</span><br><span class="line">│   过期后永远占内存 → 这就是内存持续增长的原因            │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 两者结合：                                           │</span><br><span class="line">│   ┌──────────────┐  ┌──────────────┐                │</span><br><span class="line">│   │ 定期删除       │  │ 惰性删除       │                │</span><br><span class="line">│   │ 主动清理过期key │  │ 访问时保证有效  │                │</span><br><span class="line">│   │ 减少内存占用   │  │ 保证数据正确性  │                │</span><br><span class="line">│   └──────────────┘  └──────────────┘                │</span><br><span class="line">│                                                     │</span><br><span class="line">│   定期删除保证过期key最终被清理                         │</span><br><span class="line">│   惰性删除保证访问时一定返回有效数据                     │</span><br><span class="line">│                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="过期策略对比"><a href="#过期策略对比" class="headerlink" title="过期策略对比"></a>过期策略对比</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│              Redis过期策略三种方案对比                                   │</span><br><span class="line">├──────────────┬──────────────────┬──────────────────┬────────────────┤</span><br><span class="line">│  方案          │ 定时删除          │ 惰性删除          │ 定期删除        │</span><br><span class="line">├──────────────┼──────────────────┼──────────────────┼────────────────┤</span><br><span class="line">│ 触发时机      │ 到期立即删除       │ 访问时才删除       │ 周期性抽查删除  │</span><br><span class="line">├──────────────┼──────────────────┼──────────────────┼────────────────┤</span><br><span class="line">│ CPU消耗      │ 高(大量定时器)     │ 低(访问时才检查)  │ 中(周期性检查)  │</span><br><span class="line">├──────────────┼──────────────────┼──────────────────┼────────────────┤</span><br><span class="line">│ 内存占用      │ 最好(到期即删)     │ 最差(可能永不清)  │ 较好(最终清理)  │</span><br><span class="line">├──────────────┼──────────────────┼──────────────────┼────────────────┤</span><br><span class="line">│ 实现复杂度    │ 高(维护定时器)     │ 低               │ 中             │</span><br><span class="line">├──────────────┼──────────────────┼──────────────────┼────────────────┤</span><br><span class="line">│ Redis采用    │ 否                │ 是               │ 是             │</span><br><span class="line">├──────────────┼──────────────────┼──────────────────┼────────────────┤</span><br><span class="line">│ 智慧矿山影响  │ -                 │ 过期传感器数据    │ hz=20后改善    │</span><br><span class="line">│              │                   │ 长期占内存        │ 清理更及时     │</span><br><span class="line">└──────────────┴──────────────────┴──────────────────┴────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h2 id="内存淘汰策略"><a href="#内存淘汰策略" class="headerlink" title="内存淘汰策略"></a>内存淘汰策略</h2><h3 id="触发条件"><a href="#触发条件" class="headerlink" title="触发条件"></a>触发条件</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">当Redis内存使用达到maxmemory限制时，新写入操作触发淘汰</span><br><span class="line"></span><br><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│              maxmemory配置                             │</span><br><span class="line">├─────────────────────────────────────────────────────┤</span><br><span class="line">│                                                     │</span><br><span class="line">│ maxmemory 4gb     # 设置最大内存                      │</span><br><span class="line">│                                                     │</span><br><span class="line">│ ⚠️ 不设置maxmemory的后果：                            │</span><br><span class="line">│ 32位：默认3GB限制                                    │</span><br><span class="line">│ 64位：不限制 → 可能用完所有内存 → OOM → 服务器崩溃     │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 智慧矿山事故：                                        │</span><br><span class="line">│ 64位服务器32GB内存，Redis未设maxmemory                 │</span><br><span class="line">│ Redis用了28GB → 服务器OOM → 所有服务不可用             │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 推荐配置：                                           │</span><br><span class="line">│ maxmemory &lt; 物理内存的60%                             │</span><br><span class="line">│ 32GB服务器 → maxmemory 18gb                          │</span><br><span class="line">│ 给OS和其他进程留足够内存                               │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 查看内存使用：                                        │</span><br><span class="line">│ redis-cli info memory                               │</span><br><span class="line">│ used_memory: 实际使用的内存                           │</span><br><span class="line">│ used_memory_rss: OS分配的内存                        │</span><br><span class="line">│ maxmemory: 最大内存限制                              │</span><br><span class="line">│ mem_fragmentation_ratio: 碎片率(rss/used)            │</span><br><span class="line">│                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="八种淘汰策略"><a href="#八种淘汰策略" class="headerlink" title="八种淘汰策略"></a>八种淘汰策略</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    Redis八种内存淘汰策略                            │</span><br><span class="line">├────────────────┬────────────────────────┬────────────────────────┤</span><br><span class="line">│ 策略            │ 说明                    │ 智慧矿山适用场景        │</span><br><span class="line">├────────────────┼────────────────────────┼────────────────────────┤</span><br><span class="line">│ noeviction     │ 不淘汰，写入报错         │ 数据不能丢(告警阈值)    │</span><br><span class="line">│ allkeys-lru    │ 所有key淘汰最久未使用     │ 纯缓存(设备状态)       │</span><br><span class="line">│ allkeys-lfu    │ 所有key淘汰频率最低      │ 有明显热点(热点设备)    │</span><br><span class="line">│ allkeys-random │ 所有key随机淘汰          │ 无访问热点(日志)       │</span><br><span class="line">│ volatile-lru   │ 过期key中淘汰最久未使用   │ 混合存储              │</span><br><span class="line">│ volatile-lfu   │ 过期key中淘汰频率最低    │ 混合存储              │</span><br><span class="line">│ volatile-random│ 过期key中随机淘汰        │ 混合存储              │</span><br><span class="line">│ volatile-ttl   │ 过期key中TTL最短的先淘汰 │ 有明确优先级          │</span><br><span class="line">└────────────────┴────────────────────────┴────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="过期策略对比"><a href="#过期策略对比" class="headerlink" title="过期策略对比"></a>过期策略对比</h3><p><strong>Redis过期策略三种方案对比</strong>：</p>
+<p><strong>方案           定时删除           惰性删除           定期删除</strong>：</p>
+<p><strong>触发时机       到期立即删除        访问时才删除        周期性抽查删除</strong>：</p>
+<p><strong>CPU消耗       高(大量定时器)      低(访问时才检查)   中(周期性检查)</strong>：</p>
+<p><strong>内存占用       最好(到期即删)      最差(可能永不清)   较好(最终清理)</strong>：</p>
+<p><strong>实现复杂度     高(维护定时器)      低                中</strong>：</p>
+<p><strong>Redis采用     否                 是                是</strong>：</p>
+<p><strong>智慧矿山影响   -                  过期传感器数据     hz&#x3D;20后改善</strong>：</p>
+<ul>
+<li>长期占内存         清理更及时</li>
+</ul>
+<h2 id="内存淘汰策略"><a href="#内存淘汰策略" class="headerlink" title="内存淘汰策略"></a>内存淘汰策略</h2><h3 id="触发条件"><a href="#触发条件" class="headerlink" title="触发条件"></a>触发条件</h3><p><strong>maxmemory配置</strong>：</p>
+<p><strong>maxmemory 4gb     # 设置最大内存</strong>：</p>
+<ul>
+<li>⚠️ 不设置maxmemory的后果：</li>
+<li>32位：默认3GB限制</li>
+<li>64位：不限制 → 可能用完所有内存 → OOM → 服务器崩溃</li>
+<li>智慧矿山事故：</li>
+<li>64位服务器32GB内存，Redis未设maxmemory</li>
+<li>Redis用了28GB → 服务器OOM → 所有服务不可用</li>
+<li>推荐配置：</li>
+<li>maxmemory &lt; 物理内存的60%</li>
+<li>32GB服务器 → maxmemory 18gb</li>
+<li>给OS和其他进程留足够内存</li>
+<li>查看内存使用：</li>
+<li>redis-cli info memory</li>
+<li>used_memory: 实际使用的内存</li>
+<li>used_memory_rss: OS分配的内存</li>
+<li>maxmemory: 最大内存限制</li>
+<li>mem_fragmentation_ratio: 碎片率(rss&#x2F;used)</li>
+</ul>
+<h3 id="八种淘汰策略"><a href="#八种淘汰策略" class="headerlink" title="八种淘汰策略"></a>八种淘汰策略</h3><p><strong>Redis八种内存淘汰策略</strong>：</p>
+<p><strong>策略             说明                     智慧矿山适用场景</strong>：</p>
+<p><strong>noeviction      不淘汰，写入报错          数据不能丢(告警阈值)</strong>：</p>
+<ul>
+<li>allkeys-lru     所有key淘汰最久未使用      纯缓存(设备状态)</li>
+<li>allkeys-lfu     所有key淘汰频率最低       有明显热点(热点设备)</li>
+<li>allkeys-random  所有key随机淘汰           无访问热点(日志)</li>
+<li>volatile-lru    过期key中淘汰最久未使用    混合存储</li>
+<li>volatile-lfu    过期key中淘汰频率最低     混合存储</li>
+<li>volatile-random 过期key中随机淘汰         混合存储</li>
+<li>volatile-ttl    过期key中TTL最短的先淘汰  有明确优先级</li>
+</ul>
 <table>
 <thead>
 <tr>
@@ -282,26 +359,203 @@ article: http://ogp.me/ns/article#">
 <td>短期数据优先淘汰</td>
 </tr>
 </tbody></table>
-<h3 id="策略选择决策树"><a href="#策略选择决策树" class="headerlink" title="策略选择决策树"></a>策略选择决策树</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│          智慧矿山内存淘汰策略选择决策树                  │</span><br><span class="line">├─────────────────────────────────────────────────────┤</span><br><span class="line">│                                                     │</span><br><span class="line">│ 数据能丢吗？                                          │</span><br><span class="line">│   ├── 不能丢 ──→ noeviction                          │</span><br><span class="line">│   │       智慧矿山：告警阈值配置                       │</span><br><span class="line">│   │                                                 │</span><br><span class="line">│   └── 能丢（缓存数据）                                │</span><br><span class="line">│       ├── 所有数据都设了过期时间？                      │</span><br><span class="line">│       │   ├── 否 ──→ allkeys-lru（推荐）              │</span><br><span class="line">│       │   │       智慧矿山：设备状态、传感器缓存        │</span><br><span class="line">│       │   │                                         │</span><br><span class="line">│       │   └── 是                                     │</span><br><span class="line">│       │       ├── 有明显热点？                        │</span><br><span class="line">│       │       │   ├── 是 ──→ allkeys-lfu             │</span><br><span class="line">│       │       │   │       智慧矿山：热点设备数据        │</span><br><span class="line">│       │       │   │                                  │</span><br><span class="line">│       │       │   └── 否 ──→ allkeys-lru             │</span><br><span class="line">│       │       │                                     │</span><br><span class="line">│       │       └── 部分数据不能丢？                     │</span><br><span class="line">│       │           ├── 是 ──→ volatile-lru            │</span><br><span class="line">│       │           │       不设TTL的key不参与淘汰       │</span><br><span class="line">│       │           └── 否 ──→ allkeys-lru             │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 智慧矿山推荐：allkeys-lru（纯缓存场景）                 │</span><br><span class="line">│                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="策略选择决策树"><a href="#策略选择决策树" class="headerlink" title="策略选择决策树"></a>策略选择决策树</h3><p><strong>智慧矿山内存淘汰策略选择决策树</strong>：</p>
+<p><strong>数据能丢吗？</strong>：</p>
+<p><strong>智慧矿山：告警阈值配置</strong>：</p>
+<ul>
+<li>└── 能丢（缓存数据）</li>
+</ul>
+<p><strong>智慧矿山：设备状态、传感器缓存</strong>：</p>
+<ul>
+<li>└── 是</li>
+</ul>
+<p><strong>智慧矿山：热点设备数据</strong>：</p>
+<ul>
+<li>└── 否 ──→ allkeys-lru</li>
+<li>└── 部分数据不能丢？</li>
+</ul>
+<p><strong>不设TTL的key不参与淘汰</strong>：</p>
+<ul>
+<li>└── 否 ──→ allkeys-lru</li>
+<li>智慧矿山推荐：allkeys-lru（纯缓存场景）</li>
+</ul>
+<h3 id="LRU算法实现"><a href="#LRU算法实现" class="headerlink" title="LRU算法实现"></a>LRU算法实现</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;Redis近似LRU vs 传统LRU&quot;]</span><br><span class="line">    N2[&quot;A B C D E F G H I J&quot;]</span><br><span class="line">    N3[&quot;算法 命中率 内存开销&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h3 id="LRU算法实现"><a href="#LRU算法实现" class="headerlink" title="LRU算法实现"></a>LRU算法实现</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│           Redis近似LRU vs 传统LRU                      │</span><br><span class="line">├─────────────────────────────────────────────────────┤</span><br><span class="line">│                                                     │</span><br><span class="line">│ 传统LRU：                                            │</span><br><span class="line">│ 维护一个双向链表，访问时移到头部，淘汰尾部               │</span><br><span class="line">│ ┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐         │</span><br><span class="line">│ │ A │ B │ C │ D │ E │ F │ G │ H │ I │ J │         │</span><br><span class="line">│ └───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘         │</span><br><span class="line">│   ↑ 最近访问                              最久未访问 ↑ │</span><br><span class="line">│   保留                                    淘汰       │</span><br><span class="line">│ 问题：每个key额外消耗指针(16字节)，移动节点开销大        │</span><br><span class="line">│                                                     │</span><br><span class="line">│ Redis近似LRU：                                       │</span><br><span class="line">│ 1. 随机采样N个key（默认5个）                           │</span><br><span class="line">│ 2. 淘汰其中最久未访问的                                │</span><br><span class="line">│ 3. 重复直到内存低于阈值                               │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 采样数量：maxmemory-samples 5                         │</span><br><span class="line">│ samples=5：近似LRU，性能好                            │</span><br><span class="line">│ samples=10：更接近真实LRU，但更慢                     │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 对比实验（Redis官方测试）：                             │</span><br><span class="line">│ ┌──────────────────┬──────────────┬──────────────┐  │</span><br><span class="line">│ │ 算法              │ 命中率        │ 内存开销      │  │</span><br><span class="line">│ ├──────────────────┼──────────────┼──────────────┤  │</span><br><span class="line">│ │ 理论LRU           │ 基准         │ 每key+16字节  │  │</span><br><span class="line">│ │ 近似LRU(samples=5)│ 低1%         │ 无额外开销    │  │</span><br><span class="line">│ │ 近似LRU(samples=10)│ 低0.5%      │ 无额外开销    │  │</span><br><span class="line">│ │ 随机淘汰           │ 低10%+      │ 无额外开销    │  │</span><br><span class="line">│ └──────────────────┴──────────────┴──────────────┘  │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 智慧矿山选择：samples=10，命中率更重要                  │</span><br><span class="line">│                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="LRU源码分析"><a href="#LRU源码分析" class="headerlink" title="LRU源码分析"></a>LRU源码分析</h3><p><strong>Redis LRU实现源码分析</strong>：</p>
+<p><strong>Redis对象头结构（server.h &#x2F; redisObject）：</strong>：</p>
+<ul>
+<li>typedef struct redisObject {</li>
+<li>unsigned type:4;           &#x2F;&#x2F; 数据类型</li>
+<li>unsigned encoding:4;       &#x2F;&#x2F; 编码方式</li>
+<li>unsigned lru:LRU_BITS;     &#x2F;&#x2F; LRU时间戳或LFU计数器(24bit)</li>
+<li>int refcount;              &#x2F;&#x2F; 引用计数</li>
+<li>void *ptr;                 &#x2F;&#x2F; 数据指针</li>
+<li>} robj;</li>
+<li>LRU_BITS &#x3D; 24，所以lru字段是24位</li>
+<li>当用作LRU时：存储的是最后一次访问的时间戳（低24位）</li>
+<li>最大表示：2^24秒 ≈ 194天</li>
+<li>超过194天的访问时间戳会被截断 → 但不影响LRU排序</li>
+<li>LRU时间更新时机：</li>
+<li>lookupKey() → 被任何命令访问时更新</li>
+<li>obj-&gt;lru &#x3D; LRU_CLOCK() 或 mstime() &gt;&gt; 8</li>
+<li>淘汰流程（evict.c &#x2F; performEvictions）：</li>
+<li><ol>
+<li>循环直到释放了足够的内存</li>
+</ol>
+</li>
+<li><ol start="2">
+<li>每次随机采样 maxmemory-samples 个key</li>
+</ol>
+</li>
+<li><ol start="3">
+<li>找出其中lru最小的（最久未访问）</li>
+</ol>
+</li>
+<li><ol start="4">
+<li>删除该key，释放内存</li>
+</ol>
+</li>
+<li><ol start="5">
+<li>如果仍超过maxmemory，继续循环</li>
+</ol>
+</li>
+<li>智慧矿山优化：</li>
+<li>maxmemory-samples 从5改为10</li>
+<li>采样更多key → 淘汰更精准 → 命中率提高</li>
+<li>CPU开销增加约0.1ms&#x2F;次淘汰 → 可接受</li>
+</ul>
+<h3 id="LFU算法实现"><a href="#LFU算法实现" class="headerlink" title="LFU算法实现"></a>LFU算法实现</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;Redis 4.0&quot;]</span><br><span class="line">    N2[&quot;实际访问次数&quot;]</span><br><span class="line">    N3[&quot;LFU实现Least Frequently Used&quot;]</span><br><span class="line">    N4[&quot;8bit计数器值 1次&quot;]</span><br><span class="line">    N5[&quot;1 2次&quot;]</span><br><span class="line">    N6[&quot;2 10次&quot;]</span><br><span class="line">    N7[&quot;5 100次&quot;]</span><br><span class="line">    N8[&quot;9 1000次&quot;]</span><br><span class="line">    N9[&quot;14 10000次&quot;]</span><br><span class="line">    N10[&quot;19 ...255(最大值) 公式counter  counter&quot;]</span><br><span class="line">    N11[&quot;max(1, p  (255 - counter)) p  1.0  (lfu-log-factor&quot;]</span><br><span class="line">    N12[&quot;1)&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line">    N9 --&gt; N10</span><br><span class="line">    N9 --&gt; N11</span><br><span class="line">    N9 --&gt; N12</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h3 id="LRU源码分析"><a href="#LRU源码分析" class="headerlink" title="LRU源码分析"></a>LRU源码分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│              Redis LRU实现源码分析                                      │</span><br><span class="line">├──────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                      │</span><br><span class="line">│  Redis对象头结构（server.h / redisObject）：                          │</span><br><span class="line">│  typedef struct redisObject &#123;                                        │</span><br><span class="line">│      unsigned type:4;           // 数据类型                           │</span><br><span class="line">│      unsigned encoding:4;       // 编码方式                           │</span><br><span class="line">│      unsigned lru:LRU_BITS;     // LRU时间戳或LFU计数器(24bit)       │</span><br><span class="line">│      int refcount;              // 引用计数                           │</span><br><span class="line">│      void *ptr;                 // 数据指针                           │</span><br><span class="line">│  &#125; robj;                                                             │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  LRU_BITS = 24，所以lru字段是24位                                     │</span><br><span class="line">│  当用作LRU时：存储的是最后一次访问的时间戳（低24位）                    │</span><br><span class="line">│  最大表示：2^24秒 ≈ 194天                                            │</span><br><span class="line">│  超过194天的访问时间戳会被截断 → 但不影响LRU排序                      │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  LRU时间更新时机：                                                    │</span><br><span class="line">│  lookupKey() → 被任何命令访问时更新                                   │</span><br><span class="line">│  obj-&gt;lru = LRU_CLOCK() 或 mstime() &gt;&gt; 8                            │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  淘汰流程（evict.c / performEvictions）：                            │</span><br><span class="line">│  1. 循环直到释放了足够的内存                                          │</span><br><span class="line">│  2. 每次随机采样 maxmemory-samples 个key                             │</span><br><span class="line">│  3. 找出其中lru最小的（最久未访问）                                   │</span><br><span class="line">│  4. 删除该key，释放内存                                               │</span><br><span class="line">│  5. 如果仍超过maxmemory，继续循环                                    │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  智慧矿山优化：                                                       │</span><br><span class="line">│  maxmemory-samples 从5改为10                                         │</span><br><span class="line">│  采样更多key → 淘汰更精准 → 命中率提高                               │</span><br><span class="line">│  CPU开销增加约0.1ms/次淘汰 → 可接受                                  │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="LFU算法实现"><a href="#LFU算法实现" class="headerlink" title="LFU算法实现"></a>LFU算法实现</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│          Redis 4.0+ LFU实现（Least Frequently Used）  │</span><br><span class="line">├─────────────────────────────────────────────────────┤</span><br><span class="line">│                                                     │</span><br><span class="line">│ 在对象头中用8bit记录访问频率                           │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 计数器增长：不是简单+1，使用对数计数器                   │</span><br><span class="line">│ ┌──────────────────────────────────────┐            │</span><br><span class="line">│ │ 实际访问次数 → 8bit计数器值            │            │</span><br><span class="line">│ │ 1次    → 1                           │            │</span><br><span class="line">│ │ 2次    → 2                           │            │</span><br><span class="line">│ │ 10次   → 5                           │            │</span><br><span class="line">│ │ 100次  → 9                           │            │</span><br><span class="line">│ │ 1000次 → 14                          │            │</span><br><span class="line">│ │ 10000次→ 19                          │            │</span><br><span class="line">│ │ ...255(最大值)                        │            │</span><br><span class="line">│ │                                      │            │</span><br><span class="line">│ │ 公式：counter = counter + max(1,     │            │</span><br><span class="line">│ │        p * (255 - counter))          │            │</span><br><span class="line">│ │ p = 1.0 / (lfu-log-factor + 1)      │            │</span><br><span class="line">│ └──────────────────────────────────────┘            │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 衰减机制：计数器会随时间衰减                            │</span><br><span class="line">│ lfu-decay-time 1    # 1分钟衰减一次（推荐）            │</span><br><span class="line">│ 衰减量 = max(0, 计数器 - 每分钟应该衰减的次数)          │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 配置参数：                                           │</span><br><span class="line">│ lfu-log-factor 10   # 计数器增长因子                  │</span><br><span class="line">│   因子越大 → 计数器增长越慢 → 防止热点key计数器溢出     │</span><br><span class="line">│   因子越小 → 计数器增长越快 → 区分度更高               │</span><br><span class="line">│                                                     │</span><br><span class="line">│ lfu-decay-time 1    # 衰减时间（分钟）                │</span><br><span class="line">│   时间越短 → 衰减越快 → 旧热点会更快被淘汰              │</span><br><span class="line">│   时间越长 → 衰减越慢 → 历史访问权重更高               │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 开启LFU：                                           │</span><br><span class="line">│ CONFIG SET maxmemory-policy allkeys-lfu              │</span><br><span class="line">│                                                     │</span><br><span class="line">│ 智慧矿山选择：                                       │</span><br><span class="line">│ 设备访问频率有明确热点 → allkeys-lfu                   │</span><br><span class="line">│ CR001号采煤机访问频率远高于CR999 → LFU保留热点设备     │</span><br><span class="line">│                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="LFU源码分析"><a href="#LFU源码分析" class="headerlink" title="LFU源码分析"></a>LFU源码分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│              Redis LFU实现源码分析                                      │</span><br><span class="line">├──────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                      │</span><br><span class="line">│  redisObject.lru字段在LFU模式下的24bit分配：                          │</span><br><span class="line">│  ┌────────────────────┬────────────────────┐                        │</span><br><span class="line">│  │ 高16bit             │ 低8bit              │                        │</span><br><span class="line">│  │ 最后衰减时间(分钟)   │ 对数计数器          │                        │</span><br><span class="line">│  └────────────────────┴────────────────────┘                        │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  LFU计数器增长（db.c / updateLFU）：                                 │</span><br><span class="line">│  void updateLFU(robj *val) &#123;                                         │</span><br><span class="line">│      unsigned long counter = LFUDecrAndReturn(val);                  │</span><br><span class="line">│      counter = LFULogIncr(counter);                                  │</span><br><span class="line">│      val-&gt;lru = (LFUGetTimeInMinutes() &lt;&lt; 8) | counter;             │</span><br><span class="line">│  &#125;                                                                   │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  LFULogIncr - 对数增长（防止计数器溢出）：                            │</span><br><span class="line">│  uint8_t LFULogIncr(uint8_t counter) &#123;                               │</span><br><span class="line">│      if (counter == 255) return 255;                                 │</span><br><span class="line">│      double r = (double)rand() / RAND_MAX;                           │</span><br><span class="line">│      double baseval = counter - LFU_INIT_VAL;                        │</span><br><span class="line">│      if (baseval &lt; 0) baseval = 0;                                   │</span><br><span class="line">│      double p = 1.0 / (baseval * lfu_log_factor + 1);               │</span><br><span class="line">│      if (r &lt; p) counter++;                                           │</span><br><span class="line">│      return counter;                                                 │</span><br><span class="line">│  &#125;                                                                   │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  核心逻辑：不是每次访问都+1，而是概率递增                             │</span><br><span class="line">│  counter越小 → p越大 → 递增概率越高                                  │</span><br><span class="line">│  counter越大 → p越小 → 递增概率越低                                  │</span><br><span class="line">│  这保证了：                                                          │</span><br><span class="line">│  - 新key的计数器快速增长（1→2→3...）                                │</span><br><span class="line">│  - 老key的计数器缓慢增长（100→101概率很低）                          │</span><br><span class="line">│  - 最终收敛到255，不会溢出                                           │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  LFU计数器衰减（LFUDecrAndReturn）：                                  │</span><br><span class="line">│  unsigned long LFUDecrAndReturn(robj *o) &#123;                           │</span><br><span class="line">│      unsigned long ldt = o-&gt;lru &gt;&gt; 8;       // 高16位：衰减时间      │</span><br><span class="line">│      unsigned long counter = o-&gt;lru &amp; 255;  // 低8位：计数器         │</span><br><span class="line">│      unsigned long num_periods = server.lfu_decay_time;              │</span><br><span class="line">│      unsigned long elapsed = lfu_decay_time(ldt, LFUGetTimeInMinutes());│</span><br><span class="line">│      if (elapsed &lt;= num_periods) return counter;                     │</span><br><span class="line">│      if (num_periods) counter = (elapsed / num_periods);             │</span><br><span class="line">│      if (counter &lt; 0) counter = 0;                                   │</span><br><span class="line">│      return counter;                                                 │</span><br><span class="line">│  &#125;                                                                   │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  智慧矿山场景分析：                                                    │</span><br><span class="line">│  CR001采煤机每秒被访问10次 → counter快速增长到20+                     │</span><br><span class="line">│  CR999边缘传感器每分钟访问1次 → counter只有3-5                        │</span><br><span class="line">│  淘汰时counter=3的先被淘汰 → 保护了热点设备                          │</span><br><span class="line">│  但如果CR001一周没被访问 → counter衰减到0 → 可被淘汰                  │</span><br><span class="line">│  这就是LFU衰减机制的价值                                               │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="LRU与LFU对比"><a href="#LRU与LFU对比" class="headerlink" title="LRU与LFU对比"></a>LRU与LFU对比</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│              LRU vs LFU 详细对比                                       │</span><br><span class="line">├──────────────┬──────────────────────────┬────────────────────────────┤</span><br><span class="line">│  对比维度      │ LRU                       │ LFU                         │</span><br><span class="line">├──────────────┼──────────────────────────┼────────────────────────────┤</span><br><span class="line">│ 淘汰依据      │ 最久未访问                 │ 访问频率最低                │</span><br><span class="line">├──────────────┼──────────────────────────┼────────────────────────────┤</span><br><span class="line">│ 适合场景      │ 访问模式均匀               │ 有明显热点                 │</span><br><span class="line">├──────────────┼──────────────────────────┼────────────────────────────┤</span><br><span class="line">│ 新数据保护    │ 差(新数据可能立即被淘汰)   │ 好(新数据频率为1，但不低)   │</span><br><span class="line">├──────────────┼──────────────────────────┼────────────────────────────┤</span><br><span class="line">│ 历史热点      │ 可能被淘汰                 │ 需要衰减机制               │</span><br><span class="line">├──────────────┼──────────────────────────┼────────────────────────────┤</span><br><span class="line">│ 内存开销      │ 24bit时间戳               │ 8bit计数器+16bit衰减时间   │</span><br><span class="line">├──────────────┼──────────────────────────┼────────────────────────────┤</span><br><span class="line">│ CPU开销      │ 采样比较时间戳             │ 采样比较计数器             │</span><br><span class="line">├──────────────┼──────────────────────────┼────────────────────────────┤</span><br><span class="line">│ 配置参数      │ maxmemory-samples          │ lfu-log-factor             │</span><br><span class="line">│              │                           │ lfu-decay-time             │</span><br><span class="line">├──────────────┼──────────────────────────┼────────────────────────────┤</span><br><span class="line">│ 智慧矿山      │ 设备状态缓存               │ 热点设备数据               │</span><br><span class="line">│ 适用场景      │ (访问模式均匀)             │ (核心设备访问远多于其他)    │</span><br><span class="line">└──────────────┴──────────────────────────┴────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="Redis-7-0-lazy-free新特性"><a href="#Redis-7-0-lazy-free新特性" class="headerlink" title="Redis 7.0 lazy-free新特性"></a>Redis 7.0 lazy-free新特性</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│              Redis 7.0 lazy-free增强                                   │</span><br><span class="line">├──────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                      │</span><br><span class="line">│  lazy-free相关配置一览：                                               │</span><br><span class="line">│  ┌──────────────────────────┬──────────────┬────────────────────┐    │</span><br><span class="line">│  │ 配置项                     │ 默认值        │ 说明                │    │</span><br><span class="line">│  ├──────────────────────────┼──────────────┼────────────────────┤    │</span><br><span class="line">│  │ lazyfree-lazy-eviction    │ no           │ 淘汰时异步删除      │    │</span><br><span class="line">│  │ lazyfree-lazy-expire      │ no           │ 过期时异步删除      │    │</span><br><span class="line">│  │ lazyfree-lazy-server-del  │ no           │ 命令删除时异步      │    │</span><br><span class="line">│  │ replica-lazy-flush        │ no           │ 从节点全量同步异步   │    │</span><br><span class="line">│  │ lazyfree-lazy-user-del    │ no           │ DEL/UNLINK异步      │    │</span><br><span class="line">│  │ lazyfree-lazy-user-flush  │ no           │ FLUSHALL/FLUSHDB异步│    │</span><br><span class="line">│  └──────────────────────────┴──────────────┴────────────────────┘    │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  智慧矿山推荐配置：                                                    │</span><br><span class="line">│  lazyfree-lazy-eviction yes    # 淘汰大key不阻塞                     │</span><br><span class="line">│  lazyfree-lazy-expire yes      # 过期删除大key不阻塞                  │</span><br><span class="line">│  lazyfree-lazy-server-del yes  # 命令删除大key不阻塞                  │</span><br><span class="line">│  replica-lazy-flush yes        # 全量同步清空旧数据不阻塞              │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  什么时候用lazy-free？                                                  │</span><br><span class="line">│  - key的value &gt; 64字节 → 异步删除更优                                 │</span><br><span class="line">│  - key的value &lt; 64字节 → 同步删除更优（异步有线程切换开销）           │</span><br><span class="line">│  - Hash/List元素 &gt; 64个 → 异步删除更优                               │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  智慧矿山实测：                                                        │</span><br><span class="line">│  开启lazy-free后，删除10MB设备历史Hash从200ms降到0.1ms                │</span><br><span class="line">│  但异步删除期间内存不会立即释放，有短暂内存峰值                         │</span><br><span class="line">│  需要配合maxmemory监控，防止异步删除期间内存超限                        │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="过期策略对主从复制的影响"><a href="#过期策略对主从复制的影响" class="headerlink" title="过期策略对主从复制的影响"></a>过期策略对主从复制的影响</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│              过期策略与主从复制的关系                                    │</span><br><span class="line">├──────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                      │</span><br><span class="line">│  关键规则：                                                           │</span><br><span class="line">│  1. 过期key的删除由Master决定                                         │</span><br><span class="line">│  2. Master删除过期key后 → 发送DEL命令给所有Slave                      │</span><br><span class="line">│  3. Slave不会主动删除过期key → 等待Master的DEL命令                    │</span><br><span class="line">│  4. Slave读请求遇到过期key → 仍返回值（不会主动删除）                  │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  这导致的问题：                                                        │</span><br><span class="line">│  ┌──────────────────────────────────────────────────────┐            │</span><br><span class="line">│  │ 问题：Slave读到了过期但Master还没删除的数据             │            │</span><br><span class="line">│  │                                                      │            │</span><br><span class="line">│  │ 时间线：                                              │            │</span><br><span class="line">│  │ T1: SET sensor:TEMP001 &#123;...&#125; EX 300                  │            │</span><br><span class="line">│  │ T2: 300秒后，Master定期删除检测到过期 → 删除           │            │</span><br><span class="line">│  │ T3: Master发送DEL给Slave                              │            │</span><br><span class="line">│  │ T4: Slave执行DEL                                      │            │</span><br><span class="line">│  │                                                      │            │</span><br><span class="line">│  │ 在T2到T4之间：                                        │            │</span><br><span class="line">│  │ - Slave读sensor:TEMP001 → 返回过期数据               │            │</span><br><span class="line">│  │ - 但这是可以接受的，因为只是短暂的延迟                 │            │</span><br><span class="line">│  └──────────────────────────────────────────────────────┘            │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  智慧矿山踩坑：                                                        │</span><br><span class="line">│  从Slave读取设备状态 → 读到了已过期的传感器数据                       │</span><br><span class="line">│  监控大屏显示了5分钟前的旧数据                                         │</span><br><span class="line">│  解决：关键数据读请求走Master，或业务层检查TTL                         │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  Lua脚本中的过期行为：                                                  │</span><br><span class="line">│  Lua脚本执行期间，过期的key会被惰性删除                                 │</span><br><span class="line">│  但Lua脚本执行是原子的，不会被定期删除打断                              │</span><br><span class="line">│  所以Lua脚本中不会出现&quot;执行到一半key过期&quot;的情况                        │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h2 id="内存优化实践"><a href="#内存优化实践" class="headerlink" title="内存优化实践"></a>内存优化实践</h2><h3 id="1-所有key必须设置过期时间"><a href="#1-所有key必须设置过期时间" class="headerlink" title="1. 所有key必须设置过期时间"></a>1. 所有key必须设置过期时间</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RedisTTLService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ❌ 没有过期时间，永远占内存</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">badSet</span><span class="params">(String key, Object value)</span> &#123;</span><br><span class="line">        redisTemplate.opsForValue().set(key, JSON.toJSONString(value));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ✅ 设置合理的过期时间</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">goodSet</span><span class="params">(String key, Object value, <span class="type">long</span> timeout, TimeUnit unit)</span> &#123;</span><br><span class="line">        redisTemplate.opsForValue().set(key, JSON.toJSONString(value), timeout, unit);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 智慧矿山不同数据的TTL规范</span></span><br><span class="line"><span class="comment">     *</span></span><br><span class="line"><span class="comment">     * ┌──────────────┬───────────┬──────────────┐</span></span><br><span class="line"><span class="comment">     * │ 数据类型      │ TTL       │ 说明          │</span></span><br><span class="line"><span class="comment">     * ├──────────────┼───────────┼──────────────┤</span></span><br><span class="line"><span class="comment">     * │ 传感器实时数据 │ 5分钟     │ 实时采集，旧数据无价值 │</span></span><br><span class="line"><span class="comment">     * │ 设备状态缓存  │ 30分钟    │ 可从数据库重载 │</span></span><br><span class="line"><span class="comment">     * │ 告警去重标记  │ 5分钟     │ 去重窗口期    │</span></span><br><span class="line"><span class="comment">     * │ 限流计数器   │ 60秒      │ 限流窗口期    │</span></span><br><span class="line"><span class="comment">     * │ 日榜数据     │ 7天       │ 历史查询需要  │</span></span><br><span class="line"><span class="comment">     * │ 月榜数据     │ 90天      │ 月度统计需要  │</span></span><br><span class="line"><span class="comment">     * │ 告警阈值配置  │ 365天     │ 长期存储也设TTL │</span></span><br><span class="line"><span class="comment">     * └──────────────┴───────────┴──────────────┘</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 批量设置过期时间（Pipeline方式）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：清理忘记设TTL的key</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">batchExpire</span><span class="params">(Map&lt;String, Long&gt; keyTtlMap)</span> &#123;</span><br><span class="line">        redisTemplate.executePipelined((RedisCallback&lt;Object&gt;) connection -&gt; &#123;</span><br><span class="line">            <span class="keyword">for</span> (Map.Entry&lt;String, Long&gt; entry : keyTtlMap.entrySet()) &#123;</span><br><span class="line">                connection.expire(entry.getKey().getBytes(), entry.getValue());</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-
-<h3 id="2-选择合适的数据结构"><a href="#2-选择合适的数据结构" class="headerlink" title="2. 选择合适的数据结构"></a>2. 选择合适的数据结构</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RedisStructureOptimization</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ❌ String存大量字段 → 内存占用大</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">badStoreObject</span><span class="params">(Long userId, User user)</span> &#123;</span><br><span class="line">        redisTemplate.opsForValue().set(<span class="string">&quot;user:&quot;</span> + userId,</span><br><span class="line">            JSON.toJSONString(user));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ✅ Hash存对象 → 可以只获取部分字段，更省内存</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">goodStoreObject</span><span class="params">(Long userId, User user)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;user:&quot;</span> + userId;</span><br><span class="line">        Map&lt;String, String&gt; fields = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line">        fields.put(<span class="string">&quot;name&quot;</span>, user.getName());</span><br><span class="line">        fields.put(<span class="string">&quot;age&quot;</span>, String.valueOf(user.getAge()));</span><br><span class="line">        fields.put(<span class="string">&quot;dept&quot;</span>, user.getDept());</span><br><span class="line">        redisTemplate.opsForHash().putAll(key, fields);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ❌ 用String存计数 → 每次需要GET+SET</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">badCounter</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">value</span> <span class="operator">=</span> (String) redisTemplate.opsForValue().get(key);</span><br><span class="line">        <span class="type">int</span> <span class="variable">count</span> <span class="operator">=</span> value != <span class="literal">null</span> ? Integer.parseInt(value) + <span class="number">1</span> : <span class="number">1</span>;</span><br><span class="line">        redisTemplate.opsForValue().set(key, String.valueOf(count));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ✅ 用String的INCR → 原子操作，更省内存</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">goodCounter</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        redisTemplate.opsForValue().increment(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 智慧矿山数据结构选型对照表</span></span><br><span class="line"><span class="comment">     *</span></span><br><span class="line"><span class="comment">     * ┌──────────────┬───────────┬──────────────────────┐</span></span><br><span class="line"><span class="comment">     * │ 场景          │ 推荐结构   │ 原因                  │</span></span><br><span class="line"><span class="comment">     * ├──────────────┼───────────┼──────────────────────┤</span></span><br><span class="line"><span class="comment">     * │ 设备状态缓存  │ Hash       │ 字段级更新，省内存     │</span></span><br><span class="line"><span class="comment">     * │ 传感器数据    │ String+JSON│ 整体读写，简单高效     │</span></span><br><span class="line"><span class="comment">     * │ 设备计数器   │ String+INCR│ 原子递增，省内存       │</span></span><br><span class="line"><span class="comment">     * │ 排行榜       │ ZSet       │ 天然有序，O(logN)      │</span></span><br><span class="line"><span class="comment">     * │ 标签系统     │ Set        │ 去重+集合运算          │</span></span><br><span class="line"><span class="comment">     * │ 时间线       │ List       │ 有序+分页              │</span></span><br><span class="line"><span class="comment">     * └──────────────┴───────────┴──────────────────────┘</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-
+<h3 id="LFU源码分析"><a href="#LFU源码分析" class="headerlink" title="LFU源码分析"></a>LFU源码分析</h3><ul>
+<li>新key的计数器快速增长（1→2→3…）</li>
+<li>老key的计数器缓慢增长（100→101概率很低）</li>
+<li>最终收敛到255，不会溢出</li>
+</ul>
+<h3 id="LRU与LFU对比"><a href="#LRU与LFU对比" class="headerlink" title="LRU与LFU对比"></a>LRU与LFU对比</h3><p><strong>LRU vs LFU 详细对比</strong>：</p>
+<p><strong>对比维度       LRU                        LFU</strong>：</p>
+<p><strong>淘汰依据       最久未访问                  访问频率最低</strong>：</p>
+<p><strong>适合场景       访问模式均匀                有明显热点</strong>：</p>
+<p><strong>新数据保护     差(新数据可能立即被淘汰)    好(新数据频率为1，但不低)</strong>：</p>
+<p><strong>历史热点       可能被淘汰                  需要衰减机制</strong>：</p>
+<p><strong>内存开销       24bit时间戳                8bit计数器+16bit衰减时间</strong>：</p>
+<p><strong>CPU开销       采样比较时间戳              采样比较计数器</strong>：</p>
+<p><strong>配置参数       maxmemory-samples           lfu-log-factor</strong>：</p>
+<ul>
+<li>lfu-decay-time</li>
+</ul>
+<p><strong>智慧矿山       设备状态缓存                热点设备数据</strong>：</p>
+<ul>
+<li>适用场景       (访问模式均匀)              (核心设备访问远多于其他)</li>
+</ul>
+<h3 id="Redis-7-0-lazy-free新特性"><a href="#Redis-7-0-lazy-free新特性" class="headerlink" title="Redis 7.0 lazy-free新特性"></a>Redis 7.0 lazy-free新特性</h3><ul>
+<li>key的value &gt; 64字节 → 异步删除更优</li>
+<li>key的value &lt; 64字节 → 同步删除更优（异步有线程切换开销）</li>
+<li>Hash&#x2F;List元素 &gt; 64个 → 异步删除更优</li>
+</ul>
+<h3 id="过期策略对主从复制的影响"><a href="#过期策略对主从复制的影响" class="headerlink" title="过期策略对主从复制的影响"></a>过期策略对主从复制的影响</h3><ul>
+<li>Slave读sensor:TEMP001 → 返回过期数据</li>
+<li>但这是可以接受的，因为只是短暂的延迟</li>
+</ul>
+<h2 id="内存优化实践"><a href="#内存优化实践" class="headerlink" title="内存优化实践"></a>内存优化实践</h2><h3 id="1-所有key必须设置过期时间"><a href="#1-所有key必须设置过期时间" class="headerlink" title="1. 所有key必须设置过期时间"></a>1. 所有key必须设置过期时间</h3><table>
+<thead>
+<tr>
+<th>*</th>
+<th>数据类型</th>
+<th>TTL</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>*</td>
+<td>传感器实时数据</td>
+<td>5分钟</td>
+<td>实时采集，旧数据无价值</td>
+</tr>
+<tr>
+<td>*</td>
+<td>设备状态缓存</td>
+<td>30分钟</td>
+<td>可从数据库重载</td>
+</tr>
+<tr>
+<td>*</td>
+<td>告警去重标记</td>
+<td>5分钟</td>
+<td>去重窗口期</td>
+</tr>
+<tr>
+<td>*</td>
+<td>限流计数器</td>
+<td>60秒</td>
+<td>限流窗口期</td>
+</tr>
+<tr>
+<td>*</td>
+<td>日榜数据</td>
+<td>7天</td>
+<td>历史查询需要</td>
+</tr>
+<tr>
+<td>*</td>
+<td>月榜数据</td>
+<td>90天</td>
+<td>月度统计需要</td>
+</tr>
+<tr>
+<td>*</td>
+<td>告警阈值配置</td>
+<td>365天</td>
+<td>长期存储也设TTL</td>
+</tr>
+</tbody></table>
+<h3 id="2-选择合适的数据结构"><a href="#2-选择合适的数据结构" class="headerlink" title="2. 选择合适的数据结构"></a>2. 选择合适的数据结构</h3><table>
+<thead>
+<tr>
+<th>*</th>
+<th>场景</th>
+<th>推荐结构</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>*</td>
+<td>设备状态缓存</td>
+<td>Hash</td>
+<td>字段级更新，省内存</td>
+</tr>
+<tr>
+<td>*</td>
+<td>传感器数据</td>
+<td>String+JSON</td>
+<td>整体读写，简单高效</td>
+</tr>
+<tr>
+<td>*</td>
+<td>设备计数器</td>
+<td>String+INCR</td>
+<td>原子递增，省内存</td>
+</tr>
+<tr>
+<td>*</td>
+<td>排行榜</td>
+<td>ZSet</td>
+<td>天然有序，O(logN)</td>
+</tr>
+<tr>
+<td>*</td>
+<td>标签系统</td>
+<td>Set</td>
+<td>去重+集合运算</td>
+</tr>
+<tr>
+<td>*</td>
+<td>时间线</td>
+<td>List</td>
+<td>有序+分页</td>
+</tr>
+</tbody></table>
 <h3 id="3-避免大key"><a href="#3-避免大key" class="headerlink" title="3. 避免大key"></a>3. 避免大key</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># =====================================================</span></span><br><span class="line"><span class="comment"># 大key的危害与处理</span></span><br><span class="line"><span class="comment"># =====================================================</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 大key标准：</span></span><br><span class="line"><span class="comment"># String &gt; 10KB</span></span><br><span class="line"><span class="comment"># Hash/List/Set &gt; 5000个元素</span></span><br><span class="line"><span class="comment"># ZSet &gt; 5000个元素</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 1. 查找大key</span></span><br><span class="line">redis-cli --bigkeys</span><br><span class="line">redis-cli --memkeys   <span class="comment"># 更精确</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 大key的危害</span></span><br><span class="line"><span class="comment"># - 过期删除时阻塞Redis（同步删除）</span></span><br><span class="line"><span class="comment"># - 淘汰时占用大量CPU</span></span><br><span class="line"><span class="comment"># - AOF重写时膨胀</span></span><br><span class="line"><span class="comment"># - fork时COW内存翻倍</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 拆分大key示例</span></span><br><span class="line"><span class="comment"># ❌ 一个Hash存10万设备状态</span></span><br><span class="line">HSET device:all CR001 &#123;...&#125; CR002 &#123;...&#125; ... CR100000 &#123;...&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment"># ✅ 按区域拆分</span></span><br><span class="line">HSET device:area:A01 CR001 &#123;...&#125; CR002 &#123;...&#125;</span><br><span class="line">HSET device:area:A02 CR003 &#123;...&#125; CR004 &#123;...&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment"># ✅ 按类型拆分</span></span><br><span class="line">HSET device:<span class="built_in">type</span>:coal CR001 &#123;...&#125; CR002 &#123;...&#125;</span><br><span class="line">HSET device:<span class="built_in">type</span>:vent CR003 &#123;...&#125; CR004 &#123;...&#125;</span><br></pre></td></tr></table></figure>
 
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BigKeyService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 异步删除大key（Redis 4.0+）</span></span><br><span class="line"><span class="comment">     * UNLINK命令：后台异步删除，不阻塞主线程</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">deleteBigKeySafely</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="comment">// ❌ 同步删除：大key可能阻塞数百毫秒</span></span><br><span class="line">        <span class="comment">// redisTemplate.delete(key);</span></span><br><span class="line"></span><br><span class="line">        <span class="comment">// ✅ 异步删除：UNLINK</span></span><br><span class="line">        redisTemplate.execute((RedisCallback&lt;Long&gt;) connection -&gt;</span><br><span class="line">            connection.unlink(key.getBytes())</span><br><span class="line">        );</span><br><span class="line">        log.info(<span class="string">&quot;异步删除大key: &#123;&#125;&quot;</span>, key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 分批删除大Hash</span></span><br><span class="line"><span class="comment">     * 使用HSCAN + HDEL逐字段删除</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">deleteBigHashSafely</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="type">ScanOptions</span> <span class="variable">options</span> <span class="operator">=</span> ScanOptions.scanOptions().count(<span class="number">100</span>).build();</span><br><span class="line">        Cursor&lt;Map.Entry&lt;Object, Object&gt;&gt; cursor = redisTemplate.opsForHash()</span><br><span class="line">            .scan(key, options);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">while</span> (cursor.hasNext()) &#123;</span><br><span class="line">            Map.Entry&lt;Object, Object&gt; entry = cursor.next();</span><br><span class="line">            redisTemplate.opsForHash().delete(key, entry.getKey());</span><br><span class="line">        &#125;</span><br><span class="line">        cursor.close();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 删除空Hash</span></span><br><span class="line">        redisTemplate.delete(key);</span><br><span class="line">        log.info(<span class="string">&quot;分批删除大Hash完成: &#123;&#125;&quot;</span>, key);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -312,7 +566,8 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="6-限流计数器的原子操作"><a href="#6-限流计数器的原子操作" class="headerlink" title="6. 限流计数器的原子操作"></a>6. 限流计数器的原子操作</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 智慧矿山 - 限流计数器</span></span><br><span class="line"><span class="comment"> * 使用Lua脚本保证INCR+EXPIRE的原子性</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RateLimiterService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * Lua脚本：原子INCR + EXPIRE</span></span><br><span class="line"><span class="comment">     * 解决INCR后EXPIRE可能失败的问题</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">RATE_LIMIT_SCRIPT</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;local count = redis.call(&#x27;INCR&#x27;, KEYS[1]) &quot;</span> +</span><br><span class="line">        <span class="string">&quot;if count == 1 then &quot;</span> +</span><br><span class="line">        <span class="string">&quot;  redis.call(&#x27;EXPIRE&#x27;, KEYS[1], ARGV[1]) &quot;</span> +</span><br><span class="line">        <span class="string">&quot;end &quot;</span> +</span><br><span class="line">        <span class="string">&quot;return count&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 限流检查</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@param</span> key 限流key</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@param</span> windowSeconds 窗口时间（秒）</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@param</span> maxCount 窗口内最大请求数</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">isAllowed</span><span class="params">(String key, <span class="type">int</span> windowSeconds, <span class="type">int</span> maxCount)</span> &#123;</span><br><span class="line">        <span class="type">Long</span> <span class="variable">count</span> <span class="operator">=</span> redisTemplate.execute(</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(RATE_LIMIT_SCRIPT, Long.class),</span><br><span class="line">            Collections.singletonList(key),</span><br><span class="line">            String.valueOf(windowSeconds)</span><br><span class="line">        );</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (count == <span class="literal">null</span>) <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">        <span class="keyword">return</span> count &lt;= maxCount;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="内存优化全景图"><a href="#内存优化全景图" class="headerlink" title="内存优化全景图"></a>内存优化全景图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│              智慧矿山 - Redis内存优化全景图                              │</span><br><span class="line">├──────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                      │</span><br><span class="line">│  1. 所有key设TTL（防止内存无限增长）                                  │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐            │</span><br><span class="line">│  │ SET key value EX 300   → 5分钟自动过期               │            │</span><br><span class="line">│  │ Pipeline也必须带TTL    → 批量写入不遗漏               │            │</span><br><span class="line">│  │ 告警阈值也设TTL(365天) → 长期存储也设过期             │            │</span><br><span class="line">│  └─────────────────────────────────────────────────────┘            │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  2. 选择合适的数据结构（省内存）                                      │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐            │</span><br><span class="line">│  │ 设备状态 → Hash（字段级更新）                         │            │</span><br><span class="line">│  │ 计数器   → String+INCR（原子递增）                    │            │</span><br><span class="line">│  │ 排行榜   → ZSet（天然有序）                           │            │</span><br><span class="line">│  └─────────────────────────────────────────────────────┘            │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  3. 避免大key（防阻塞）                                              │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐            │</span><br><span class="line">│  │ 拆分大Hash → 按区域/类型拆分                         │            │</span><br><span class="line">│  │ UNLINK删除 → 异步删除不阻塞                          │            │</span><br><span class="line">│  │ HSCAN+HDEL → 分批删除大Hash                         │            │</span><br><span class="line">│  └─────────────────────────────────────────────────────┘            │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  4. 正确配置淘汰策略                                                  │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐            │</span><br><span class="line">│  │ 纯缓存 → allkeys-lru                                │            │</span><br><span class="line">│  │ 有热点 → allkeys-lfu                                │            │</span><br><span class="line">│  │ 混合存储 → volatile-lru                              │            │</span><br><span class="line">│  │ maxmemory-samples = 10 → 提高命中率                  │            │</span><br><span class="line">│  └─────────────────────────────────────────────────────┘            │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  5. 监控+告警                                                        │</span><br><span class="line">│  ┌─────────────────────────────────────────────────────┐            │</span><br><span class="line">│  │ 内存使用率 &gt; 80% → 告警                              │            │</span><br><span class="line">│  │ 碎片率 &gt; 2.0 → 开启activedefrag                     │            │</span><br><span class="line">│  │ evicted_keys &gt; 0 → 排查数据过期策略                  │            │</span><br><span class="line">│  └─────────────────────────────────────────────────────┘            │</span><br><span class="line">│                                                                      │</span><br><span class="line">│  智慧矿山优化效果：                                                   │</span><br><span class="line">│  优化前：8GB内存，碎片率2.5，频繁淘汰                                 │</span><br><span class="line">│  优化后：3GB内存，碎片率1.2，无淘汰                                   │</span><br><span class="line">│  降幅：62.5%内存节省                                                 │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="内存优化全景图"><a href="#内存优化全景图" class="headerlink" title="内存优化全景图"></a>内存优化全景图</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;智慧矿山 - Redis内存优化全景图&quot;]</span><br><span class="line">    N2[&quot;SET key value EX 300&quot;]</span><br><span class="line">    N3[&quot;5分钟自动过期&quot;]</span><br><span class="line">    N4[&quot;Pipeline也必须带TTL&quot;]</span><br><span class="line">    N5[&quot;批量写入不遗漏&quot;]</span><br><span class="line">    N6[&quot;告警阈值也设TTL(365天)&quot;]</span><br><span class="line">    N7[&quot;长期存储也设过期&quot;]</span><br><span class="line">    N8[&quot;设备状态&quot;]</span><br><span class="line">    N9[&quot;Hash字段级更新 计数器&quot;]</span><br><span class="line">    N10[&quot;String&quot;]</span><br><span class="line">    N11[&quot;INCR原子递增 排行榜&quot;]</span><br><span class="line">    N12[&quot;ZSet天然有序&quot;]</span><br><span class="line">    N13[&quot;拆分大Hash&quot;]</span><br><span class="line">    N14[&quot;按区域&quot;]</span><br><span class="line">    N15[&quot;类型拆分 UNLINK删除&quot;]</span><br><span class="line">    N16[&quot;异步删除不阻塞 HSCAN&quot;]</span><br><span class="line">    N17[&quot;HDEL&quot;]</span><br><span class="line">    N18[&quot;分批删除大Hash&quot;]</span><br><span class="line">    N19[&quot;纯缓存&quot;]</span><br><span class="line">    N20[&quot;allkeys-lru 有热点&quot;]</span><br><span class="line">    N21[&quot;allkeys-lfu 混合存储&quot;]</span><br><span class="line">    N22[&quot;volatile-lru&quot;]</span><br><span class="line">    N23[&quot;maxmemory-samples&quot;]</span><br><span class="line">    N24[&quot;10&quot;]</span><br><span class="line">    N25[&quot;提高命中率&quot;]</span><br><span class="line">    N26[&quot;内存使用率  80&quot;]</span><br><span class="line">    N27[&quot;告警 碎片率  2.0&quot;]</span><br><span class="line">    N28[&quot;开启activedefrag&quot;]</span><br><span class="line">    N29[&quot;evicted_keys  0&quot;]</span><br><span class="line">    N30[&quot;排查数据过期策略&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line">    N9 --&gt; N10</span><br><span class="line">    N9 --&gt; N11</span><br><span class="line">    N10 --&gt; N12</span><br><span class="line">    N11 --&gt; N12</span><br><span class="line">    N12 --&gt; N13</span><br><span class="line">    N13 --&gt; N14</span><br><span class="line">    N13 --&gt; N15</span><br><span class="line">    N14 --&gt; N16</span><br><span class="line">    N14 --&gt; N17</span><br><span class="line">    N15 --&gt; N16</span><br><span class="line">    N15 --&gt; N17</span><br><span class="line">    N16 --&gt; N18</span><br><span class="line">    N17 --&gt; N18</span><br><span class="line">    N18 --&gt; N19</span><br><span class="line">    N19 --&gt; N20</span><br><span class="line">    N20 --&gt; N21</span><br><span class="line">    N21 --&gt; N22</span><br><span class="line">    N21 --&gt; N23</span><br><span class="line">    N21 --&gt; N24</span><br><span class="line">    N22 --&gt; N25</span><br><span class="line">    N23 --&gt; N25</span><br><span class="line">    N24 --&gt; N25</span><br><span class="line">    N25 --&gt; N26</span><br><span class="line">    N26 --&gt; N27</span><br><span class="line">    N27 --&gt; N28</span><br><span class="line">    N27 --&gt; N29</span><br><span class="line">    N28 --&gt; N30</span><br><span class="line">    N29 --&gt; N30</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-Redis的过期策略？"><a href="#1-Redis的过期策略？" class="headerlink" title="1. Redis的过期策略？"></a>1. Redis的过期策略？</h3><p>惰性删除+定期删除。惰性删除在访问时检查是否过期，过期则删除返回null；定期删除每100ms随机抽查一批设置了过期时间的key，过期则删除，如果过期比例&gt;25%则继续检查。两者结合保证过期key最终被清理，同时不会消耗过多CPU。实际项目中调大hz参数到20，使定期删除更积极。</p>
 <p>为什么不用定时删除？定时删除需要为每个key维护一个定时器，当key数量很大时（百万级），CPU开销极高。Redis选择惰性删除+定期删除的折中方案，在CPU和内存之间取得平衡。</p>
@@ -340,7 +595,7 @@ article: http://ogp.me/ns/article#">
     
       <div class="post-prev">
         <span class="nav-label">上一篇</span>
-        <a href="/2023/04/09/929403db4702/">RabbitMQ消息幂等性——如何保证消息只被消费一次</a>
+        <a href="/2023/03/26/c80650e53f14/">Redis持久化——RDB与AOF的选择</a>
       </div>
     
     
@@ -438,14 +693,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
                         2023
-                        <span>(68)</span>
+                        <span>(61)</span>
                     </a>
                 </div>
             
@@ -611,7 +866,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

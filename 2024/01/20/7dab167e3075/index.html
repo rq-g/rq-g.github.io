@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2024-01-20T06:57:52.000Z">
   <article class="post">
     <h1 class="post-title">分布式锁深度对比——Redis、ZooKeeper与Redisson的选型</h1>
 
@@ -216,12 +216,17 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="使用示例"><a href="#使用示例" class="headerlink" title="使用示例"></a>使用示例</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MinecartDispatchService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> RedisLockService redisLockService;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 矿车调度：同一轨道同一时段只能调度一辆矿车</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">dispatchMinecart</span><span class="params">(String trackId, MinecartDispatchDTO dto)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">lockKey</span> <span class="operator">=</span> <span class="string">&quot;lock:minecart:track:&quot;</span> + trackId;</span><br><span class="line">        <span class="type">String</span> <span class="variable">requestId</span> <span class="operator">=</span> UUID.randomUUID().toString();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">if</span> (!redisLockService.tryLock(lockKey, requestId, <span class="number">10</span>)) &#123;</span><br><span class="line">                <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(<span class="string">&quot;轨道&quot;</span> + trackId + <span class="string">&quot;正在调度中，请稍后重试&quot;</span>);</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="comment">// 执行调度逻辑</span></span><br><span class="line">            doDispatch(trackId, dto);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            redisLockService.unlock(lockKey, requestId);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="Redis-SETNX的三大问题"><a href="#Redis-SETNX的三大问题" class="headerlink" title="Redis SETNX的三大问题"></a>Redis SETNX的三大问题</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line">问题1：锁过期但业务未完成</span><br><span class="line">  ┌──────────────────────────────────────────────────────┐</span><br><span class="line">  │ 时间线   0s       5s      10s      15s      20s      │</span><br><span class="line">  │         ├────────┼────────┼────────┼────────┤       │</span><br><span class="line">  │ 线程A   ├──加锁成功──┤业务执行中...├───────┤       │</span><br><span class="line">  │         │  TTL=10s                锁过期！  │       │</span><br><span class="line">  │         │                         A以为还有锁│       │</span><br><span class="line">  │ 线程B   │              10s后──加锁成功──┤       │</span><br><span class="line">  │         │                         B也持有锁！│       │</span><br><span class="line">  │         │                         → 并发冲突  │       │</span><br><span class="line">  └──────────────────────────────────────────────────────┘</span><br><span class="line">  → 业务执行时间超过锁的过期时间</span><br><span class="line">  → 其他线程获取到锁，导致并发问题</span><br><span class="line">  → 解决：看门狗自动续期</span><br><span class="line"></span><br><span class="line">问题2：主从切换丢锁</span><br><span class="line">  ┌──────────────────────────────────────────────────────┐</span><br><span class="line">  │ 时间线    Master              Slave     哨兵         │</span><br><span class="line">  │  t1      SET lock(A)                               │</span><br><span class="line">  │  t2      ──宕机──►            锁未同步！             │</span><br><span class="line">  │  t3                            提升为新Master ◄──── │</span><br><span class="line">  │  t4      A以为还有锁         B加锁成功！             │</span><br><span class="line">  │          → A和B同时持有锁 → 违反互斥性               │</span><br><span class="line">  └──────────────────────────────────────────────────────┘</span><br><span class="line">  → 主节点加锁成功，但数据未同步到从节点</span><br><span class="line">  → 主节点宕机，从节点升为主节点，锁丢失</span><br><span class="line">  → 解决：Redlock算法</span><br><span class="line"></span><br><span class="line">问题3：不可重入</span><br><span class="line">  → 同一线程重复获取同一把锁会失败</span><br><span class="line">  → 解决：Redisson可重入锁</span><br></pre></td></tr></table></figure>
+<h3 id="Redis-SETNX的三大问题"><a href="#Redis-SETNX的三大问题" class="headerlink" title="Redis SETNX的三大问题"></a>Redis SETNX的三大问题</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;时间线 0s 5s 10s 15s&quot;]</span><br><span class="line">    N2[&quot;时间线 Master Slave 哨兵&quot;]</span><br><span class="line">    N3[&quot;t1 SET lock(A) t2&quot;]</span><br><span class="line">    N4[&quot;宕机 锁未同步 t3&quot;]</span><br><span class="line">    N5[&quot;提升为新Master  t4&quot;]</span><br><span class="line">    N6[&quot;A以为还有锁 B加锁成功&quot;]</span><br><span class="line">    N7[&quot;20s&quot;]</span><br><span class="line">    N8[&quot;A和B同时持有锁&quot;]</span><br><span class="line">    N9[&quot;违反互斥性&quot;]</span><br><span class="line">    N10[&quot;方案二&quot;]</span><br><span class="line">    N11[&quot;ZooKeeper分布式锁&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N1 --&gt; N5</span><br><span class="line">    N1 --&gt; N6</span><br><span class="line">    N7 --&gt; N2</span><br><span class="line">    N7 --&gt; N3</span><br><span class="line">    N7 --&gt; N4</span><br><span class="line">    N7 --&gt; N5</span><br><span class="line">    N7 --&gt; N6</span><br><span class="line">    N2 --&gt; N8</span><br><span class="line">    N3 --&gt; N8</span><br><span class="line">    N4 --&gt; N8</span><br><span class="line">    N5 --&gt; N8</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line">    N10 --&gt; N11</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h1 id="-1"><a href="#-1" class="headerlink" title=""></a></h1><h2 id="方案二：ZooKeeper分布式锁"><a href="#方案二：ZooKeeper分布式锁" class="headerlink" title="方案二：ZooKeeper分布式锁"></a>方案二：ZooKeeper分布式锁</h2><h3 id="实现原理"><a href="#实现原理" class="headerlink" title="实现原理"></a>实现原理</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">ZooKeeper分布式锁原理：</span><br><span class="line"></span><br><span class="line">1. 创建持久节点 /locks</span><br><span class="line">2. 加锁时创建临时顺序节点 /locks/lock-0000000001</span><br><span class="line">3. 判断自己是否是最小序号的节点</span><br><span class="line">   → 是：获取锁成功</span><br><span class="line">   → 否：监听前一个节点的删除事件</span><br><span class="line">4. 释放锁：删除自己的临时顺序节点</span><br><span class="line">5. 下一个节点收到通知，成为最小节点，获取锁</span><br></pre></td></tr></table></figure>
+<h3 id="实现原理"><a href="#实现原理" class="headerlink" title="实现原理"></a>实现原理</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">ZooKeeper分布式锁原理：</span><br><span class="line"></span><br><span class="line">1. 创建持久节点 /locks</span><br><span class="line">2. 加锁时创建临时顺序节点 /locks/lock-0000000001</span><br><span class="line">3. 判断自己是否是最小序号的节点</span><br><span class="line">   → 是：获取锁成功</span><br><span class="line">   → 否：监听前一个节点的删除事件</span><br><span class="line">4. 释放锁：删除自己的临时顺序节点</span><br><span class="line">5. 下一个节点收到通知，成为最小节点，获取锁</span><br></pre></td></tr></table></figure>
 
-<h3 id="加锁流程图-1"><a href="#加锁流程图-1" class="headerlink" title="加锁流程图"></a>加锁流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">                    ZooKeeper</span><br><span class="line">                   /locks (持久节点)</span><br><span class="line">                        │</span><br><span class="line">          ┌─────────────┼─────────────┐</span><br><span class="line">          │             │             │</span><br><span class="line">  lock-0000000001  lock-0000000002  lock-0000000003</span><br><span class="line">  (临时顺序节点)    (临时顺序节点)    (临时顺序节点)</span><br><span class="line">  客户端A持有       客户端B等待       客户端C等待</span><br><span class="line">                   Watch前一个节点    Watch前一个节点</span><br><span class="line"></span><br><span class="line">加锁流程：</span><br><span class="line">  客户端A                           客户端B</span><br><span class="line">    │                                  │</span><br><span class="line">    ├── 创建 /locks/lock-0000000001 ──┤</span><br><span class="line">    │   序号最小 → 获取锁成功          │</span><br><span class="line">    │                                  │</span><br><span class="line">    │                           ├── 创建 /locks/lock-0000000002 ──┤</span><br><span class="line">    │                           │   序号不是最小 → Watch lock-0000000001</span><br><span class="line">    │                           │   进入等待</span><br><span class="line">    │                                  │</span><br><span class="line">    ├── 业务完成，删除节点 ─────────────┤</span><br><span class="line">    │                                  │</span><br><span class="line">    │                           ├── 收到Watch通知</span><br><span class="line">    │                           │   自己是最小序号 → 获取锁成功</span><br><span class="line">    │                           │</span><br></pre></td></tr></table></figure>
-
+<h3 id="加锁流程图-1"><a href="#加锁流程图-1" class="headerlink" title="加锁流程图"></a>加锁流程图</h3><p><strong>序号最小 → 获取锁成功</strong>：</p>
+<p><strong>序号不是最小 → Watch lock-0000000001</strong>：</p>
+<ul>
+<li>进入等待</li>
+</ul>
+<p><strong>自己是最小序号 → 获取锁成功</strong>：</p>
 <h3 id="ZooKeeper锁的优势"><a href="#ZooKeeper锁的优势" class="headerlink" title="ZooKeeper锁的优势"></a>ZooKeeper锁的优势</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">优势：</span><br><span class="line">  + 临时节点，客户端断开自动释放（防死锁）</span><br><span class="line">  + 顺序节点，天然公平锁（FIFO）</span><br><span class="line">  + 主从一致性（ZAB协议），不存在丢锁问题</span><br><span class="line">  + Watch机制，精确通知下一个节点（非惊群）</span><br><span class="line"></span><br><span class="line">劣势：</span><br><span class="line">  - 性能不如Redis（每次加锁要创建节点+监听）</span><br><span class="line">  - 集群规模大时，频繁Watch触发网络开销</span><br><span class="line">  - 运维复杂度高（JVM调优、事务日志清理、Session管理）</span><br><span class="line">  - 扩展性差（ZK不适合做高频写入的锁服务）</span><br></pre></td></tr></table></figure>
 
 <h3 id="Curator实现"><a href="#Curator实现" class="headerlink" title="Curator实现"></a>Curator实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ZkLockService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> InterProcessMutex lock;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="title function_">ZkLockService</span><span class="params">(CuratorFramework curatorFramework)</span> &#123;</span><br><span class="line">        <span class="built_in">this</span>.lock = <span class="keyword">new</span> <span class="title class_">InterProcessMutex</span>(curatorFramework, <span class="string">&quot;/locks/minecart-dispatch&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 矿车调度：使用ZooKeeper分布式锁</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">dispatchMinecart</span><span class="params">(String trackId, MinecartDispatchDTO dto)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 尝试加锁，最多等待3秒，锁自动释放时间5秒</span></span><br><span class="line">            <span class="keyword">if</span> (!lock.acquire(<span class="number">3</span>, TimeUnit.SECONDS)) &#123;</span><br><span class="line">                <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(<span class="string">&quot;轨道&quot;</span> + trackId + <span class="string">&quot;正在调度中，请稍后重试&quot;</span>);</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="comment">// 执行调度逻辑</span></span><br><span class="line">            doDispatch(trackId, dto);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;ZK加锁异常, trackId=&#123;&#125;&quot;</span>, trackId, e);</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(<span class="string">&quot;系统异常&quot;</span>);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                lock.release();</span><br><span class="line">            &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">                log.error(<span class="string">&quot;ZK释放锁异常, trackId=&#123;&#125;&quot;</span>, trackId, e);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -320,7 +325,7 @@ article: http://ogp.me/ns/article#">
 </tbody></table>
 <h3 id="一致性模型对比"><a href="#一致性模型对比" class="headerlink" title="一致性模型对比"></a>一致性模型对比</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">一致性保证级别：</span><br><span class="line"></span><br><span class="line">  Redis SETNX：</span><br><span class="line">    → 异步复制，主从切换可能丢锁</span><br><span class="line">    → 最终一致性（主从同步延迟窗口内可能不一致）</span><br><span class="line">    → 适用于：效率型锁（防重复操作）</span><br><span class="line"></span><br><span class="line">  ZooKeeper：</span><br><span class="line">    → ZAB协议保证过半提交</span><br><span class="line">    → 强一致性（线性一致性读）</span><br><span class="line">    → 适用于：正确性型锁（防并发修改）</span><br><span class="line"></span><br><span class="line">  Redisson：</span><br><span class="line">    → 单节点：与Redis SETNX相同</span><br><span class="line">    → Redlock：多节点过半加锁，近似强一致</span><br><span class="line">    → 看门狗续期保证业务完成前不过期</span><br><span class="line">    → 适用于：大部分生产场景</span><br></pre></td></tr></table></figure>
 
-<h1 id="-2"><a href="#-2" class="headerlink" title=""></a></h1><h2 id="Redisson高级特性详解"><a href="#Redisson高级特性详解" class="headerlink" title="Redisson高级特性详解"></a>Redisson高级特性详解</h2><h3 id="看门狗机制原理"><a href="#看门狗机制原理" class="headerlink" title="看门狗机制原理"></a>看门狗机制原理</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Redisson看门狗机制：</span></span><br><span class="line"><span class="comment">// 1. 加锁时不指定leaseTime，看门狗自动启动</span></span><br><span class="line"><span class="comment">// 2. 默认锁过期时间30秒</span></span><br><span class="line"><span class="comment">// 3. 每10秒检查一次（过期时间的1/3）</span></span><br><span class="line"><span class="comment">// 4. 如果持有锁的线程还在运行，自动续期到30秒</span></span><br><span class="line"><span class="comment">// 5. 线程崩溃或主动释放，看门狗停止续期</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 源码分析</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RedissonLock</span> <span class="keyword">extends</span> <span class="title class_">RedissonBaseLock</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">LOCK_EXPIRATION_INTERVAL_SECONDS</span> <span class="operator">=</span> <span class="number">30</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">protected</span> RFuture&lt;Boolean&gt; <span class="title function_">tryLockInnerAsync</span><span class="params">(<span class="type">long</span> waitTime, <span class="type">long</span> leaseTime, TimeUnit unit)</span> &#123;</span><br><span class="line">        <span class="comment">// 如果leaseTime == -1，启动看门狗</span></span><br><span class="line">        <span class="keyword">if</span> (leaseTime != -<span class="number">1</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span> tryLockInnerAsync(waitTime, unit.toMillis(leaseTime));</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 看门狗续期任务</span></span><br><span class="line">        RFuture&lt;Boolean&gt; future = tryLockInnerAsync(waitTime, LOCK_EXPIRATION_INTERVAL_SECONDS * <span class="number">1000</span>);</span><br><span class="line">        future.onComplete((res, e) -&gt; &#123;</span><br><span class="line">            <span class="keyword">if</span> (res) &#123;</span><br><span class="line">                <span class="comment">// 启动续期定时任务</span></span><br><span class="line">                renewExpiration();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;);</span><br><span class="line">        <span class="keyword">return</span> future;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">renewExpiration</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 每10秒续期一次</span></span><br><span class="line">        timeout = commandExecutor.getConnectionManager().newTimeout(<span class="keyword">new</span> <span class="title class_">TimerTask</span>() &#123;</span><br><span class="line">            <span class="meta">@Override</span></span><br><span class="line">            <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">run</span><span class="params">(Timeout timeout)</span> <span class="keyword">throws</span> Exception &#123;</span><br><span class="line">                <span class="comment">// 检查线程是否还持有锁</span></span><br><span class="line">                <span class="keyword">if</span> (getLockName(threadId).equals(currentLockName)) &#123;</span><br><span class="line">                    <span class="comment">// 续期到30秒</span></span><br><span class="line">                    pexpireAsync(name, LOCK_EXPIRATION_INTERVAL_SECONDS * <span class="number">1000</span>);</span><br><span class="line">                    <span class="comment">// 递归调用，继续续期</span></span><br><span class="line">                    renewExpiration();</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;, LOCK_EXPIRATION_INTERVAL_SECONDS / <span class="number">3</span>, TimeUnit.SECONDS);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h1 id="-1"><a href="#-1" class="headerlink" title=""></a></h1><h2 id="Redisson高级特性详解"><a href="#Redisson高级特性详解" class="headerlink" title="Redisson高级特性详解"></a>Redisson高级特性详解</h2><h3 id="看门狗机制原理"><a href="#看门狗机制原理" class="headerlink" title="看门狗机制原理"></a>看门狗机制原理</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Redisson看门狗机制：</span></span><br><span class="line"><span class="comment">// 1. 加锁时不指定leaseTime，看门狗自动启动</span></span><br><span class="line"><span class="comment">// 2. 默认锁过期时间30秒</span></span><br><span class="line"><span class="comment">// 3. 每10秒检查一次（过期时间的1/3）</span></span><br><span class="line"><span class="comment">// 4. 如果持有锁的线程还在运行，自动续期到30秒</span></span><br><span class="line"><span class="comment">// 5. 线程崩溃或主动释放，看门狗停止续期</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 源码分析</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RedissonLock</span> <span class="keyword">extends</span> <span class="title class_">RedissonBaseLock</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">LOCK_EXPIRATION_INTERVAL_SECONDS</span> <span class="operator">=</span> <span class="number">30</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">protected</span> RFuture&lt;Boolean&gt; <span class="title function_">tryLockInnerAsync</span><span class="params">(<span class="type">long</span> waitTime, <span class="type">long</span> leaseTime, TimeUnit unit)</span> &#123;</span><br><span class="line">        <span class="comment">// 如果leaseTime == -1，启动看门狗</span></span><br><span class="line">        <span class="keyword">if</span> (leaseTime != -<span class="number">1</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span> tryLockInnerAsync(waitTime, unit.toMillis(leaseTime));</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 看门狗续期任务</span></span><br><span class="line">        RFuture&lt;Boolean&gt; future = tryLockInnerAsync(waitTime, LOCK_EXPIRATION_INTERVAL_SECONDS * <span class="number">1000</span>);</span><br><span class="line">        future.onComplete((res, e) -&gt; &#123;</span><br><span class="line">            <span class="keyword">if</span> (res) &#123;</span><br><span class="line">                <span class="comment">// 启动续期定时任务</span></span><br><span class="line">                renewExpiration();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;);</span><br><span class="line">        <span class="keyword">return</span> future;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">renewExpiration</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 每10秒续期一次</span></span><br><span class="line">        timeout = commandExecutor.getConnectionManager().newTimeout(<span class="keyword">new</span> <span class="title class_">TimerTask</span>() &#123;</span><br><span class="line">            <span class="meta">@Override</span></span><br><span class="line">            <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">run</span><span class="params">(Timeout timeout)</span> <span class="keyword">throws</span> Exception &#123;</span><br><span class="line">                <span class="comment">// 检查线程是否还持有锁</span></span><br><span class="line">                <span class="keyword">if</span> (getLockName(threadId).equals(currentLockName)) &#123;</span><br><span class="line">                    <span class="comment">// 续期到30秒</span></span><br><span class="line">                    pexpireAsync(name, LOCK_EXPIRATION_INTERVAL_SECONDS * <span class="number">1000</span>);</span><br><span class="line">                    <span class="comment">// 递归调用，继续续期</span></span><br><span class="line">                    renewExpiration();</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;, LOCK_EXPIRATION_INTERVAL_SECONDS / <span class="number">3</span>, TimeUnit.SECONDS);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <p>看门狗续期时序图：</p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">时间线（秒）    0        10       20       30       40       50</span><br><span class="line">               │        │        │        │        │        │</span><br><span class="line">加锁成功        ├─TTL=30s─┤        │        │        │        │</span><br><span class="line">                        │        │        │        │        │</span><br><span class="line">续期1                    ├─续期─┤        │        │        │</span><br><span class="line">                        TTL=30s  │        │        │        │</span><br><span class="line">                                 │        │        │        │</span><br><span class="line">续期2                                      ├─续期─┤        │</span><br><span class="line">                                          TTL=30s  │        │</span><br><span class="line">                                                   │        │</span><br><span class="line">业务完成，unlock()                                          │</span><br><span class="line">看门狗停止                                                   │</span><br><span class="line"></span><br><span class="line">如果客户端宕机（第15秒）：</span><br><span class="line">               0        10       15       30</span><br><span class="line">               ├─TTL=30s─┤────X──┤        │</span><br><span class="line">               续期1成功    宕机     │        │</span><br><span class="line">                          停止续期  │        │</span><br><span class="line">                                   锁自动过期释放</span><br></pre></td></tr></table></figure>
@@ -353,8 +358,9 @@ article: http://ogp.me/ns/article#">
 <hr>
 <h2 id="Pub-Sub通知机制与等待队列"><a href="#Pub-Sub通知机制与等待队列" class="headerlink" title="Pub&#x2F;Sub通知机制与等待队列"></a>Pub&#x2F;Sub通知机制与等待队列</h2><h3 id="为什么需要Pub-Sub"><a href="#为什么需要Pub-Sub" class="headerlink" title="为什么需要Pub&#x2F;Sub"></a>为什么需要Pub&#x2F;Sub</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">没有Pub/Sub：</span><br><span class="line">  线程B: tryLock() → 失败 → sleep(100ms) → tryLock() → 失败 → sleep(100ms) → ...</span><br><span class="line">  问题：1) 延迟大  2) 浪费CPU  3) 浪费网络带宽</span><br><span class="line"></span><br><span class="line">有Pub/Sub：</span><br><span class="line">  线程B: tryLock() → 失败 → subscribe(channel) → await() → 收到通知 → tryLock() → 成功</span><br><span class="line">  优势：1) 延迟低（毫秒级）  2) 不浪费CPU  3) 不浪费带宽</span><br></pre></td></tr></table></figure>
 
-<h3 id="等待与唤醒流程"><a href="#等待与唤醒流程" class="headerlink" title="等待与唤醒流程"></a>等待与唤醒流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">线程A持有锁                  线程B尝试获取锁               Redis</span><br><span class="line">    │                            │                          │</span><br><span class="line">    │                            ├─ tryLock() ──────────────┤</span><br><span class="line">    │                            │  加锁失败，返回TTL         │</span><br><span class="line">    │                            │                          │</span><br><span class="line">    │                            ├─ subscribe(channel) ────►│ 订阅锁通道</span><br><span class="line">    │                            │                          │</span><br><span class="line">    │                            ├─ await(TTL) ──┐          │</span><br><span class="line">    │                            │               │ 等待       │</span><br><span class="line">    │                            │               │           │</span><br><span class="line">    ├─ unlock() ─────────────────┤───────────────┤           │</span><br><span class="line">    │                            │               │           │</span><br><span class="line">    │  ┌─ PUBLISH channel ──────┤──────────────►│ 发布通知   │</span><br><span class="line">    │  │                        │               │           │</span><br><span class="line">    │  │                        ├─ ◄─── 唤醒 ───┘           │</span><br><span class="line">    │  │                        │                           │</span><br><span class="line">    │  │                        ├─ tryLock() ──────────────►│</span><br><span class="line">    │  │                        │  加锁成功！                 │</span><br><span class="line">    │  │                        ├─ unsubscribe() ─────────►│ 取消订阅</span><br></pre></td></tr></table></figure>
-
+<h3 id="等待与唤醒流程"><a href="#等待与唤醒流程" class="headerlink" title="等待与唤醒流程"></a>等待与唤醒流程</h3><p><strong>加锁失败，返回TTL</strong>：</p>
+<p><strong>等待</strong>：</p>
+<p><strong>加锁成功！</strong>：</p>
 <h3 id="信号量控制并发唤醒"><a href="#信号量控制并发唤醒" class="headerlink" title="信号量控制并发唤醒"></a>信号量控制并发唤醒</h3><p>当锁释放时，可能有很多线程在等待。Redisson使用Semaphore来控制唤醒：每次收到锁释放通知，只释放一个许可（<code>latch.release()</code>），只有一个等待线程能被唤醒，避免”惊群效应”。</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 等待锁的核心循环（RedissonLock 源码简化）</span></span><br><span class="line"><span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">    <span class="comment">// 尝试获取锁</span></span><br><span class="line">    <span class="type">Long</span> <span class="variable">ttl</span> <span class="operator">=</span> tryAcquire(leaseTime, unit, threadId);</span><br><span class="line">    <span class="keyword">if</span> (ttl == <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="comment">// 获取锁成功</span></span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 等待锁释放消息</span></span><br><span class="line">    <span class="comment">// latch.tryAcquire() 会阻塞，直到收到Pub/Sub消息释放信号量</span></span><br><span class="line">    <span class="keyword">if</span> (ttl &gt; <span class="number">0</span>) &#123;</span><br><span class="line">        entry.getLatch().tryAcquire(ttl, TimeUnit.MILLISECONDS);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
@@ -457,8 +463,28 @@ article: http://ogp.me/ns/article#">
 <hr>
 <h2 id="分布式锁监控体系"><a href="#分布式锁监控体系" class="headerlink" title="分布式锁监控体系"></a>分布式锁监控体系</h2><h3 id="核心监控指标"><a href="#核心监控指标" class="headerlink" title="核心监控指标"></a>核心监控指标</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LockMetrics</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Counter lockAcquireCounter;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Counter lockFailCounter;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Timer lockWaitTimer;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Gauge lockHoldTimeGauge;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="title function_">LockMetrics</span><span class="params">(MeterRegistry registry)</span> &#123;</span><br><span class="line">        <span class="built_in">this</span>.lockAcquireCounter = Counter.builder(<span class="string">&quot;lock_acquire_total&quot;</span>)</span><br><span class="line">            .description(<span class="string">&quot;锁获取成功次数&quot;</span>)</span><br><span class="line">            .tag(<span class="string">&quot;type&quot;</span>, <span class="string">&quot;redisson&quot;</span>)</span><br><span class="line">            .register(registry);</span><br><span class="line"></span><br><span class="line">        <span class="built_in">this</span>.lockFailCounter = Counter.builder(<span class="string">&quot;lock_fail_total&quot;</span>)</span><br><span class="line">            .description(<span class="string">&quot;锁获取失败次数&quot;</span>)</span><br><span class="line">            .register(registry);</span><br><span class="line"></span><br><span class="line">        <span class="built_in">this</span>.lockWaitTimer = Timer.builder(<span class="string">&quot;lock_wait_time&quot;</span>)</span><br><span class="line">            .description(<span class="string">&quot;锁等待时间&quot;</span>)</span><br><span class="line">            .register(registry);</span><br><span class="line"></span><br><span class="line">        <span class="built_in">this</span>.lockHoldTimeGauge = Gauge.builder(<span class="string">&quot;lock_hold_time&quot;</span>)</span><br><span class="line">            .description(<span class="string">&quot;锁持有时间&quot;</span>)</span><br><span class="line">            .register(registry);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="监控看板"><a href="#监控看板" class="headerlink" title="监控看板"></a>监控看板</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                  智慧矿山分布式锁监控大盘                          │</span><br><span class="line">├────────────────┬────────────────┬────────────────────────────────┤</span><br><span class="line">│  矿车调度锁     │  设备状态锁     │  告警去重锁                     │</span><br><span class="line">│  成功率: 99.8%  │  成功率: 99.5%  │  成功率: 97.2%                 │</span><br><span class="line">│  平均等待: 12ms │  平均等待: 8ms  │  平均等待: 3ms                 │</span><br><span class="line">│  状态: 正常     │  状态: 正常     │  状态: 警告                     │</span><br><span class="line">├────────────────┴────────────────┴────────────────────────────────┤</span><br><span class="line">│  锁获取成功率趋势（24h）                                           │</span><br><span class="line">│  ▁▁▂▁▁▁▁▁▁▁▁▃▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁                             │</span><br><span class="line">├──────────────────────────────────────────────────────────────────┤</span><br><span class="line">│  锁等待时间趋势（24h）                                             │</span><br><span class="line">│  ▁▁▁▁▁▁▃▄▁▁▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁                             │</span><br><span class="line">├──────────────────────────────────────────────────────────────────┤</span><br><span class="line">│  告警规则：                                                        │</span><br><span class="line">│  P0: 锁成功率 &lt; 95%（立即处理）                                    │</span><br><span class="line">│  P1: 锁平均等待 &gt; 500ms（30分钟内处理）                            │</span><br><span class="line">│  P2: 看门狗续期失败次数 &gt; 10/min（2小时内处理）                    │</span><br><span class="line">│  P3: Redis连接池使用率 &gt; 80%（工作日内处理）                       │</span><br><span class="line">└──────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="监控看板"><a href="#监控看板" class="headerlink" title="监控看板"></a>监控看板</h3><p><strong>智慧矿山分布式锁监控大盘</strong>：</p>
+<p><strong>矿车调度锁       设备状态锁       告警去重锁</strong>：</p>
+<ul>
+<li>成功率: 99.8%    成功率: 99.5%    成功率: 97.2%</li>
+<li>平均等待: 12ms   平均等待: 8ms    平均等待: 3ms</li>
+<li>状态: 正常       状态: 正常       状态: 警告</li>
+</ul>
+<p><strong>锁获取成功率趋势（24h）</strong>：</p>
+<ul>
+<li>▁▁▂▁▁▁▁▁▁▁▁▃▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁</li>
+</ul>
+<p><strong>锁等待时间趋势（24h）</strong>：</p>
+<ul>
+<li>▁▁▁▁▁▁▃▄▁▁▁▁▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁</li>
+</ul>
+<p><strong>告警规则：</strong>：</p>
+<ul>
+<li>P0: 锁成功率 &lt; 95%（立即处理）</li>
+<li>P1: 锁平均等待 &gt; 500ms（30分钟内处理）</li>
+<li>P2: 看门狗续期失败次数 &gt; 10&#x2F;min（2小时内处理）</li>
+<li>P3: Redis连接池使用率 &gt; 80%（工作日内处理）</li>
+</ul>
 <h3 id="自动化告警策略"><a href="#自动化告警策略" class="headerlink" title="自动化告警策略"></a>自动化告警策略</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">告警级别与处理流程：</span><br><span class="line"></span><br><span class="line">P0（立即处理）：</span><br><span class="line">  → 锁成功率 &lt; 95%</span><br><span class="line">  → 看门狗续期全部失败</span><br><span class="line">  → Redis集群不可用</span><br><span class="line">  → 处理：短信+电话告警，值班工程师立即响应</span><br><span class="line"></span><br><span class="line">P1（30分钟内处理）：</span><br><span class="line">  → 锁平均等待时间 &gt; 500ms</span><br><span class="line">  → 看门狗续期失败率 &gt; 5%</span><br><span class="line">  → 处理：钉钉告警，负责人30分钟内响应</span><br><span class="line"></span><br><span class="line">P2（2小时内处理）：</span><br><span class="line">  → 锁持有时间异常增长</span><br><span class="line">  → Pub/Sub订阅数异常</span><br><span class="line">  → 处理：邮件告警，2小时内排查</span><br><span class="line"></span><br><span class="line">P3（工作日内处理）：</span><br><span class="line">  → Redis连接池使用率 &gt; 80%</span><br><span class="line">  → 信号量许可数与配置不一致</span><br><span class="line">  → 处理：工单告警，工作日内处理</span><br></pre></td></tr></table></figure>
 
 <hr>
@@ -593,9 +619,10 @@ article: http://ogp.me/ns/article#">
 </tbody></table>
 <h3 id="典型问题详细分析"><a href="#典型问题详细分析" class="headerlink" title="典型问题详细分析"></a>典型问题详细分析</h3><h4 id="问题1：看门狗未生效"><a href="#问题1：看门狗未生效" class="headerlink" title="问题1：看门狗未生效"></a>问题1：看门狗未生效</h4><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">实际项目实例：</span><br><span class="line"></span><br><span class="line">  故障时间：2024年3月</span><br><span class="line">  故障现象：矿车调度偶发并发冲突，概率约5%</span><br><span class="line">  故障排查：</span><br><span class="line">    1. 查看日志 → 发现锁获取成功但30秒后业务还未完成</span><br><span class="line">    2. 查看代码 → 使用了 lock.tryLock(5, 30, SECONDS)</span><br><span class="line">    3. 分析原因 → leaseTime=30秒，看门狗不启动！</span><br><span class="line">    4. 确认影响 → 井下PLC响应慢时超过30秒，锁过期</span><br><span class="line"></span><br><span class="line">  正确写法对比：</span><br><span class="line"></span><br><span class="line">  // 错误写法：看门狗不会启动！</span><br><span class="line">  boolean acquired = lock.tryLock(5, 30, TimeUnit.SECONDS);</span><br><span class="line">  //                                        ↑ 指定了leaseTime=30秒</span><br><span class="line">  //                                        看门狗只在leaseTime=-1时启动</span><br><span class="line"></span><br><span class="line">  // 正确写法一：看门狗生效</span><br><span class="line">  lock.lock();  // 等价于 leaseTime=-1</span><br><span class="line"></span><br><span class="line">  // 正确写法二：看门狗生效</span><br><span class="line">  boolean acquired = lock.tryLock(5, TimeUnit.SECONDS);</span><br><span class="line">  //  只传waitTime，不传leaseTime，leaseTime默认-1</span><br><span class="line"></span><br><span class="line">  // 正确写法三：显式使用-1</span><br><span class="line">  boolean acquired = lock.tryLock(5, -1, TimeUnit.SECONDS);</span><br><span class="line">  //  leaseTime=-1，看门狗生效</span><br><span class="line"></span><br><span class="line">  修复效果：矿车调度成功率从95%提升到99.8%</span><br></pre></td></tr></table></figure>
 
-<h4 id="问题2：Redis主从切换丢锁"><a href="#问题2：Redis主从切换丢锁" class="headerlink" title="问题2：Redis主从切换丢锁"></a>问题2：Redis主从切换丢锁</h4><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line">实际项目实例：</span><br><span class="line"></span><br><span class="line">  故障时间：2024年4月</span><br><span class="line">  故障现象：告警去重功能偶发失效，同一条告警发送两次</span><br><span class="line">  故障排查：</span><br><span class="line">    1. 查看Redis日志 → 主节点在凌晨3点发生了故障切换</span><br><span class="line">    2. 查看告警时间 → 两条重复告警恰好在切换时间窗口</span><br><span class="line">    3. 分析原因 → 主节点加锁后宕机，从节点未同步锁数据</span><br><span class="line"></span><br><span class="line">  主从切换丢锁时序：</span><br><span class="line">    t1  客户端A: SET lock:alarm:ALM001  → Master返回OK</span><br><span class="line">    t2  Master → 异步复制到Slave（未完成）</span><br><span class="line">    t3  Master宕机</span><br><span class="line">    t4  哨兵提升Slave为新Master</span><br><span class="line">    t5  客户端B: SET lock:alarm:ALM001  → 新Master返回OK</span><br><span class="line">    t6  A和B同时认为自己持有锁！</span><br><span class="line"></span><br><span class="line">  修复方案：</span><br><span class="line">    1. 告警去重增加数据库唯一索引（兜底）</span><br><span class="line">    2. 关键场景使用RedLock（3个独立节点）</span><br><span class="line">    3. 告警表增加唯一约束：UNIQUE(alarm_id)</span><br><span class="line"></span><br><span class="line">  修复后架构：</span><br><span class="line">    ┌──────────┐</span><br><span class="line">    │ 告警请求  │</span><br><span class="line">    └─────┬────┘</span><br><span class="line">          │</span><br><span class="line">    ┌─────▼──────────┐     ┌──────────┐</span><br><span class="line">    │ Redisson锁     │────→│ Redis    │</span><br><span class="line">    │ (去重第一道防线) │     │ (RedLock)│</span><br><span class="line">    └─────┬──────────┘     └──────────┘</span><br><span class="line">          │</span><br><span class="line">    ┌─────▼──────────┐</span><br><span class="line">    │ 数据库唯一索引   │</span><br><span class="line">    │ (去重第二道防线) │</span><br><span class="line">    └────────────────┘</span><br></pre></td></tr></table></figure>
+<h4 id="问题2：Redis主从切换丢锁"><a href="#问题2：Redis主从切换丢锁" class="headerlink" title="问题2：Redis主从切换丢锁"></a>问题2：Redis主从切换丢锁</h4><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;告警请求&quot;]</span><br><span class="line">    N2[&quot;Redisson锁&quot;]</span><br><span class="line">    N3[&quot;Redis (去重第一道防线)&quot;]</span><br><span class="line">    N4[&quot;(RedLock)&quot;]</span><br><span class="line">    N5[&quot;数据库唯一索引 (去重第二道防线)&quot;]</span><br><span class="line">    N6[&quot;问题8&quot;]</span><br><span class="line">    N7[&quot;读写锁写饥饿&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h4 id="问题8：读写锁写饥饿"><a href="#问题8：读写锁写饥饿" class="headerlink" title="问题8：读写锁写饥饿"></a>问题8：读写锁写饥饿</h4><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">实际项目实例：</span><br><span class="line"></span><br><span class="line">  故障时间：2024年6月</span><br><span class="line">  故障现象：安全阈值配置修改请求长时间无法执行</span><br><span class="line">  故障排查：</span><br><span class="line">    1. 查看监控 → 写锁等待时间超过60秒</span><br><span class="line">    2. 分析原因 → 设备状态读请求密集（每秒200次），读锁不断获取</span><br><span class="line">    3. 写锁始终无法获取（写锁必须等所有读锁释放）</span><br><span class="line"></span><br><span class="line">  写饥饿示意：</span><br><span class="line">    t1  读锁1 获取成功</span><br><span class="line">    t2  读锁2 获取成功（读读共享）</span><br><span class="line">    t3  写锁1 等待（有读锁，无法获取）</span><br><span class="line">    t4  读锁3 获取成功（新读锁可以获取）</span><br><span class="line">    t5  写锁1 继续等待...</span><br><span class="line">    t6  读锁4 获取成功...</span><br><span class="line">    → 写锁1 永远等待 = 写饥饿！</span><br><span class="line"></span><br><span class="line">  修复方案：</span><br><span class="line">    1. 安全阈值配置修改使用公平锁（而非读写锁）</span><br><span class="line">    2. 设备状态查询使用独立的读锁Key</span><br><span class="line">    3. 关键配置修改走ZooKeeper分布式锁</span><br><span class="line"></span><br><span class="line">  修复后：</span><br><span class="line">    安全配置修改：公平锁 → FIFO排队，不会饥饿</span><br><span class="line">    设备状态查询：继续使用读写锁 → 读多写少优化</span><br></pre></td></tr></table></figure>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">实际项目实例：</span><br><span class="line"></span><br><span class="line">  故障时间：2024年6月</span><br><span class="line">  故障现象：安全阈值配置修改请求长时间无法执行</span><br><span class="line">  故障排查：</span><br><span class="line">    1. 查看监控 → 写锁等待时间超过60秒</span><br><span class="line">    2. 分析原因 → 设备状态读请求密集（每秒200次），读锁不断获取</span><br><span class="line">    3. 写锁始终无法获取（写锁必须等所有读锁释放）</span><br><span class="line"></span><br><span class="line">  写饥饿示意：</span><br><span class="line">    t1  读锁1 获取成功</span><br><span class="line">    t2  读锁2 获取成功（读读共享）</span><br><span class="line">    t3  写锁1 等待（有读锁，无法获取）</span><br><span class="line">    t4  读锁3 获取成功（新读锁可以获取）</span><br><span class="line">    t5  写锁1 继续等待...</span><br><span class="line">    t6  读锁4 获取成功...</span><br><span class="line">    → 写锁1 永远等待 = 写饥饿！</span><br><span class="line"></span><br><span class="line">  修复方案：</span><br><span class="line">    1. 安全阈值配置修改使用公平锁（而非读写锁）</span><br><span class="line">    2. 设备状态查询使用独立的读锁Key</span><br><span class="line">    3. 关键配置修改走ZooKeeper分布式锁</span><br><span class="line"></span><br><span class="line">  修复后：</span><br><span class="line">    安全配置修改：公平锁 → FIFO排队，不会饥饿</span><br><span class="line">    设备状态查询：继续使用读写锁 → 读多写少优化</span><br></pre></td></tr></table></figure>
 
 <h4 id="问题14：联锁部分加锁导致死锁"><a href="#问题14：联锁部分加锁导致死锁" class="headerlink" title="问题14：联锁部分加锁导致死锁"></a>问题14：联锁部分加锁导致死锁</h4><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br></pre></td><td class="code"><pre><span class="line">实际项目实例：</span><br><span class="line"></span><br><span class="line">  故障时间：2024年8月</span><br><span class="line">  故障现象：采煤机与掘进机协同调度死锁，两台设备同时无法调度</span><br><span class="line">  故障排查：</span><br><span class="line">    1. 线程A：先锁采煤机M1，再锁掘进机R1 → M1获取成功，R1等待</span><br><span class="line">    2. 线程B：先锁掘进机R1，再锁采煤机M1 → R1获取成功，M1等待</span><br><span class="line">    3. 经典死锁：A等B释放R1，B等A释放M1</span><br><span class="line"></span><br><span class="line">  死锁示意：</span><br><span class="line">    线程A                    线程B</span><br><span class="line">      │                        │</span><br><span class="line">      ├── lock(M1) ──────────►│ M1被A持有</span><br><span class="line">      │                        │</span><br><span class="line">      │                        ├── lock(R1) ──────────►│ R1被B持有</span><br><span class="line">      │                        │</span><br><span class="line">      ├── lock(R1) ──等待──►  │ A等R1</span><br><span class="line">      │                        │</span><br><span class="line">      │                   ├── lock(M1) ──等待──►│ B等M1</span><br><span class="line">      │                        │</span><br><span class="line">      │    A等B，B等A → 死锁！  │</span><br><span class="line"></span><br><span class="line">  修复方案：</span><br><span class="line">    1. 按设备ID升序加锁（破坏循环等待条件）</span><br><span class="line">    2. 设置合理的超时时间（破坏不可抢占条件）</span><br><span class="line">    3. 使用tryLock而非lock（可中断）</span><br><span class="line"></span><br><span class="line">  修复后代码：</span><br><span class="line">    public void coordinateMachines(Long machine1, Long machine2) &#123;</span><br><span class="line">        // 按ID升序排序，保证加锁顺序一致</span><br><span class="line">        List&lt;Long&gt; sortedIds = Stream.of(machine1, machine2)</span><br><span class="line">            .sorted()</span><br><span class="line">            .collect(Collectors.toList());</span><br><span class="line"></span><br><span class="line">        RLock lock1 = redissonClient.getLock(&quot;lock:machine:&quot; + sortedIds.get(0));</span><br><span class="line">        RLock lock2 = redissonClient.getLock(&quot;lock:machine:&quot; + sortedIds.get(1));</span><br><span class="line">        RLock multiLock = redissonClient.getMultiLock(lock1, lock2);</span><br><span class="line"></span><br><span class="line">        try &#123;</span><br><span class="line">            if (!multiLock.tryLock(5, 30, TimeUnit.SECONDS)) &#123;</span><br><span class="line">                throw new BusinessException(&quot;设备协同调度超时，请稍后重试&quot;);</span><br><span class="line">            &#125;</span><br><span class="line">            doCoordinate(machine1, machine2);</span><br><span class="line">        &#125; finally &#123;</span><br><span class="line">            if (multiLock.isHeldByCurrentThread()) &#123;</span><br><span class="line">                multiLock.unlock();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
 
@@ -709,14 +736,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2024/" aria-label="分类: 2024">
                         2024
-                        <span>(41)</span>
+                        <span>(39)</span>
                     </a>
                 </div>
             
@@ -882,7 +909,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

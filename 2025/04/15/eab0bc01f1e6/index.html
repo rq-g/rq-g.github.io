@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2025-04-15T15:49:32.000Z">
   <article class="post">
     <h1 class="post-title">数据库连接池深度调优——HikariCP与Druid的选型与优化</h1>
 
@@ -211,22 +211,77 @@ article: http://ogp.me/ns/article#">
 <h2 id="连接池核心原理"><a href="#连接池核心原理" class="headerlink" title="连接池核心原理"></a>连接池核心原理</h2><h3 id="为什么需要连接池"><a href="#为什么需要连接池" class="headerlink" title="为什么需要连接池"></a>为什么需要连接池</h3><p>每次数据库操作都涉及TCP三次握手、SSL协商、数据库认证、会话初始化等步骤，建立一次连接的开销通常在50ms~200ms之间。在高并发场景下，如果每次请求都新建连接，系统将大量时间浪费在连接建立上，而非真正的业务处理。</p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">无连接池的请求生命周期：</span><br><span class="line">  请求到来 → TCP握手(1~3ms) → SSL协商(5~10ms) → 数据库认证(10~30ms)</span><br><span class="line">  → 会话初始化(5~10ms) → 执行SQL(1~50ms) → 关闭连接(1~5ms)</span><br><span class="line">  → 总耗时：23~108ms，其中SQL执行仅占1~50ms</span><br><span class="line"></span><br><span class="line">有连接池的请求生命周期：</span><br><span class="line">  请求到来 → 从池中借出连接(0.01~0.1ms) → 执行SQL(1~50ms) → 归还连接(0.01~0.1ms)</span><br><span class="line">  → 总耗时：1~50ms，几乎零额外开销</span><br></pre></td></tr></table></figure>
 
-<h3 id="连接池工作原理图"><a href="#连接池工作原理图" class="headerlink" title="连接池工作原理图"></a>连接池工作原理图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                        应用层 (Application)                         │</span><br><span class="line">│                                                                     │</span><br><span class="line">│  Thread-1  Thread-2  Thread-3  Thread-4  Thread-5   ...  Thread-N  │</span><br><span class="line">│     │         │         │         │         │                │      │</span><br><span class="line">└─────┼─────────┼─────────┼─────────┼─────────┼────────────────┼──────┘</span><br><span class="line">      │         │         │         │         │                │</span><br><span class="line">      ▼         ▼         ▼         ▼         ▼                ▼</span><br><span class="line">┌─────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    连接池层 (Connection Pool)                        │</span><br><span class="line">│                                                                     │</span><br><span class="line">│  ┌──────────────────────────────────────────────────────────────┐   │</span><br><span class="line">│  │                  连接池管理器 (Pool Manager)                   │   │</span><br><span class="line">│  │                                                              │   │</span><br><span class="line">│  │   borrowConnection()          returnConnection()             │   │</span><br><span class="line">│  │        │                            │                        │   │</span><br><span class="line">│  │        ▼                            ▼                        │   │</span><br><span class="line">│  │  ┌─────────┐    ┌─────────────────────────┐    ┌─────────┐  │   │</span><br><span class="line">│  │  │ 等待队列 │    │     活跃连接 (Active)     │    │ 空闲队列 │  │   │</span><br><span class="line">│  │  │ (Wait)  │    │  C1  C2  C3  C4  C5     │    │ (Idle)  │  │   │</span><br><span class="line">│  │  │  T6     │    │  ↑   ↑   ↑   ↑   ↑      │    │  C6  C7 │  │   │</span><br><span class="line">│  │  │  T7     │    │  T1  T2  T3  T4  T5     │    │         │  │   │</span><br><span class="line">│  │  └─────────┘    └─────────────────────────┘    └─────────┘  │   │</span><br><span class="line">│  │                                                              │   │</span><br><span class="line">│  │  核心机制：                                                   │   │</span><br><span class="line">│  │  ① 请求连接 → 有空闲连接？→ 直接分配                          │   │</span><br><span class="line">│  │  ② 无空闲 → 活跃数 &lt; 最大值？→ 新建连接                       │   │</span><br><span class="line">│  │  ③ 活跃数 ≥ 最大值 → 进入等待队列，超时则抛异常                │   │</span><br><span class="line">│  │  ④ 归还连接 → 有等待线程？→ 直接转交；否则放入空闲队列          │   │</span><br><span class="line">│  │  ⑤ 空闲超时 → 超过idleTimeout的连接被关闭回收                  │   │</span><br><span class="line">│  │  ⑥ 最大存活 → 超过maxLifetime的连接被强制回收替换              │   │</span><br><span class="line">│  │  ⑦ 连接验证 → 借出/空闲时验证连接是否仍然有效                  │   │</span><br><span class="line">│  └──────────────────────────────────────────────────────────────┘   │</span><br><span class="line">│                                                                     │</span><br><span class="line">└───────────────────────────────────┬─────────────────────────────────┘</span><br><span class="line">                                    │</span><br><span class="line">                                    ▼</span><br><span class="line">┌─────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                       数据库层 (Database)                           │</span><br><span class="line">│                                                                     │</span><br><span class="line">│   MySQL/PostgreSQL/ORACLE    最大连接数: max_connections=500        │</span><br><span class="line">│                                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="连接池工作原理图"><a href="#连接池工作原理图" class="headerlink" title="连接池工作原理图"></a>连接池工作原理图</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br><span class="line">142</span><br><span class="line">143</span><br><span class="line">144</span><br><span class="line">145</span><br><span class="line">146</span><br><span class="line">147</span><br><span class="line">148</span><br><span class="line">149</span><br><span class="line">150</span><br><span class="line">151</span><br><span class="line">152</span><br><span class="line">153</span><br><span class="line">154</span><br><span class="line">155</span><br><span class="line">156</span><br><span class="line">157</span><br><span class="line">158</span><br><span class="line">159</span><br><span class="line">160</span><br><span class="line">161</span><br><span class="line">162</span><br><span class="line">163</span><br><span class="line">164</span><br><span class="line">165</span><br><span class="line">166</span><br><span class="line">167</span><br><span class="line">168</span><br><span class="line">169</span><br><span class="line">170</span><br><span class="line">171</span><br><span class="line">172</span><br><span class="line">173</span><br><span class="line">174</span><br><span class="line">175</span><br><span class="line">176</span><br><span class="line">177</span><br><span class="line">178</span><br><span class="line">179</span><br><span class="line">180</span><br><span class="line">181</span><br><span class="line">182</span><br><span class="line">183</span><br><span class="line">184</span><br><span class="line">185</span><br><span class="line">186</span><br><span class="line">187</span><br><span class="line">188</span><br><span class="line">189</span><br><span class="line">190</span><br><span class="line">191</span><br><span class="line">192</span><br><span class="line">193</span><br><span class="line">194</span><br><span class="line">195</span><br><span class="line">196</span><br><span class="line">197</span><br><span class="line">198</span><br><span class="line">199</span><br><span class="line">200</span><br><span class="line">201</span><br><span class="line">202</span><br><span class="line">203</span><br><span class="line">204</span><br><span class="line">205</span><br><span class="line">206</span><br><span class="line">207</span><br><span class="line">208</span><br><span class="line">209</span><br><span class="line">210</span><br><span class="line">211</span><br><span class="line">212</span><br><span class="line">213</span><br><span class="line">214</span><br><span class="line">215</span><br><span class="line">216</span><br><span class="line">217</span><br><span class="line">218</span><br><span class="line">219</span><br><span class="line">220</span><br><span class="line">221</span><br><span class="line">222</span><br><span class="line">223</span><br><span class="line">224</span><br><span class="line">225</span><br><span class="line">226</span><br><span class="line">227</span><br><span class="line">228</span><br><span class="line">229</span><br><span class="line">230</span><br><span class="line">231</span><br><span class="line">232</span><br><span class="line">233</span><br><span class="line">234</span><br><span class="line">235</span><br><span class="line">236</span><br><span class="line">237</span><br><span class="line">238</span><br><span class="line">239</span><br><span class="line">240</span><br><span class="line">241</span><br><span class="line">242</span><br><span class="line">243</span><br><span class="line">244</span><br><span class="line">245</span><br><span class="line">246</span><br><span class="line">247</span><br><span class="line">248</span><br><span class="line">249</span><br><span class="line">250</span><br><span class="line">251</span><br><span class="line">252</span><br><span class="line">253</span><br><span class="line">254</span><br><span class="line">255</span><br><span class="line">256</span><br><span class="line">257</span><br><span class="line">258</span><br><span class="line">259</span><br><span class="line">260</span><br><span class="line">261</span><br><span class="line">262</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;应用层 (Application)&quot;]</span><br><span class="line">    N2[&quot;连接池层 (Connection&quot;]</span><br><span class="line">    N3[&quot;Pool)&quot;]</span><br><span class="line">    N4[&quot;连接池管理器 (Pool&quot;]</span><br><span class="line">    N5[&quot;Manager)&quot;]</span><br><span class="line">    N6[&quot;borrowConnection()&quot;]</span><br><span class="line">    N7[&quot;returnConnection()&quot;]</span><br><span class="line">    N8[&quot;等待队列&quot;]</span><br><span class="line">    N9[&quot;活跃连接 (Active) 空闲队列&quot;]</span><br><span class="line">    N10[&quot;(Wait) C1 C2 C3 C4&quot;]</span><br><span class="line">    N11[&quot;C5 (Idle) T6&quot;]</span><br><span class="line">    N12[&quot;C6 C7 T7 T1 T2 T3&quot;]</span><br><span class="line">    N13[&quot;T4 T5&quot;]</span><br><span class="line">    N14[&quot;Thread-1 Thread-2&quot;]</span><br><span class="line">    N15[&quot;Thread-3 Thread-4&quot;]</span><br><span class="line">    N16[&quot;Thread-5 ...&quot;]</span><br><span class="line">    N17[&quot;Thread-N&quot;]</span><br><span class="line">    N18[&quot;等待队列 活跃连接 (Active)&quot;]</span><br><span class="line">    N19[&quot;空闲队列 (Wait) C1 C2 C3&quot;]</span><br><span class="line">    N20[&quot;C4 C5 (Idle) T6&quot;]</span><br><span class="line">    N21[&quot;C6 C7 T7 T1 T2&quot;]</span><br><span class="line">    N22[&quot;T3 T4 T5&quot;]</span><br><span class="line">    N23[&quot;数据库层 (Database) MySQL&quot;]</span><br><span class="line">    N24[&quot;PostgreSQL&quot;]</span><br><span class="line">    N25[&quot;ORACLE 最大连接数: max_connections500&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N1 --&gt; N5</span><br><span class="line">    N1 --&gt; N6</span><br><span class="line">    N1 --&gt; N7</span><br><span class="line">    N1 --&gt; N8</span><br><span class="line">    N1 --&gt; N9</span><br><span class="line">    N1 --&gt; N10</span><br><span class="line">    N1 --&gt; N11</span><br><span class="line">    N1 --&gt; N12</span><br><span class="line">    N1 --&gt; N13</span><br><span class="line">    N14 --&gt; N2</span><br><span class="line">    N14 --&gt; N3</span><br><span class="line">    N14 --&gt; N4</span><br><span class="line">    N14 --&gt; N5</span><br><span class="line">    N14 --&gt; N6</span><br><span class="line">    N14 --&gt; N7</span><br><span class="line">    N14 --&gt; N8</span><br><span class="line">    N14 --&gt; N9</span><br><span class="line">    N14 --&gt; N10</span><br><span class="line">    N14 --&gt; N11</span><br><span class="line">    N14 --&gt; N12</span><br><span class="line">    N14 --&gt; N13</span><br><span class="line">    N15 --&gt; N2</span><br><span class="line">    N15 --&gt; N3</span><br><span class="line">    N15 --&gt; N4</span><br><span class="line">    N15 --&gt; N5</span><br><span class="line">    N15 --&gt; N6</span><br><span class="line">    N15 --&gt; N7</span><br><span class="line">    N15 --&gt; N8</span><br><span class="line">    N15 --&gt; N9</span><br><span class="line">    N15 --&gt; N10</span><br><span class="line">    N15 --&gt; N11</span><br><span class="line">    N15 --&gt; N12</span><br><span class="line">    N15 --&gt; N13</span><br><span class="line">    N16 --&gt; N2</span><br><span class="line">    N16 --&gt; N3</span><br><span class="line">    N16 --&gt; N4</span><br><span class="line">    N16 --&gt; N5</span><br><span class="line">    N16 --&gt; N6</span><br><span class="line">    N16 --&gt; N7</span><br><span class="line">    N16 --&gt; N8</span><br><span class="line">    N16 --&gt; N9</span><br><span class="line">    N16 --&gt; N10</span><br><span class="line">    N16 --&gt; N11</span><br><span class="line">    N16 --&gt; N12</span><br><span class="line">    N16 --&gt; N13</span><br><span class="line">    N17 --&gt; N2</span><br><span class="line">    N17 --&gt; N3</span><br><span class="line">    N17 --&gt; N4</span><br><span class="line">    N17 --&gt; N5</span><br><span class="line">    N17 --&gt; N6</span><br><span class="line">    N17 --&gt; N7</span><br><span class="line">    N17 --&gt; N8</span><br><span class="line">    N17 --&gt; N9</span><br><span class="line">    N17 --&gt; N10</span><br><span class="line">    N17 --&gt; N11</span><br><span class="line">    N17 --&gt; N12</span><br><span class="line">    N17 --&gt; N13</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N2 --&gt; N7</span><br><span class="line">    N2 --&gt; N8</span><br><span class="line">    N2 --&gt; N9</span><br><span class="line">    N2 --&gt; N10</span><br><span class="line">    N2 --&gt; N11</span><br><span class="line">    N2 --&gt; N12</span><br><span class="line">    N2 --&gt; N13</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N3 --&gt; N7</span><br><span class="line">    N3 --&gt; N8</span><br><span class="line">    N3 --&gt; N9</span><br><span class="line">    N3 --&gt; N10</span><br><span class="line">    N3 --&gt; N11</span><br><span class="line">    N3 --&gt; N12</span><br><span class="line">    N3 --&gt; N13</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N4 --&gt; N8</span><br><span class="line">    N4 --&gt; N9</span><br><span class="line">    N4 --&gt; N10</span><br><span class="line">    N4 --&gt; N11</span><br><span class="line">    N4 --&gt; N12</span><br><span class="line">    N4 --&gt; N13</span><br><span class="line">    N5 --&gt; N4</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N5 --&gt; N8</span><br><span class="line">    N5 --&gt; N9</span><br><span class="line">    N5 --&gt; N10</span><br><span class="line">    N5 --&gt; N11</span><br><span class="line">    N5 --&gt; N12</span><br><span class="line">    N5 --&gt; N13</span><br><span class="line">    N6 --&gt; N4</span><br><span class="line">    N6 --&gt; N5</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N6 --&gt; N9</span><br><span class="line">    N6 --&gt; N10</span><br><span class="line">    N6 --&gt; N11</span><br><span class="line">    N6 --&gt; N12</span><br><span class="line">    N6 --&gt; N13</span><br><span class="line">    N7 --&gt; N4</span><br><span class="line">    N7 --&gt; N5</span><br><span class="line">    N7 --&gt; N6</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line">    N7 --&gt; N10</span><br><span class="line">    N7 --&gt; N11</span><br><span class="line">    N7 --&gt; N12</span><br><span class="line">    N7 --&gt; N13</span><br><span class="line">    N8 --&gt; N4</span><br><span class="line">    N8 --&gt; N5</span><br><span class="line">    N8 --&gt; N6</span><br><span class="line">    N8 --&gt; N7</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line">    N8 --&gt; N10</span><br><span class="line">    N8 --&gt; N11</span><br><span class="line">    N8 --&gt; N12</span><br><span class="line">    N8 --&gt; N13</span><br><span class="line">    N9 --&gt; N4</span><br><span class="line">    N9 --&gt; N5</span><br><span class="line">    N9 --&gt; N6</span><br><span class="line">    N9 --&gt; N7</span><br><span class="line">    N9 --&gt; N8</span><br><span class="line">    N9 --&gt; N10</span><br><span class="line">    N9 --&gt; N11</span><br><span class="line">    N9 --&gt; N12</span><br><span class="line">    N9 --&gt; N13</span><br><span class="line">    N10 --&gt; N4</span><br><span class="line">    N10 --&gt; N5</span><br><span class="line">    N10 --&gt; N6</span><br><span class="line">    N10 --&gt; N7</span><br><span class="line">    N10 --&gt; N8</span><br><span class="line">    N10 --&gt; N9</span><br><span class="line">    N10 --&gt; N11</span><br><span class="line">    N10 --&gt; N12</span><br><span class="line">    N10 --&gt; N13</span><br><span class="line">    N11 --&gt; N4</span><br><span class="line">    N11 --&gt; N5</span><br><span class="line">    N11 --&gt; N6</span><br><span class="line">    N11 --&gt; N7</span><br><span class="line">    N11 --&gt; N8</span><br><span class="line">    N11 --&gt; N9</span><br><span class="line">    N11 --&gt; N10</span><br><span class="line">    N11 --&gt; N12</span><br><span class="line">    N11 --&gt; N13</span><br><span class="line">    N12 --&gt; N4</span><br><span class="line">    N12 --&gt; N5</span><br><span class="line">    N12 --&gt; N6</span><br><span class="line">    N12 --&gt; N7</span><br><span class="line">    N12 --&gt; N8</span><br><span class="line">    N12 --&gt; N9</span><br><span class="line">    N12 --&gt; N10</span><br><span class="line">    N12 --&gt; N11</span><br><span class="line">    N12 --&gt; N13</span><br><span class="line">    N13 --&gt; N4</span><br><span class="line">    N13 --&gt; N5</span><br><span class="line">    N13 --&gt; N6</span><br><span class="line">    N13 --&gt; N7</span><br><span class="line">    N13 --&gt; N8</span><br><span class="line">    N13 --&gt; N9</span><br><span class="line">    N13 --&gt; N10</span><br><span class="line">    N13 --&gt; N11</span><br><span class="line">    N13 --&gt; N12</span><br><span class="line">    N4 --&gt; N18</span><br><span class="line">    N4 --&gt; N19</span><br><span class="line">    N4 --&gt; N20</span><br><span class="line">    N4 --&gt; N21</span><br><span class="line">    N4 --&gt; N22</span><br><span class="line">    N5 --&gt; N18</span><br><span class="line">    N5 --&gt; N19</span><br><span class="line">    N5 --&gt; N20</span><br><span class="line">    N5 --&gt; N21</span><br><span class="line">    N5 --&gt; N22</span><br><span class="line">    N6 --&gt; N18</span><br><span class="line">    N6 --&gt; N19</span><br><span class="line">    N6 --&gt; N20</span><br><span class="line">    N6 --&gt; N21</span><br><span class="line">    N6 --&gt; N22</span><br><span class="line">    N7 --&gt; N18</span><br><span class="line">    N7 --&gt; N19</span><br><span class="line">    N7 --&gt; N20</span><br><span class="line">    N7 --&gt; N21</span><br><span class="line">    N7 --&gt; N22</span><br><span class="line">    N8 --&gt; N18</span><br><span class="line">    N8 --&gt; N19</span><br><span class="line">    N8 --&gt; N20</span><br><span class="line">    N8 --&gt; N21</span><br><span class="line">    N8 --&gt; N22</span><br><span class="line">    N9 --&gt; N18</span><br><span class="line">    N9 --&gt; N19</span><br><span class="line">    N9 --&gt; N20</span><br><span class="line">    N9 --&gt; N21</span><br><span class="line">    N9 --&gt; N22</span><br><span class="line">    N10 --&gt; N18</span><br><span class="line">    N10 --&gt; N19</span><br><span class="line">    N10 --&gt; N20</span><br><span class="line">    N10 --&gt; N21</span><br><span class="line">    N10 --&gt; N22</span><br><span class="line">    N11 --&gt; N18</span><br><span class="line">    N11 --&gt; N19</span><br><span class="line">    N11 --&gt; N20</span><br><span class="line">    N11 --&gt; N21</span><br><span class="line">    N11 --&gt; N22</span><br><span class="line">    N12 --&gt; N18</span><br><span class="line">    N12 --&gt; N19</span><br><span class="line">    N12 --&gt; N20</span><br><span class="line">    N12 --&gt; N21</span><br><span class="line">    N12 --&gt; N22</span><br><span class="line">    N13 --&gt; N18</span><br><span class="line">    N13 --&gt; N19</span><br><span class="line">    N13 --&gt; N20</span><br><span class="line">    N13 --&gt; N21</span><br><span class="line">    N13 --&gt; N22</span><br><span class="line">    N18 --&gt; N23</span><br><span class="line">    N18 --&gt; N24</span><br><span class="line">    N18 --&gt; N25</span><br><span class="line">    N19 --&gt; N23</span><br><span class="line">    N19 --&gt; N24</span><br><span class="line">    N19 --&gt; N25</span><br><span class="line">    N20 --&gt; N23</span><br><span class="line">    N20 --&gt; N24</span><br><span class="line">    N20 --&gt; N25</span><br><span class="line">    N21 --&gt; N23</span><br><span class="line">    N21 --&gt; N24</span><br><span class="line">    N21 --&gt; N25</span><br><span class="line">    N22 --&gt; N23</span><br><span class="line">    N22 --&gt; N24</span><br><span class="line">    N22 --&gt; N25</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h3 id="连接池生命周期状态机"><a href="#连接池生命周期状态机" class="headerlink" title="连接池生命周期状态机"></a>连接池生命周期状态机</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">      ┌──────────┐</span><br><span class="line">      │  CREATED  │  新建连接</span><br><span class="line">      └────┬─────┘</span><br><span class="line">           │ 验证通过</span><br><span class="line">           ▼</span><br><span class="line">      ┌──────────┐</span><br><span class="line">┌─────│   IDLE    │  空闲等待分配</span><br><span class="line">│     └────┬─────┘</span><br><span class="line">│          │ borrowConnection()</span><br><span class="line">│          ▼</span><br><span class="line">│     ┌──────────┐</span><br><span class="line">│     │  ACTIVE   │  被业务线程持有</span><br><span class="line">│     └────┬─────┘</span><br><span class="line">│          │ returnConnection()</span><br><span class="line">│          ▼</span><br><span class="line">│     ┌──────────┐</span><br><span class="line">└─────│   IDLE    │  归还后重新空闲</span><br><span class="line">      └────┬─────┘</span><br><span class="line">           │ idleTimeout 到期</span><br><span class="line">           ▼</span><br><span class="line">      ┌──────────┐</span><br><span class="line">      │ EVICTION  │  空闲超时被回收</span><br><span class="line">      └────┬─────┘</span><br><span class="line">           │ 或 maxLifetime 到期</span><br><span class="line">           ▼</span><br><span class="line">      ┌──────────┐</span><br><span class="line">      │  CLOSED   │  连接关闭</span><br><span class="line">      └──────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="连接池生命周期状态机"><a href="#连接池生命周期状态机" class="headerlink" title="连接池生命周期状态机"></a>连接池生命周期状态机</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;CREATED 新建连接&quot;]</span><br><span class="line">    N2[&quot;IDLE 空闲等待分配&quot;]</span><br><span class="line">    N3[&quot;ACTIVE 被业务线程持有&quot;]</span><br><span class="line">    N4[&quot;EVICTION 空闲超时被回收&quot;]</span><br><span class="line">    N5[&quot;CLOSED 连接关闭&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<hr>
 <h2 id="HikariCP-源码分析"><a href="#HikariCP-源码分析" class="headerlink" title="HikariCP 源码分析"></a>HikariCP 源码分析</h2><p>HikariCP 号称”零开销”代理，其性能优势并非空穴来风，而是源于精心设计的底层实现。下面深入分析其三大核心组件。</p>
 <h3 id="ConcurrentBag——无锁并发容器"><a href="#ConcurrentBag——无锁并发容器" class="headerlink" title="ConcurrentBag——无锁并发容器"></a>ConcurrentBag——无锁并发容器</h3><p>ConcurrentBag 是 HikariCP 自研的并发容器，是整个连接池性能的基石。它借鉴了 C# 的 ConcurrentBag 设计思想，但针对连接池场景做了深度优化。</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ConcurrentBag 核心数据结构（HikariCP 源码简化版）</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ConcurrentBag</span>&lt;T <span class="keyword">extends</span> <span class="title class_">IConcurrentBagEntry</span>&gt; &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 关键设计：ThreadLocal 存储每个线程的本地连接列表</span></span><br><span class="line">    <span class="comment">// 避免了锁竞争，线程优先从自己的列表中获取连接</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> ThreadLocal&lt;List&lt;Object&gt;&gt; threadList;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 所有连接的共享列表，用于 steal（窃取）操作</span></span><br><span class="line">    <span class="comment">// CopyOnWriteArrayList 保证读不阻塞写</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> CopyOnWriteArrayList&lt;T&gt; sharedList;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 等待获取连接的线程队列（Synchronizer 实现）</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> AtomicLong waiters;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> T <span class="title function_">borrow</span><span class="params">(<span class="type">long</span> timeout, TimeUnit unit)</span> &#123;</span><br><span class="line">        <span class="comment">// 第一步：从 ThreadLocal 本地列表获取（无锁，极快）</span></span><br><span class="line">        List&lt;Object&gt; list = threadList.get();</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> list.size() - <span class="number">1</span>; i &gt;= <span class="number">0</span>; i--) &#123;</span><br><span class="line">            <span class="type">Object</span> <span class="variable">entry</span> <span class="operator">=</span> list.remove(i);</span><br><span class="line">            <span class="keyword">if</span> (casState((T) entry, STATE_NOT_IN_USE, STATE_IN_USE)) &#123;</span><br><span class="line">                <span class="keyword">return</span> (T) entry;  <span class="comment">// 命中本地缓存，直接返回</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 第二步：从共享列表遍历获取（CAS无锁操作）</span></span><br><span class="line">        <span class="keyword">for</span> (T entry : sharedList) &#123;</span><br><span class="line">            <span class="keyword">if</span> (casState(entry, STATE_NOT_IN_USE, STATE_IN_USE)) &#123;</span><br><span class="line">                <span class="keyword">return</span> entry;  <span class="comment">// CAS 成功，拿到连接</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 第三步：等待其他连接归还（Synchronizer 阻塞）</span></span><br><span class="line">        waiters.incrementAndGet();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">long</span> <span class="variable">deadline</span> <span class="operator">=</span> System.nanoTime() + unit.toNanos(timeout);</span><br><span class="line">            <span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">                <span class="comment">// 尝试从其他线程&quot;窃取&quot;连接</span></span><br><span class="line">                <span class="keyword">for</span> (T entry : sharedList) &#123;</span><br><span class="line">                    <span class="keyword">if</span> (casState(entry, STATE_NOT_IN_USE, STATE_IN_USE)) &#123;</span><br><span class="line">                        <span class="keyword">return</span> entry;</span><br><span class="line">                    &#125;</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="comment">// 阻塞等待</span></span><br><span class="line">                <span class="keyword">if</span> (!synchronizer.waitUntil(deadline)) &#123;</span><br><span class="line">                    <span class="keyword">return</span> <span class="literal">null</span>;  <span class="comment">// 超时返回null</span></span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            waiters.decrementAndGet();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">requite</span><span class="params">(T entry)</span> &#123;</span><br><span class="line">        entry.setState(STATE_NOT_IN_USE);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 如果有等待线程，直接通知（避免遍历竞争）</span></span><br><span class="line">        <span class="keyword">if</span> (waiters.get() &gt; <span class="number">0</span>) &#123;</span><br><span class="line">            synchronizer.signal();</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">// 归还到 ThreadLocal 本地列表</span></span><br><span class="line">            threadList.get().add(entry);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">ConcurrentBag 获取连接的三级策略：</span><br><span class="line"></span><br><span class="line">  Level 1: ThreadLocal 本地列表（纳秒级，无锁无竞争）</span><br><span class="line">    │</span><br><span class="line">    │ 未命中</span><br><span class="line">    ▼</span><br><span class="line">  Level 2: 共享列表 CAS 竞争（微秒级，无锁但可能重试）</span><br><span class="line">    │</span><br><span class="line">    │ 未命中</span><br><span class="line">    ▼</span><br><span class="line">  Level 3: 阻塞等待 + 窃取（毫秒级，依赖其他线程释放）</span><br><span class="line"></span><br><span class="line">  性能对比：</span><br><span class="line">  ┌──────────────────┬─────────────┬──────────────┐</span><br><span class="line">  │ 操作              │ 传统锁方案   │ ConcurrentBag │</span><br><span class="line">  ├──────────────────┼─────────────┼──────────────┤</span><br><span class="line">  │ 无竞争获取        │ ~80ns       │ ~20ns        │</span><br><span class="line">  │ 低竞争获取        │ ~200ns      │ ~50ns        │</span><br><span class="line">  │ 高竞争获取        │ ~5μs        │ ~500ns       │</span><br><span class="line">  │ 连接归还          │ ~100ns      │ ~15ns        │</span><br><span class="line">  └──────────────────┴─────────────┴──────────────┘</span><br></pre></td></tr></table></figure>
-
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>传统锁方案</th>
+<th>ConcurrentBag</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>无竞争获取</td>
+<td>~80ns</td>
+<td>~20ns</td>
+</tr>
+<tr>
+<td>低竞争获取</td>
+<td>~200ns</td>
+<td>~50ns</td>
+</tr>
+<tr>
+<td>高竞争获取</td>
+<td>~5μs</td>
+<td>~500ns</td>
+</tr>
+<tr>
+<td>连接归还</td>
+<td>~100ns</td>
+<td>~15ns</td>
+</tr>
+</tbody></table>
 <h3 id="FastList——替代-ArrayList-的极致优化"><a href="#FastList——替代-ArrayList-的极致优化" class="headerlink" title="FastList——替代 ArrayList 的极致优化"></a>FastList——替代 ArrayList 的极致优化</h3><p>HikariCP 用 FastList 替换了 JDK 的 ArrayList，用于管理 Statement 列表。优化点虽然微小，但在高频调用路径上累积效果显著。</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// FastList 源码（HikariCP 实际代码）</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">final</span> <span class="keyword">class</span> <span class="title class_">FastList</span>&lt;T&gt; <span class="keyword">implements</span> <span class="title class_">List</span>&lt;T&gt; &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> T[] elementData;    <span class="comment">// 直接使用数组，不进行封装</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> size;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">add</span><span class="params">(T element)</span> &#123;</span><br><span class="line">        <span class="comment">// ArrayList 的 add 方法会先调用 rangeCheck 再执行赋值</span></span><br><span class="line">        <span class="comment">// FastList 直接赋值，省去方法调用开销</span></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            elementData[size++] = element;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (ArrayIndexOutOfBoundsException e) &#123;</span><br><span class="line">            <span class="comment">// 用异常代替范围检查（在正常路径上更快）</span></span><br><span class="line">            <span class="comment">// 因为扩容是极少数情况，用异常处理更高效</span></span><br><span class="line">            grow();  <span class="comment">// 扩容1.5倍</span></span><br><span class="line">            elementData[size++] = element;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">remove</span><span class="params">(Object element)</span> &#123;</span><br><span class="line">        <span class="comment">// ArrayList 的 remove 从头开始遍历</span></span><br><span class="line">        <span class="comment">// FastList 从尾部开始遍历（Statement 关闭通常是后进先出）</span></span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> size - <span class="number">1</span>; i &gt;= <span class="number">0</span>; i--) &#123;</span><br><span class="line">            <span class="keyword">if</span> (element == elementData[i]) &#123;</span><br><span class="line">                <span class="comment">// 用最后一个元素覆盖被删除的位置</span></span><br><span class="line">                <span class="comment">// 避免了 ArrayList 的 arraycopy 操作</span></span><br><span class="line">                elementData[i] = elementData[--size];</span><br><span class="line">                elementData[size] = <span class="literal">null</span>;</span><br><span class="line">                <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">grow</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">newCapacity</span> <span class="operator">=</span> elementData.length + (elementData.length &gt;&gt; <span class="number">1</span>);</span><br><span class="line">        elementData = Arrays.copyOf(elementData, newCapacity);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">FastList vs ArrayList 优化点：</span><br><span class="line"></span><br><span class="line">  ┌────────────────────┬──────────────────┬──────────────────┐</span><br><span class="line">  │ 操作               │ ArrayList         │ FastList          │</span><br><span class="line">  ├────────────────────┼──────────────────┼──────────────────┤</span><br><span class="line">  │ add()              │ rangeCheck+赋值   │ 直接赋值+异常扩容  │</span><br><span class="line">  │ remove()           │ 从头遍历+arraycopy│ 从尾遍历+末尾覆盖  │</span><br><span class="line">  │ 内存开销            │ 额外对象头开销     │ 最小化对象头       │</span><br><span class="line">  │ 方法调用次数        │ 多次方法调用       │ 内联后几乎无调用    │</span><br><span class="line">  └────────────────────┴──────────────────┴──────────────────┘</span><br><span class="line"></span><br><span class="line">  在 Statement 管理场景下，FastList 比 ArrayList 快约 20%~30%</span><br></pre></td></tr></table></figure>
-
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>ArrayList</th>
+<th>FastList</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>add()</td>
+<td>rangeCheck+赋值</td>
+<td>直接赋值+异常扩容</td>
+</tr>
+<tr>
+<td>remove()</td>
+<td>从头遍历+arraycopy</td>
+<td>从尾遍历+末尾覆盖</td>
+</tr>
+<tr>
+<td>内存开销</td>
+<td>额外对象头开销</td>
+<td>最小化对象头</td>
+</tr>
+<tr>
+<td>方法调用次数</td>
+<td>多次方法调用</td>
+<td>内联后几乎无调用</td>
+</tr>
+</tbody></table>
 <h3 id="PoolEntry——连接包装与生命周期管理"><a href="#PoolEntry——连接包装与生命周期管理" class="headerlink" title="PoolEntry——连接包装与生命周期管理"></a>PoolEntry——连接包装与生命周期管理</h3><p>PoolEntry 是 HikariCP 对数据库连接的包装，负责连接的生命周期管理和状态追踪。</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// PoolEntry 核心源码简化</span></span><br><span class="line"><span class="keyword">final</span> <span class="keyword">class</span> <span class="title class_">PoolEntry</span> <span class="keyword">implements</span> <span class="title class_">IConcurrentBagEntry</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Connection connection;           <span class="comment">// 真实数据库连接</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> HikariPool hikariPool;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">volatile</span> <span class="type">long</span> lastAccessedTime;        <span class="comment">// 最后访问时间</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">volatile</span> <span class="type">long</span> lastBorrowedTime;        <span class="comment">// 最后借出时间</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">volatile</span> <span class="type">boolean</span> evict;                <span class="comment">// 是否标记为回收</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 状态取值（ConcurrentBag 的 CAS 操作依赖此状态）</span></span><br><span class="line">    <span class="comment">// STATE_NOT_IN_USE = 0   空闲可用</span></span><br><span class="line">    <span class="comment">// STATE_IN_USE     = 1   被占用</span></span><br><span class="line">    <span class="comment">// STATE_REMOVED    = 2   已移除</span></span><br><span class="line">    <span class="comment">// STATE_RESERVED   = 3   保留中（正在创建或销毁）</span></span><br><span class="line"></span><br><span class="line">    Connection <span class="title function_">close</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 关闭真实连接</span></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            connection.close();</span><br><span class="line">        &#125; <span class="keyword">catch</span> (SQLException e) &#123;</span><br><span class="line">            <span class="comment">// 静默关闭，不抛异常</span></span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> connection;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="type">boolean</span> <span class="title function_">isMarkedEvicted</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> evict;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">void</span> <span class="title function_">markEvicted</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="built_in">this</span>.evict = <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="type">long</span> <span class="title function_">getMillisSinceBorrowed</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> System.currentTimeMillis() - lastBorrowedTime;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="type">long</span> <span class="title function_">getMillisSinceLastAccess</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> System.currentTimeMillis() - lastAccessedTime;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
@@ -238,27 +293,196 @@ article: http://ogp.me/ns/article#">
 
 <h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="HikariCP-配置最佳实践"><a href="#HikariCP-配置最佳实践" class="headerlink" title="HikariCP 配置最佳实践"></a>HikariCP 配置最佳实践</h2><h3 id="核心配置参数详解"><a href="#核心配置参数详解" class="headerlink" title="核心配置参数详解"></a>核心配置参数详解</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">url:</span> <span class="string">jdbc:mysql://localhost:3306/smart_mine?useSSL=true&amp;useUnicode=true&amp;characterEncoding=utf8&amp;serverTimezone=Asia/Shanghai&amp;allowPublicKeyRetrieval=true</span></span><br><span class="line">    <span class="attr">username:</span> <span class="string">root</span></span><br><span class="line">    <span class="attr">password:</span> <span class="string">$&#123;DB_PASSWORD&#125;</span></span><br><span class="line">    <span class="attr">driver-class-name:</span> <span class="string">com.mysql.cj.jdbc.Driver</span></span><br><span class="line">    <span class="attr">hikari:</span></span><br><span class="line">      <span class="comment"># =================== 连接池大小 ===================</span></span><br><span class="line">      <span class="comment"># 最大连接数：核心公式计算，宁小勿大</span></span><br><span class="line">      <span class="comment"># 过大→数据库上下文切换增加；过小→获取连接超时</span></span><br><span class="line">      <span class="attr">maximum-pool-size:</span> <span class="number">20</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># 最小空闲连接数：建议与 maximum-pool-size 相同</span></span><br><span class="line">      <span class="comment"># 相同→连接池大小固定，避免动态伸缩的开销</span></span><br><span class="line">      <span class="comment"># 不同→低峰期释放连接节省资源，但高峰期需要重新创建</span></span><br><span class="line">      <span class="attr">minimum-idle:</span> <span class="number">20</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># =================== 超时配置 ===================</span></span><br><span class="line">      <span class="comment"># 空闲连接超时（毫秒）：仅当 minimumIdle &lt; maximumPoolSize 时生效</span></span><br><span class="line">      <span class="comment"># 建议 600000（10分钟），不宜过短避免频繁创建销毁</span></span><br><span class="line">      <span class="attr">idle-timeout:</span> <span class="number">600000</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># 连接最大存活时间（毫秒）：建议 300000~1800000（5~30分钟）</span></span><br><span class="line">      <span class="comment"># 必须小于数据库的 wait_timeout（MySQL默认8小时）</span></span><br><span class="line">      <span class="comment"># 建议 &lt; MySQL wait_timeout 的 60%~80%，留出安全余量</span></span><br><span class="line">      <span class="attr">max-lifetime:</span> <span class="number">1800000</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># 获取连接超时（毫秒）：建议 30000（30秒）</span></span><br><span class="line">      <span class="comment"># 过短→高峰期频繁超时；过长→请求堆积导致雪崩</span></span><br><span class="line">      <span class="attr">connection-timeout:</span> <span class="number">30000</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># =================== 连接验证 ===================</span></span><br><span class="line">      <span class="comment"># 连接测试查询：推荐留空，让 JDBC4 的 isValid() 代替</span></span><br><span class="line">      <span class="comment"># 仅对不支持 JDBC4 的旧驱动才需要设置</span></span><br><span class="line">      <span class="comment"># MySQL 如果要设置：SELECT 1（不要用 SELECT 1 FROM DUAL）</span></span><br><span class="line">      <span class="comment"># connection-test-query: SELECT 1</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># =================== 泄漏检测 ===================</span></span><br><span class="line">      <span class="comment"># 连接泄漏检测阈值（毫秒）：0表示禁用</span></span><br><span class="line">      <span class="comment"># 建议 60000（60秒），略大于最长事务时间</span></span><br><span class="line">      <span class="comment"># 检测到泄漏时会打印 WARN 日志并记录堆栈</span></span><br><span class="line">      <span class="attr">leak-detection-threshold:</span> <span class="number">60000</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># =================== 其他配置 ===================</span></span><br><span class="line">      <span class="comment"># 连接池名称：方便监控和日志排查</span></span><br><span class="line">      <span class="attr">pool-name:</span> <span class="string">SmartMineHikariCP</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># 自动提交：默认 true，一般不需要修改</span></span><br><span class="line">      <span class="attr">auto-commit:</span> <span class="literal">true</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># 只读配置：对于只读从库可以设为 true</span></span><br><span class="line">      <span class="comment"># read-only: false</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># 注册 MBean：允许 JMX 监控，生产建议开启</span></span><br><span class="line">      <span class="attr">register-mbeans:</span> <span class="literal">true</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># 连接初始化SQL：新建连接时执行的SQL</span></span><br><span class="line">      <span class="comment"># 对 MySQL 可设置事务隔离级别等</span></span><br><span class="line">      <span class="comment"># connection-init-sql: SET NAMES utf8mb4</span></span><br></pre></td></tr></table></figure>
 
-<h3 id="关键参数深度解读"><a href="#关键参数深度解读" class="headerlink" title="关键参数深度解读"></a>关键参数深度解读</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">┌────────────────────────┬──────────────┬─────────────────────────────────────────┐</span><br><span class="line">│ 参数                    │ 推荐值        │ 解读                                     │</span><br><span class="line"> ├────────────────────────┼──────────────┼─────────────────────────────────────────┤</span><br><span class="line"> │ maximumPoolSize        │ 公式计算值    │ 并发峰值时池中最大连接数                    │</span><br><span class="line"> │                        │              │ 超过后新请求进入等待队列                    │</span><br><span class="line"> │                        │              │ 注意：不是越大越好！                        │</span><br><span class="line"> ├────────────────────────┼──────────────┼─────────────────────────────────────────┤</span><br><span class="line"> │ minimumIdle            │ = maxSize    │ 固定大小池避免动态伸缩开销                  │</span><br><span class="line"> │                        │              │ 如果资源紧张可设小值，低峰期释放连接         │</span><br><span class="line"> ├────────────────────────┼──────────────┼─────────────────────────────────────────┤</span><br><span class="line"> │ idleTimeout            │ 600000       │ 空闲连接存活时间，仅 minimumIdle&lt;maxSize   │</span><br><span class="line"> │                        │ (10min)      │ 时生效。过短→频繁创建销毁                   │</span><br><span class="line"> │                        │              │ 过长→浪费数据库连接资源                      │</span><br><span class="line"> ├────────────────────────┼──────────────┼─────────────────────────────────────────┤</span><br><span class="line"> │ maxLifetime            │ 1800000      │ 连接最大存活时间，必须 &lt; DB的wait_timeout   │</span><br><span class="line"> │                        │ (30min)      │ HikariCP 会在此时间基础上加随机偏移          │</span><br><span class="line"> │                        │              │ 避免所有连接同时失效(Thundering Herd)       │</span><br><span class="line"> ├────────────────────────┼──────────────┼─────────────────────────────────────────┤</span><br><span class="line"> │ connectionTimeout      │ 30000        │ 获取连接超时时间                           │</span><br><span class="line"> │                        │ (30s)        │ 超时抛出 SQLTransientConnectionException   │</span><br><span class="line"> │                        │              │ 建议配合应用的请求超时设置                   │</span><br><span class="line"> ├────────────────────────┼──────────────┼─────────────────────────────────────────┤</span><br><span class="line"> │ leakDetectionThreshold │ 60000        │ 连接借出超过此时间未归还则记录泄漏警告       │</span><br><span class="line"> │                        │ (60s)        │ 设为0禁用，设为2000检测最敏感               │</span><br><span class="line"> │                        │              │ 不建议在生产环境设太小值                     │</span><br><span class="line"> ├────────────────────────┼──────────────┼─────────────────────────────────────────┤</span><br><span class="line"> │ connectionTestQuery    │ 留空          │ JDBC4+ 驱动使用 Connection.isValid()      │</span><br><span class="line"> │                        │              │ 比 SELECT 1 更高效（不经过SQL解析器）       │</span><br><span class="line"> │                        │              │ 仅旧驱动（JDBC3）需要设置                   │</span><br><span class="line"> └────────────────────────┴──────────────┴─────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="关键参数深度解读"><a href="#关键参数深度解读" class="headerlink" title="关键参数深度解读"></a>关键参数深度解读</h3><table>
+<thead>
+<tr>
+<th>参数</th>
+<th>推荐值</th>
+<th>解读</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>maximumPoolSize</td>
+<td>公式计算值</td>
+<td>并发峰值时池中最大连接数</td>
+</tr>
+<tr>
+<td>minimumIdle</td>
+<td>&#x3D; maxSize</td>
+<td>固定大小池避免动态伸缩开销</td>
+</tr>
+<tr>
+<td>idleTimeout</td>
+<td>600000</td>
+<td>空闲连接存活时间，仅 minimumIdle&lt;maxSize</td>
+</tr>
+<tr>
+<td>maxLifetime</td>
+<td>1800000</td>
+<td>连接最大存活时间，必须 &lt; DB的wait_timeout</td>
+</tr>
+<tr>
+<td>connectionTimeout</td>
+<td>30000</td>
+<td>获取连接超时时间</td>
+</tr>
+<tr>
+<td>leakDetectionThreshold</td>
+<td>60000</td>
+<td>连接借出超过此时间未归还则记录泄漏警告</td>
+</tr>
+<tr>
+<td>connectionTestQuery</td>
+<td>留空</td>
+<td>JDBC4+ 驱动使用 Connection.isValid()</td>
+</tr>
+</tbody></table>
 <h3 id="maxLifetime-与-MySQL-wait-timeout-的关系"><a href="#maxLifetime-与-MySQL-wait-timeout-的关系" class="headerlink" title="maxLifetime 与 MySQL wait_timeout 的关系"></a>maxLifetime 与 MySQL wait_timeout 的关系</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">这是最常见的踩坑点：</span><br><span class="line"></span><br><span class="line">  MySQL 默认 wait_timeout = 28800000 (8小时)</span><br><span class="line">  含义：MySQL 服务端会主动关闭空闲超过8小时的连接</span><br><span class="line"></span><br><span class="line">  如果 HikariCP 的 maxLifetime &gt; MySQL 的 wait_timeout：</span><br><span class="line">    → HikariCP 池中的连接可能已被 MySQL 关闭</span><br><span class="line">    → 应用拿到一个已关闭的连接</span><br><span class="line">    → 抛出 &quot;Communications link failure&quot; 或 &quot;No operations allowed after connection closed&quot;</span><br><span class="line"></span><br><span class="line">  正确配置：</span><br><span class="line">    maxLifetime &lt; wait_timeout 的 60%~80%</span><br><span class="line"></span><br><span class="line">    MySQL wait_timeout = 8h  →  HikariCP maxLifetime = 30min ✅</span><br><span class="line">    MySQL wait_timeout = 30min →  HikariCP maxLifetime = 20min ✅</span><br><span class="line">    MySQL wait_timeout = 30min →  HikariCP maxLifetime = 35min ❌</span><br><span class="line"></span><br><span class="line">  HikariCP 的防雷群策略：</span><br><span class="line">    每个连接的实际 maxLifetime = 配置值 ± 随机偏移(最大2.5%)</span><br><span class="line">    例如 maxLifetime=1800000ms，实际在 1755000~1845000ms 之间</span><br><span class="line">    这避免了所有连接同时到期被替换的&quot;雷群效应&quot;</span><br></pre></td></tr></table></figure>
 
 <h3 id="Prepared-Statement-缓存"><a href="#Prepared-Statement-缓存" class="headerlink" title="Prepared Statement 缓存"></a>Prepared Statement 缓存</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">hikari:</span></span><br><span class="line">      <span class="comment"># HikariCP 自身不支持 PreparedStatement 缓存</span></span><br><span class="line">      <span class="comment"># 需要通过数据源 URL 或驱动参数配置</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># MySQL 的 PreparedStatement 缓存配置（在URL中）：</span></span><br><span class="line">      <span class="comment"># cachePrepStmts=true        - 开启PS缓存</span></span><br><span class="line">      <span class="comment"># prepStmtCacheSize=250      - 每个连接缓存的PS数量</span></span><br><span class="line">      <span class="comment"># prepStmtCacheSqlLimit=2048 - 缓存的SQL最大长度（字符）</span></span><br><span class="line">      <span class="comment"># useServerPrepStmts=true    - 使用服务端PS（需数据库支持）</span></span><br><span class="line"></span><br><span class="line">      <span class="attr">url:</span> <span class="string">jdbc:mysql://localhost:3306/smart_mine?cachePrepStmts=true&amp;prepStmtCacheSize=250&amp;prepStmtCacheSqlLimit=2048&amp;useServerPrepStmts=true</span></span><br></pre></td></tr></table></figure>
 
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">PreparedStatement 缓存原理：</span><br><span class="line"></span><br><span class="line">  无缓存：</span><br><span class="line">    每次执行 → SQL解析 → 优化 → 执行（重复工作）</span><br><span class="line"></span><br><span class="line">  有缓存：</span><br><span class="line">    首次执行 → SQL解析 → 优化 → 缓存执行计划 → 执行</span><br><span class="line">    再次执行 → 命中缓存 → 直接执行（跳过解析和优化）</span><br><span class="line"></span><br><span class="line">  ┌──────────────────────┬───────────────┬───────────────┐</span><br><span class="line">  │ 配置                  │ 值             │ 说明           │</span><br><span class="line">  ├──────────────────────┼───────────────┼───────────────┤</span><br><span class="line">  │ cachePrepStmts       │ true          │ 必须开启        │</span><br><span class="line">  │ prepStmtCacheSize    │ 250           │ 适中，过大占内存 │</span><br><span class="line">  │ prepStmtCacheSqlLimit│ 2048          │ 超过的不缓存    │</span><br><span class="line">  │ useServerPrepStmts   │ true          │ 服务端缓存更高效 │</span><br><span class="line">  └──────────────────────┴───────────────┴───────────────┘</span><br><span class="line"></span><br><span class="line">  注意事项：</span><br><span class="line">    → 缓存是per-connection的，连接池大则总缓存占用内存更多</span><br><span class="line">    → prepStmtCacheSize 过大会占用过多内存，建议 100~500</span><br><span class="line">    → 对于 SQL 种类极多的场景（如动态表名），缓存效果有限</span><br><span class="line">    → Oracle/PostgreSQL 驱动有各自不同的 PS 缓存参数</span><br></pre></td></tr></table></figure>
-
+<table>
+<thead>
+<tr>
+<th>配置</th>
+<th>值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>cachePrepStmts</td>
+<td>true</td>
+<td>必须开启</td>
+</tr>
+<tr>
+<td>prepStmtCacheSize</td>
+<td>250</td>
+<td>适中，过大占内存</td>
+</tr>
+<tr>
+<td>prepStmtCacheSqlLimit</td>
+<td>2048</td>
+<td>超过的不缓存</td>
+</tr>
+<tr>
+<td>useServerPrepStmts</td>
+<td>true</td>
+<td>服务端缓存更高效</td>
+</tr>
+</tbody></table>
 <hr>
 <h2 id="Druid-配置最佳实践"><a href="#Druid-配置最佳实践" class="headerlink" title="Druid 配置最佳实践"></a>Druid 配置最佳实践</h2><h3 id="核心配置参数"><a href="#核心配置参数" class="headerlink" title="核心配置参数"></a>核心配置参数</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">druid:</span></span><br><span class="line">      <span class="comment"># =================== 连接池大小 ===================</span></span><br><span class="line">      <span class="attr">initial-size:</span> <span class="number">5</span>                    <span class="comment"># 初始化连接数（启动时预创建）</span></span><br><span class="line">      <span class="attr">min-idle:</span> <span class="number">5</span>                        <span class="comment"># 最小空闲连接数</span></span><br><span class="line">      <span class="attr">max-active:</span> <span class="number">20</span>                     <span class="comment"># 最大活跃连接数（等同HikariCP的maximumPoolSize）</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># =================== 超时配置 ===================</span></span><br><span class="line">      <span class="attr">max-wait:</span> <span class="number">30000</span>                    <span class="comment"># 获取连接最大等待时间（毫秒）</span></span><br><span class="line">      <span class="attr">time-between-eviction-runs-millis:</span> <span class="number">60000</span>  <span class="comment"># 空闲连接检测间隔（毫秒）</span></span><br><span class="line">      <span class="attr">min-evictable-idle-time-millis:</span> <span class="number">300000</span>    <span class="comment"># 连接最小空闲时间（毫秒），超过后被回收</span></span><br><span class="line">      <span class="attr">max-evictable-idle-time-millis:</span> <span class="number">900000</span>    <span class="comment"># 连接最大空闲时间（毫秒），1.1.15+支持</span></span><br><span class="line">      <span class="attr">keep-alive:</span> <span class="literal">true</span>                   <span class="comment"># 保持连接活跃，1.1.4+支持</span></span><br><span class="line">      <span class="attr">phyMaxUseCount:</span> <span class="number">1000</span>               <span class="comment"># 连接最大使用次数，超过后强制回收</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># =================== 连接验证 ===================</span></span><br><span class="line">      <span class="attr">validation-query:</span> <span class="string">SELECT</span> <span class="number">1</span>         <span class="comment"># 验证连接的SQL</span></span><br><span class="line">      <span class="attr">validation-query-timeout:</span> <span class="number">5</span>        <span class="comment"># 验证查询超时（秒）</span></span><br><span class="line">      <span class="attr">test-while-idle:</span> <span class="literal">true</span>              <span class="comment"># 空闲时检测连接有效性</span></span><br><span class="line">      <span class="attr">test-on-borrow:</span> <span class="literal">false</span>              <span class="comment"># 借出时不检测（影响性能）</span></span><br><span class="line">      <span class="attr">test-on-return:</span> <span class="literal">false</span>              <span class="comment"># 归还时不检测（影响性能）</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># =================== 连接泄漏 ===================</span></span><br><span class="line">      <span class="attr">remove-abandoned:</span> <span class="literal">true</span>             <span class="comment"># 开启泄漏连接回收</span></span><br><span class="line">      <span class="attr">remove-abandoned-timeout:</span> <span class="number">300</span>      <span class="comment"># 泄漏连接超时（秒）</span></span><br><span class="line">      <span class="attr">log-abandoned:</span> <span class="literal">true</span>                <span class="comment"># 回收时记录堆栈日志</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># =================== 其他 ===================</span></span><br><span class="line">      <span class="attr">pool-prepared-statements:</span> <span class="literal">true</span>     <span class="comment"># 开启PS缓存</span></span><br><span class="line">      <span class="attr">max-pool-prepared-statement-per-connection-size:</span> <span class="number">20</span>  <span class="comment"># 每连接PS缓存数</span></span><br><span class="line">      <span class="attr">filters:</span> <span class="string">stat,wall,log4j2</span>          <span class="comment"># 开启的过滤器（逗号分隔）</span></span><br><span class="line">      <span class="attr">connection-properties:</span> <span class="string">druid.stat.slowSqlMillis=1000</span>  <span class="comment"># 慢SQL阈值</span></span><br></pre></td></tr></table></figure>
 
-<h3 id="关键参数对比"><a href="#关键参数对比" class="headerlink" title="关键参数对比"></a>关键参数对比</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────┬────────────────────┬──────────────────────┐</span><br><span class="line">│ HikariCP 参数         │ Druid 参数          │ 说明                  │</span><br><span class="line"> ├──────────────────────┼────────────────────┼──────────────────────┤</span><br><span class="line"> │ maximumPoolSize      │ maxActive           │ 最大连接数             │</span><br><span class="line"> │ minimumIdle          │ minIdle             │ 最小空闲连接           │</span><br><span class="line"> │ connectionTimeout    │ maxWait             │ 获取连接超时           │</span><br><span class="line"> │ idleTimeout          │ minEvictableIdleTimeMillis │ 空闲超时回收 │</span><br><span class="line"> │ maxLifetime          │ maxEvictableIdleTimeMillis │ 最大存活时间 │</span><br><span class="line"> │ connectionTestQuery  │ validationQuery     │ 连接验证SQL            │</span><br><span class="line"> │ leakDetectionThreshold│ removeAbandonedTimeout │ 泄漏检测超时      │</span><br><span class="line"> │ 无等价               │ initialSize         │ 初始连接数             │</span><br><span class="line"> │ 无等价               │ timeBetweenEvictionRunsMillis │ 检测间隔  │</span><br><span class="line"> │ 无等价               │ testWhileIdle       │ 空闲时验证             │</span><br><span class="line"> │ 无等价               │ poolPreparedStatements │ PS缓存开关          │</span><br><span class="line"> └──────────────────────┴────────────────────┴──────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="关键参数对比"><a href="#关键参数对比" class="headerlink" title="关键参数对比"></a>关键参数对比</h3><table>
+<thead>
+<tr>
+<th>HikariCP 参数</th>
+<th>Druid 参数</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>maximumPoolSize</td>
+<td>maxActive</td>
+<td>最大连接数</td>
+</tr>
+<tr>
+<td>minimumIdle</td>
+<td>minIdle</td>
+<td>最小空闲连接</td>
+</tr>
+<tr>
+<td>connectionTimeout</td>
+<td>maxWait</td>
+<td>获取连接超时</td>
+</tr>
+<tr>
+<td>idleTimeout</td>
+<td>minEvictableIdleTimeMillis</td>
+<td>空闲超时回收</td>
+</tr>
+<tr>
+<td>maxLifetime</td>
+<td>maxEvictableIdleTimeMillis</td>
+<td>最大存活时间</td>
+</tr>
+<tr>
+<td>connectionTestQuery</td>
+<td>validationQuery</td>
+<td>连接验证SQL</td>
+</tr>
+<tr>
+<td>leakDetectionThreshold</td>
+<td>removeAbandonedTimeout</td>
+<td>泄漏检测超时</td>
+</tr>
+<tr>
+<td>无等价</td>
+<td>initialSize</td>
+<td>初始连接数</td>
+</tr>
+<tr>
+<td>无等价</td>
+<td>timeBetweenEvictionRunsMillis</td>
+<td>检测间隔</td>
+</tr>
+<tr>
+<td>无等价</td>
+<td>testWhileIdle</td>
+<td>空闲时验证</td>
+</tr>
+<tr>
+<td>无等价</td>
+<td>poolPreparedStatements</td>
+<td>PS缓存开关</td>
+</tr>
+</tbody></table>
 <hr>
 <h2 id="Druid-监控体系"><a href="#Druid-监控体系" class="headerlink" title="Druid 监控体系"></a>Druid 监控体系</h2><p>Druid 最大的优势在于其丰富的监控能力，这也是很多团队选择 Druid 的核心理由。</p>
 <h3 id="StatFilter——SQL统计监控"><a href="#StatFilter——SQL统计监控" class="headerlink" title="StatFilter——SQL统计监控"></a>StatFilter——SQL统计监控</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">druid:</span></span><br><span class="line">      <span class="attr">filter:</span></span><br><span class="line">        <span class="attr">stat:</span></span><br><span class="line">          <span class="attr">enabled:</span> <span class="literal">true</span>                  <span class="comment"># 开启StatFilter</span></span><br><span class="line">          <span class="attr">db-type:</span> <span class="string">mysql</span>                 <span class="comment"># 数据库类型</span></span><br><span class="line">          <span class="attr">log-slow-sql:</span> <span class="literal">true</span>             <span class="comment"># 记录慢SQL</span></span><br><span class="line">          <span class="attr">slow-sql-millis:</span> <span class="number">1000</span>          <span class="comment"># 慢SQL阈值（毫秒）</span></span><br><span class="line">          <span class="attr">merge-sql:</span> <span class="literal">true</span>                <span class="comment"># 合并相同SQL统计（去掉参数差异）</span></span><br></pre></td></tr></table></figure>
 
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 通过代码获取统计信息</span></span><br><span class="line"><span class="meta">@RestController</span></span><br><span class="line"><span class="meta">@RequestMapping(&quot;/monitor&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DruidStatController</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@GetMapping(&quot;/sql&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> List&lt;SQLStatementStats&gt; <span class="title function_">getSqlStats</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// Druid 内置的 SQL 统计数据源</span></span><br><span class="line">        Map&lt;String, JdbcDataSourceStat&gt; dataSources = DruidDataSourceStatManager.getInstance().getDataSources();</span><br><span class="line">        List&lt;SQLStatementStats&gt; result = <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">        <span class="keyword">for</span> (JdbcDataSourceStat stat : dataSources.values()) &#123;</span><br><span class="line">            <span class="keyword">for</span> (JdbcSqlStat sqlStat : stat.getSqlStatMap().values()) &#123;</span><br><span class="line">                result.add(SQLStatementStats.builder()</span><br><span class="line">                    .sql(sqlStat.getSql())</span><br><span class="line">                    .executeCount(sqlStat.getExecuteCount())</span><br><span class="line">                    .errorCount(sqlStat.getErrorCount())</span><br><span class="line">                    .totalTime(sqlStat.getTotalTime())</span><br><span class="line">                    .maxTimespan(sqlStat.getMaxTimespan())</span><br><span class="line">                    .inTransactionCount(sqlStat.getInTransactionCount())</span><br><span class="line">                    .build());</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">StatFilter 监控指标：</span><br><span class="line">  ┌──────────────────┬─────────────────────────────────────┐</span><br><span class="line">  │ 指标              │ 说明                                 │</span><br><span class="line">  ├──────────────────┼─────────────────────────────────────┤</span><br><span class="line">  │ ExecuteCount      │ SQL执行总次数                         │</span><br><span class="line">  │ ErrorCount        │ 执行出错次数                          │</span><br><span class="line">  │ TotalTime         │ 总执行耗时(ms)                        │</span><br><span class="line">  │ MaxTimespan       │ 单次最大耗时(ms)                      │</span><br><span class="line">  │ InTransactionCount│ 在事务中执行的次数                     │</span><br><span class="line">  │ RunningCount      │ 当前正在执行的数量                     │</span><br><span class="line">  │ ConcurrentMax     │ 最大并发执行数                        │</span><br><span class="line">  │ Histogram         │ 耗时分布直方图                        │</span><br><span class="line">  └──────────────────┴─────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ExecuteCount</td>
+<td>SQL执行总次数</td>
+</tr>
+<tr>
+<td>ErrorCount</td>
+<td>执行出错次数</td>
+</tr>
+<tr>
+<td>TotalTime</td>
+<td>总执行耗时(ms)</td>
+</tr>
+<tr>
+<td>MaxTimespan</td>
+<td>单次最大耗时(ms)</td>
+</tr>
+<tr>
+<td>InTransactionCount</td>
+<td>在事务中执行的次数</td>
+</tr>
+<tr>
+<td>RunningCount</td>
+<td>当前正在执行的数量</td>
+</tr>
+<tr>
+<td>ConcurrentMax</td>
+<td>最大并发执行数</td>
+</tr>
+<tr>
+<td>Histogram</td>
+<td>耗时分布直方图</td>
+</tr>
+</tbody></table>
 <h3 id="WallFilter——SQL防火墙"><a href="#WallFilter——SQL防火墙" class="headerlink" title="WallFilter——SQL防火墙"></a>WallFilter——SQL防火墙</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">druid:</span></span><br><span class="line">      <span class="attr">filter:</span></span><br><span class="line">        <span class="attr">wall:</span></span><br><span class="line">          <span class="attr">enabled:</span> <span class="literal">true</span></span><br><span class="line">          <span class="attr">db-type:</span> <span class="string">mysql</span></span><br><span class="line">          <span class="attr">config:</span></span><br><span class="line">            <span class="comment"># =================== DML 限制 ===================</span></span><br><span class="line">            <span class="attr">select-allow:</span> <span class="literal">true</span>              <span class="comment"># 允许SELECT</span></span><br><span class="line">            <span class="attr">select-into-allow:</span> <span class="literal">false</span>        <span class="comment"># 禁止SELECT INTO</span></span><br><span class="line">            <span class="attr">insert-allow:</span> <span class="literal">true</span>              <span class="comment"># 允许INSERT</span></span><br><span class="line">            <span class="attr">update-allow:</span> <span class="literal">true</span>              <span class="comment"># 允许UPDATE</span></span><br><span class="line">            <span class="attr">delete-allow:</span> <span class="literal">true</span>              <span class="comment"># 允许DELETE</span></span><br><span class="line">            <span class="comment"># =================== DDL 限制 ===================</span></span><br><span class="line">            <span class="attr">create-table-allow:</span> <span class="literal">false</span>       <span class="comment"># 禁止CREATE TABLE（生产环境）</span></span><br><span class="line">            <span class="attr">alter-table-allow:</span> <span class="literal">false</span>        <span class="comment"># 禁止ALTER TABLE</span></span><br><span class="line">            <span class="attr">drop-table-allow:</span> <span class="literal">false</span>         <span class="comment"># 禁止DROP TABLE</span></span><br><span class="line">            <span class="attr">truncate-allow:</span> <span class="literal">false</span>           <span class="comment"># 禁止TRUNCATE</span></span><br><span class="line">            <span class="comment"># =================== 危险操作 ===================</span></span><br><span class="line">            <span class="attr">multi-statement-allow:</span> <span class="literal">false</span>    <span class="comment"># 禁止多语句执行（防SQL注入）</span></span><br><span class="line">            <span class="attr">none-base-statement-allow:</span> <span class="literal">false</span> <span class="comment"># 禁止非基本语句</span></span><br><span class="line">            <span class="comment"># =================== 查询安全 ===================</span></span><br><span class="line">            <span class="attr">select-without-where-allow:</span> <span class="literal">false</span>  <span class="comment"># 禁止无WHERE的SELECT</span></span><br><span class="line">            <span class="attr">delete-without-where-allow:</span> <span class="literal">false</span>  <span class="comment"># 禁止无WHERE的DELETE</span></span><br><span class="line">            <span class="attr">update-without-where-allow:</span> <span class="literal">false</span>  <span class="comment"># 禁止无WHERE的UPDATE</span></span><br><span class="line">            <span class="comment"># =================== 返回行数限制 ===================</span></span><br><span class="line">            <span class="attr">select-limit:</span> <span class="number">1000</span>             <span class="comment"># SELECT 最大返回行数</span></span><br></pre></td></tr></table></figure>
 
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// WallFilter 也可以通过代码配置</span></span><br><span class="line"><span class="meta">@Bean</span></span><br><span class="line"><span class="keyword">public</span> WallFilter <span class="title function_">wallFilter</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">WallFilter</span> <span class="variable">filter</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">WallFilter</span>();</span><br><span class="line">    <span class="type">WallConfig</span> <span class="variable">config</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">WallConfig</span>();</span><br><span class="line">    config.setSelectAllow(<span class="literal">true</span>);</span><br><span class="line">    config.setDeleteWithoutWhereAllow(<span class="literal">false</span>);</span><br><span class="line">    config.setUpdateWithoutWhereAllow(<span class="literal">false</span>);</span><br><span class="line">    config.setMultiStatementAllow(<span class="literal">false</span>);</span><br><span class="line">    config.setSelectLimit(<span class="number">1000</span>);</span><br><span class="line">    filter.setConfig(config);</span><br><span class="line">    filter.setDbType(<span class="string">&quot;mysql&quot;</span>);</span><br><span class="line">    <span class="keyword">return</span> filter;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -287,15 +511,236 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="HikariCP-连接验证机制"><a href="#HikariCP-连接验证机制" class="headerlink" title="HikariCP 连接验证机制"></a>HikariCP 连接验证机制</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// HikariCP 连接验证策略（源码简化）</span></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">PoolBase</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 验证策略选择：</span></span><br><span class="line">    <span class="comment">// 1. 优先使用 JDBC4 的 Connection.isValid(timeout)</span></span><br><span class="line">    <span class="comment">//    - 数据库驱动原生实现，更高效</span></span><br><span class="line">    <span class="comment">//    - 不经过SQL解析器，直接在协议层验证</span></span><br><span class="line">    <span class="comment">//    - MySQL: 发送 COM_PING 协议包</span></span><br><span class="line">    <span class="comment">//    - PostgreSQL: 发送 SSLRequest/PasswordMessage 验证</span></span><br><span class="line">    <span class="comment">//</span></span><br><span class="line">    <span class="comment">// 2. 如果配置了 connectionTestQuery，则执行该SQL</span></span><br><span class="line">    <span class="comment">//    - 需要经过SQL解析、优化、执行全流程</span></span><br><span class="line">    <span class="comment">//    - 性能远低于 isValid()</span></span><br><span class="line">    <span class="comment">//    - 仅在驱动不支持 JDBC4 时使用</span></span><br><span class="line"></span><br><span class="line">    <span class="type">boolean</span> <span class="title function_">isConnectionAlive</span><span class="params">(Connection connection)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 设置网络超时，防止验证本身挂住</span></span><br><span class="line">            <span class="type">int</span> <span class="variable">networkTimeout</span> <span class="operator">=</span> getNetworkTimeout(connection);</span><br><span class="line">            setNetworkTimeout(connection, validationTimeout);</span><br><span class="line"></span><br><span class="line">            <span class="comment">// JDBC4+ 驱动：使用 isValid()</span></span><br><span class="line">            <span class="keyword">if</span> (connectionTestQuery == <span class="literal">null</span>) &#123;</span><br><span class="line">                <span class="keyword">return</span> connection.isValid(validationTimeoutSeconds);</span><br><span class="line">            &#125;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 旧驱动：执行 testQuery</span></span><br><span class="line">            <span class="keyword">try</span> (<span class="type">Statement</span> <span class="variable">statement</span> <span class="operator">=</span> connection.createStatement()) &#123;</span><br><span class="line">                statement.execute(connectionTestQuery);</span><br><span class="line">                <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (SQLException e) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;  <span class="comment">// 验证失败，连接无效</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 验证时机：</span></span><br><span class="line"><span class="comment">// 1. 从池中借出连接时（如果距上次使用超过500ms）</span></span><br><span class="line"><span class="comment">// 2. HouseKeeper 定期维护时（每30秒）</span></span><br><span class="line"><span class="comment">// 3. 连接归还时（不验证，依赖借出时验证）</span></span><br></pre></td></tr></table></figure>
 
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">验证方式性能对比：</span><br><span class="line">  ┌──────────────────────┬──────────────┬──────────────────────────┐</span><br><span class="line">  │ 方式                  │ 耗时          │ 说明                      │</span><br><span class="line">  ├──────────────────────┼──────────────┼──────────────────────────┤</span><br><span class="line">  │ Connection.isValid()  │ 0.1~0.5ms    │ 协议层直接验证，推荐       │</span><br><span class="line">  │ SELECT 1              │ 0.5~2ms      │ 经过SQL解析执行，不推荐    │</span><br><span class="line">  │ SELECT 1 FROM DUAL    │ 0.5~2ms      │ Oracle风格的SELECT 1      │</span><br><span class="line">  │ SELECT &#x27;X&#x27;            │ 0.5~2ms      │ 最原始的测试查询           │</span><br><span class="line">  └──────────────────────┴──────────────┴──────────────────────────┘</span><br><span class="line"></span><br><span class="line">  建议：不设置 connectionTestQuery，让 HikariCP 使用 isValid()</span><br></pre></td></tr></table></figure>
-
+<table>
+<thead>
+<tr>
+<th>方式</th>
+<th>耗时</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Connection.isValid()</td>
+<td>0.1~0.5ms</td>
+<td>协议层直接验证，推荐</td>
+</tr>
+<tr>
+<td>SELECT 1</td>
+<td>0.5~2ms</td>
+<td>经过SQL解析执行，不推荐</td>
+</tr>
+<tr>
+<td>SELECT 1 FROM DUAL</td>
+<td>0.5~2ms</td>
+<td>Oracle风格的SELECT 1</td>
+</tr>
+<tr>
+<td>SELECT ‘X’</td>
+<td>0.5~2ms</td>
+<td>最原始的测试查询</td>
+</tr>
+</tbody></table>
 <h3 id="Druid-连接验证机制"><a href="#Druid-连接验证机制" class="headerlink" title="Druid 连接验证机制"></a>Druid 连接验证机制</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">druid:</span></span><br><span class="line">      <span class="attr">validation-query:</span> <span class="string">SELECT</span> <span class="number">1</span>         <span class="comment"># 验证SQL</span></span><br><span class="line">      <span class="attr">validation-query-timeout:</span> <span class="number">5</span>        <span class="comment"># 验证超时（秒）</span></span><br><span class="line">      <span class="attr">test-while-idle:</span> <span class="literal">true</span>              <span class="comment"># 空闲时验证（推荐）</span></span><br><span class="line">      <span class="attr">test-on-borrow:</span> <span class="literal">false</span>              <span class="comment"># 借出时验证（影响性能，不推荐）</span></span><br><span class="line">      <span class="attr">test-on-return:</span> <span class="literal">false</span>              <span class="comment"># 归还时验证（影响性能，不推荐</span></span><br><span class="line"></span><br><span class="line">      <span class="comment"># keepAlive 配置（1.1.4+）：自动保持连接活跃</span></span><br><span class="line">      <span class="attr">keep-alive:</span> <span class="literal">true</span></span><br><span class="line">      <span class="comment"># 配合 timeBetweenEvictionRunsMillis 使用</span></span><br><span class="line">      <span class="comment"># 每次检测时，对空闲连接执行 validationQuery</span></span><br><span class="line">      <span class="comment"># 防止长时间空闲连接被数据库断开</span></span><br></pre></td></tr></table></figure>
 
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">Druid 三种验证时机的性能影响：</span><br><span class="line"></span><br><span class="line">  ┌──────────────┬──────────────┬───────────────────────────────────────┐</span><br><span class="line">  │ 时机          │ 性能影响      │ 建议                                  │</span><br><span class="line">  ├──────────────┼──────────────┼───────────────────────────────────────┤</span><br><span class="line">  │ testWhileIdle │ 极小          │ ✅ 推荐：在后台线程异步验证            │</span><br><span class="line">  │              │              │ 不影响业务请求路径                     │</span><br><span class="line">  ├──────────────┼──────────────┼───────────────────────────────────────┤</span><br><span class="line">  │ testOnBorrow │ 每次借出+0.5~2ms│ ❌ 不推荐：每个请求都执行验证         │</span><br><span class="line">  │              │              │ 高并发下严重影响性能                   │</span><br><span class="line">  ├──────────────┼──────────────┼───────────────────────────────────────┤</span><br><span class="line">  │ testOnReturn │ 每次归还+0.5~2ms│ ❌ 不推荐：归还也执行验证             │</span><br><span class="line">  │              │              │ 双重性能损耗                           │</span><br><span class="line">  └──────────────┴──────────────┴───────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<table>
+<thead>
+<tr>
+<th>时机</th>
+<th>性能影响</th>
+<th>建议</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>testWhileIdle</td>
+<td>极小</td>
+<td>✅ 推荐：在后台线程异步验证</td>
+</tr>
+<tr>
+<td>testOnBorrow</td>
+<td>每次借出+0.5~2ms</td>
+<td>❌ 不推荐：每个请求都执行验证</td>
+</tr>
+<tr>
+<td>testOnReturn</td>
+<td>每次归还+0.5~2ms</td>
+<td>❌ 不推荐：归还也执行验证</td>
+</tr>
+</tbody></table>
 <hr>
-<h2 id="HikariCP-vs-Druid-深度对比"><a href="#HikariCP-vs-Druid-深度对比" class="headerlink" title="HikariCP vs Druid 深度对比"></a>HikariCP vs Druid 深度对比</h2><h3 id="全维度对比表"><a href="#全维度对比表" class="headerlink" title="全维度对比表"></a>全维度对比表</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────┬─────────────────────────────┬──────────────────────────────┐</span><br><span class="line">│ 维度          │ HikariCP                     │ Druid                        │</span><br><span class="line"> ├──────────────┼─────────────────────────────┼──────────────────────────────┤</span><br><span class="line">│              │                              │                              │</span><br><span class="line">│ 【性能】      │                              │                              │</span><br><span class="line">│ 获取连接耗时  │ ~0.1ms（ConcurrentBag）       │ ~0.5ms（锁+条件变量）         │</span><br><span class="line">│ 归还连接耗时  │ ~0.01ms                      │ ~0.05ms                      │</span><br><span class="line">│ 并发模型     │ 无锁CAS + ThreadLocal窃取     │ ReentrantLock + Condition     │</span><br><span class="line">│ Statement管理 │ FastList（逆向遍历+末尾覆盖） │ ArrayList                    │</span><br><span class="line">│ 代理层       │ Javassist动态代理（预生成）    │ JDK动态代理（反射调用）        │</span><br><span class="line">│ 字节码体积    │ ~130KB                       │ ~2.5MB                       │</span><br><span class="line">│ 基准测试     │ TPS约为Druid的2~3倍           │ 基准值                       │</span><br><span class="line">│              │                              │                              │</span><br><span class="line">│ 【功能】      │                              │                              │</span><br><span class="line">│ 连接池管理    │ 完善                          │ 完善                         │</span><br><span class="line">│ SQL防火墙    │ 无                            │ WallFilter（丰富的规则配置）   │</span><br><span class="line">│ 慢SQL记录    │ 无内置，需外部监控             │ StatFilter（精确统计+阈值）   │</span><br><span class="line">│ SQL统计分析  │ 无                            │ 完整（执行次数/耗时/错误/分布）│</span><br><span class="line">│ PreparedStatement缓存│ 不支持（需驱动参数）     │ 内置支持（poolPreparedStatements）│</span><br><span class="line">│ 连接泄漏检测  │ leakDetectionThreshold       │ removeAbandoned + logAbandoned│</span><br><span class="line">│ 连接加密      │ 无                            │ ConfigFilter（密码加密）       │</span><br><span class="line">│ SQL日志      │ 无内置                        │ LogFilter（多种日志框架）      │</span><br><span class="line">│              │                              │                              │</span><br><span class="line">│ 【监控】      │                              │                              │</span><br><span class="line">│ JMX          │ 支持                          │ 支持                          │</span><br><span class="line">│ Web UI       │ 无                            │ 内置StatViewServlet           │</span><br><span class="line">│ Prometheus   │ 需micrometer集成              │ 需druid-prometheus-exporter   │</span><br><span class="line">│ Spring Boot  │ Actuator端点                  │ Actuator端点 + 自带页面       │</span><br><span class="line">│ 实时堆栈追踪  │ 无                            │ active-connection-stacktrace  │</span><br><span class="line">│ URI监控      │ 无                            │ WebStatFilter                 │</span><br><span class="line">│ Session监控  │ 无                            │ 内置                          │</span><br><span class="line">│              │                              │                              │</span><br><span class="line">│ 【SQL解析】   │                              │                              │</span><br><span class="line">│ SQL解析能力  │ 无                            │ 内置Parser（支持多种方言）     │</span><br><span class="line">│ SQL格式化    │ 无                            │ 支持                          │</span><br><span class="line">│ SQL审计      │ 无                            │ 完整审计日志                   │</span><br><span class="line">│ SQL合并统计  │ 无                            │ mergeSql（参数化合并）         │</span><br><span class="line">│ SQL拦截修改  │ 无                            │ FilterChain可自定义拦截        │</span><br><span class="line">│              │                              │                              │</span><br><span class="line">│ 【运维】      │                              │                              │</span><br><span class="line">│ 配置复杂度   │ 低（核心参数少）               │ 中（参数多但灵活）             │</span><br><span class="line">│ 零配置启动   │ 支持                          │ 支持                          │</span><br><span class="line">│ Spring Boot  │ 官方默认                      │ 需druid-spring-boot-starter   │</span><br><span class="line">│ 社区活跃度   │ 极高                          │ 高（阿里开源）                 │</span><br><span class="line">│ 文档质量     │ 精简但清晰                    │ 丰富但分散                    │</span><br><span class="line">│ 国内生态     │ 一般                          │ 极好（大量国内案例）           │</span><br><span class="line">└──────────────┴─────────────────────────────┴──────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="HikariCP-vs-Druid-深度对比"><a href="#HikariCP-vs-Druid-深度对比" class="headerlink" title="HikariCP vs Druid 深度对比"></a>HikariCP vs Druid 深度对比</h2><h3 id="全维度对比表"><a href="#全维度对比表" class="headerlink" title="全维度对比表"></a>全维度对比表</h3><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>HikariCP</th>
+<th>Druid</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>获取连接耗时</td>
+<td>~0.1ms（ConcurrentBag）</td>
+<td>~0.5ms（锁+条件变量）</td>
+</tr>
+<tr>
+<td>归还连接耗时</td>
+<td>~0.01ms</td>
+<td>~0.05ms</td>
+</tr>
+<tr>
+<td>并发模型</td>
+<td>无锁CAS + ThreadLocal窃取</td>
+<td>ReentrantLock + Condition</td>
+</tr>
+<tr>
+<td>Statement管理</td>
+<td>FastList（逆向遍历+末尾覆盖）</td>
+<td>ArrayList</td>
+</tr>
+<tr>
+<td>代理层</td>
+<td>Javassist动态代理（预生成）</td>
+<td>JDK动态代理（反射调用）</td>
+</tr>
+<tr>
+<td>字节码体积</td>
+<td>~130KB</td>
+<td>~2.5MB</td>
+</tr>
+<tr>
+<td>基准测试</td>
+<td>TPS约为Druid的2~3倍</td>
+<td>基准值</td>
+</tr>
+<tr>
+<td>连接池管理</td>
+<td>完善</td>
+<td>完善</td>
+</tr>
+<tr>
+<td>SQL防火墙</td>
+<td>无</td>
+<td>WallFilter（丰富的规则配置）</td>
+</tr>
+<tr>
+<td>慢SQL记录</td>
+<td>无内置，需外部监控</td>
+<td>StatFilter（精确统计+阈值）</td>
+</tr>
+<tr>
+<td>SQL统计分析</td>
+<td>无</td>
+<td>完整（执行次数&#x2F;耗时&#x2F;错误&#x2F;分布）</td>
+</tr>
+<tr>
+<td>PreparedStatement缓存</td>
+<td>不支持（需驱动参数）</td>
+<td>内置支持（poolPreparedStatements）</td>
+</tr>
+<tr>
+<td>连接泄漏检测</td>
+<td>leakDetectionThreshold</td>
+<td>removeAbandoned + logAbandoned</td>
+</tr>
+<tr>
+<td>连接加密</td>
+<td>无</td>
+<td>ConfigFilter（密码加密）</td>
+</tr>
+<tr>
+<td>SQL日志</td>
+<td>无内置</td>
+<td>LogFilter（多种日志框架）</td>
+</tr>
+<tr>
+<td>JMX</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>Web UI</td>
+<td>无</td>
+<td>内置StatViewServlet</td>
+</tr>
+<tr>
+<td>Prometheus</td>
+<td>需micrometer集成</td>
+<td>需druid-prometheus-exporter</td>
+</tr>
+<tr>
+<td>Spring Boot</td>
+<td>Actuator端点</td>
+<td>Actuator端点 + 自带页面</td>
+</tr>
+<tr>
+<td>实时堆栈追踪</td>
+<td>无</td>
+<td>active-connection-stacktrace</td>
+</tr>
+<tr>
+<td>URI监控</td>
+<td>无</td>
+<td>WebStatFilter</td>
+</tr>
+<tr>
+<td>Session监控</td>
+<td>无</td>
+<td>内置</td>
+</tr>
+<tr>
+<td>SQL解析能力</td>
+<td>无</td>
+<td>内置Parser（支持多种方言）</td>
+</tr>
+<tr>
+<td>SQL格式化</td>
+<td>无</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>SQL审计</td>
+<td>无</td>
+<td>完整审计日志</td>
+</tr>
+<tr>
+<td>SQL合并统计</td>
+<td>无</td>
+<td>mergeSql（参数化合并）</td>
+</tr>
+<tr>
+<td>SQL拦截修改</td>
+<td>无</td>
+<td>FilterChain可自定义拦截</td>
+</tr>
+<tr>
+<td>配置复杂度</td>
+<td>低（核心参数少）</td>
+<td>中（参数多但灵活）</td>
+</tr>
+<tr>
+<td>零配置启动</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>Spring Boot</td>
+<td>官方默认</td>
+<td>需druid-spring-boot-starter</td>
+</tr>
+<tr>
+<td>社区活跃度</td>
+<td>极高</td>
+<td>高（阿里开源）</td>
+</tr>
+<tr>
+<td>文档质量</td>
+<td>精简但清晰</td>
+<td>丰富但分散</td>
+</tr>
+<tr>
+<td>国内生态</td>
+<td>一般</td>
+<td>极好（大量国内案例）</td>
+</tr>
+</tbody></table>
 <h3 id="选型决策树"><a href="#选型决策树" class="headerlink" title="选型决策树"></a>选型决策树</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line">选择连接池的决策树：</span><br><span class="line"></span><br><span class="line">  你的项目需要什么？</span><br><span class="line">    │</span><br><span class="line">    ├─→ 追求极致性能，对监控要求不高？</span><br><span class="line">    │     │</span><br><span class="line">    │     ├─→ 是 → HikariCP</span><br><span class="line">    │     │        （Spring Boot默认，零配置，性能最优）</span><br><span class="line">    │     │</span><br><span class="line">    │     └─→ 否 → 继续判断</span><br><span class="line">    │</span><br><span class="line">    ├─→ 需要SQL防火墙防止危险操作？</span><br><span class="line">    │     │</span><br><span class="line">    │     ├─→ 是 → Druid</span><br><span class="line">    │     │        （WallFilter防SQL注入、防无WHERE操作）</span><br><span class="line">    │     │</span><br><span class="line">    │     └─→ 否 → 继续判断</span><br><span class="line">    │</span><br><span class="line">    ├─→ 需要实时SQL监控和慢SQL分析？</span><br><span class="line">    │     │</span><br><span class="line">    │     ├─→ 是 → Druid</span><br><span class="line">    │     │        （内置Web UI，无需额外搭建监控）</span><br><span class="line">    │     │</span><br><span class="line">    │     └─→ 否 → 继续判断</span><br><span class="line">    │</span><br><span class="line">    ├─→ 已有完善的APM体系（SkyWalking/Prometheus+Grafana）？</span><br><span class="line">    │     │</span><br><span class="line">    │     ├─→ 是 → HikariCP + 现有APM</span><br><span class="line">    │     │        （利用现有监控即可，无需Druid重复能力）</span><br><span class="line">    │     │</span><br><span class="line">    │     └─→ 否 → Druid</span><br><span class="line">    │              （开箱即用的监控，降低运维门槛）</span><br><span class="line">    │</span><br><span class="line">    └─→ 实际项目的实际选择：</span><br><span class="line">          │</span><br><span class="line">          ├─→ 数据采集服务 → HikariCP</span><br><span class="line">          │     （写密集，追求吞吐，有Prometheus监控）</span><br><span class="line">          │</span><br><span class="line">          ├─→ 报表统计服务 → Druid</span><br><span class="line">          │     （读密集，需要慢SQL分析，SQL种类多需统计）</span><br><span class="line">          │</span><br><span class="line">          └─→ 开发/测试环境 → Druid</span><br><span class="line">                （方便Web UI排查问题，性能要求不高）</span><br></pre></td></tr></table></figure>
 
 <hr>
@@ -488,8 +933,35 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="方案二：Druid（快速排查场景）"><a href="#方案二：Druid（快速排查场景）" class="headerlink" title="方案二：Druid（快速排查场景）"></a>方案二：Druid（快速排查场景）</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># application-dev.yml</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">druid:</span></span><br><span class="line">      <span class="attr">initial-size:</span> <span class="number">5</span></span><br><span class="line">      <span class="attr">min-idle:</span> <span class="number">5</span></span><br><span class="line">      <span class="attr">max-active:</span> <span class="number">20</span></span><br><span class="line">      <span class="attr">max-wait:</span> <span class="number">30000</span></span><br><span class="line">      <span class="attr">time-between-eviction-runs-millis:</span> <span class="number">60000</span></span><br><span class="line">      <span class="attr">min-evictable-idle-time-millis:</span> <span class="number">300000</span></span><br><span class="line">      <span class="attr">validation-query:</span> <span class="string">SELECT</span> <span class="number">1</span></span><br><span class="line">      <span class="attr">test-while-idle:</span> <span class="literal">true</span></span><br><span class="line">      <span class="attr">test-on-borrow:</span> <span class="literal">false</span></span><br><span class="line">      <span class="attr">test-on-return:</span> <span class="literal">false</span></span><br><span class="line">      <span class="attr">remove-abandoned:</span> <span class="literal">true</span></span><br><span class="line">      <span class="attr">remove-abandoned-timeout:</span> <span class="number">300</span></span><br><span class="line">      <span class="attr">log-abandoned:</span> <span class="literal">true</span></span><br><span class="line">      <span class="attr">pool-prepared-statements:</span> <span class="literal">true</span></span><br><span class="line">      <span class="attr">max-pool-prepared-statement-per-connection-size:</span> <span class="number">20</span></span><br><span class="line">      <span class="attr">stat-view-servlet:</span></span><br><span class="line">        <span class="attr">enabled:</span> <span class="literal">true</span></span><br><span class="line">        <span class="attr">url-pattern:</span> <span class="string">/druid/*</span></span><br><span class="line">        <span class="attr">login-username:</span> <span class="string">admin</span></span><br><span class="line">        <span class="attr">login-password:</span> <span class="string">$&#123;DRUID_PASSWORD&#125;</span></span><br><span class="line">      <span class="attr">web-stat-filter:</span></span><br><span class="line">        <span class="attr">enabled:</span> <span class="literal">true</span></span><br><span class="line">        <span class="attr">url-pattern:</span> <span class="string">/*</span></span><br><span class="line">        <span class="attr">exclusions:</span> <span class="string">&quot;*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*&quot;</span></span><br><span class="line">      <span class="attr">filter:</span></span><br><span class="line">        <span class="attr">stat:</span></span><br><span class="line">          <span class="attr">enabled:</span> <span class="literal">true</span></span><br><span class="line">          <span class="attr">slow-sql-millis:</span> <span class="number">1000</span></span><br><span class="line">          <span class="attr">log-slow-sql:</span> <span class="literal">true</span></span><br><span class="line">          <span class="attr">merge-sql:</span> <span class="literal">true</span></span><br><span class="line">        <span class="attr">wall:</span></span><br><span class="line">          <span class="attr">enabled:</span> <span class="literal">true</span></span><br><span class="line">          <span class="attr">config:</span></span><br><span class="line">            <span class="attr">delete-without-where-allow:</span> <span class="literal">false</span></span><br><span class="line">            <span class="attr">update-without-where-allow:</span> <span class="literal">false</span></span><br><span class="line">            <span class="attr">multi-statement-allow:</span> <span class="literal">false</span></span><br><span class="line">        <span class="attr">log4j2:</span></span><br><span class="line">          <span class="attr">enabled:</span> <span class="literal">false</span>  <span class="comment"># 生产关闭，开发环境按需开启</span></span><br></pre></td></tr></table></figure>
 
-<h3 id="环境差异化配置"><a href="#环境差异化配置" class="headerlink" title="环境差异化配置"></a>环境差异化配置</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">配置策略：</span><br><span class="line">  ┌──────────────┬──────────────────────────────┬─────────────────────────────┐</span><br><span class="line">  │ 环境          │ 连接池                        │ 监控                         │</span><br><span class="line">  ├──────────────┼──────────────────────────────┼─────────────────────────────┤</span><br><span class="line">  │ 开发环境      │ Druid                         │ Druid Web UI + 全量SQL日志   │</span><br><span class="line">  │              │ maxActive=10                  │ WallFilter 开发模式          │</span><br><span class="line">  │              │                               │                             │</span><br><span class="line">  │ 测试环境      │ Druid                         │ Druid Web UI + 慢SQL日志     │</span><br><span class="line">  │              │ maxActive=20                  │ WallFilter 严格模式          │</span><br><span class="line">  │              │                               │                             │</span><br><span class="line">  │ 预发环境      │ HikariCP                      │ Prometheus + Grafana         │</span><br><span class="line">  │              │ maximumPoolSize=20             │ 压测验证连接池配置             │</span><br><span class="line">  │              │                               │                             │</span><br><span class="line">  │ 生产环境      │ HikariCP                      │ Prometheus + Grafana + 告警  │</span><br><span class="line">  │              │ maximumPoolSize=公式计算值      │ leakDetection开启            │</span><br><span class="line">  │              │                               │ registerMbeans=true          │</span><br><span class="line">  └──────────────┴──────────────────────────────┴─────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="环境差异化配置"><a href="#环境差异化配置" class="headerlink" title="环境差异化配置"></a>环境差异化配置</h3><table>
+<thead>
+<tr>
+<th>环境</th>
+<th>连接池</th>
+<th>监控</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>开发环境</td>
+<td>Druid</td>
+<td>Druid Web UI + 全量SQL日志</td>
+</tr>
+<tr>
+<td>测试环境</td>
+<td>Druid</td>
+<td>Druid Web UI + 慢SQL日志</td>
+</tr>
+<tr>
+<td>预发环境</td>
+<td>HikariCP</td>
+<td>Prometheus + Grafana</td>
+</tr>
+<tr>
+<td>生产环境</td>
+<td>HikariCP</td>
+<td>Prometheus + Grafana + 告警</td>
+</tr>
+</tbody></table>
 <hr>
 <h1 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h1><p>连接池调优的核心是”够用不浪费”：根据业务并发量用公式计算连接数，设置合理的超时和回收策略，开启泄漏检测。HikariCP凭借ConcurrentBag无锁并发、FastList极致优化、动态代理预生成等设计，在性能上远超Druid；Druid则凭借内置的SQL防火墙、SQL统计分析、Web监控页面、Filter扩展机制，在可观测性和安全防护上独树一帜。</p>
 <p>实际项目的实践经验表明，生产环境推荐HikariCP + Prometheus监控的组合，在极致性能和可观测性之间取得平衡；开发测试环境使用Druid，利用其开箱即用的监控能力快速定位问题。关键不在于选择哪个连接池，而在于理解连接池的工作原理、合理计算连接数、正确配置超时参数、建立完善的监控告警体系。</p>
@@ -506,7 +978,7 @@ article: http://ogp.me/ns/article#">
     
       <div class="post-next">
         <span class="nav-label">下一篇</span>
-        <a href="/2025/04/25/42360593f902/">MQ消息队列调优——从消息积压到精准投递</a>
+        <a href="/2025/05/05/8aaea14553b5/">应急预案与故障自愈——让系统自己解决问题</a>
       </div>
     
   </nav>
@@ -598,21 +1070,21 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2025/" aria-label="分类: 2025">
                         2025
-                        <span>(30)</span>
+                        <span>(29)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2025/%E6%80%A7%E8%83%BD%E8%B0%83%E4%BC%98/" aria-label="分类: 性能调优">
                         性能调优
-                        <span>(3)</span>
+                        <span>(2)</span>
                     </a>
                 </div>
             
@@ -771,7 +1243,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

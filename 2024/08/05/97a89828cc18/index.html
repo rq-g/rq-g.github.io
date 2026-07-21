@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2024-08-05T09:08:48.000Z">
   <article class="post">
     <h1 class="post-title">MySQL深度调优实战——从慢SQL到索引优化的系统方法</h1>
 
@@ -217,9 +217,42 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="1-3-pt-query-digest深度使用"><a href="#1-3-pt-query-digest深度使用" class="headerlink" title="1.3 pt-query-digest深度使用"></a>1.3 pt-query-digest深度使用</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 安装Percona Toolkit</span></span><br><span class="line">yum install percona-toolkit -y</span><br><span class="line"></span><br><span class="line"><span class="comment"># 基本分析：生成慢查询报告</span></span><br><span class="line">pt-query-digest /var/log/mysql/slow.log &gt; slow_report.txt</span><br><span class="line"></span><br><span class="line"><span class="comment"># 分析最近1小时的慢查询</span></span><br><span class="line">pt-query-digest --since <span class="string">&#x27;1h&#x27;</span> /var/log/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 分析特定数据库的慢查询</span></span><br><span class="line">pt-query-digest --filter <span class="string">&#x27;$event-&gt;&#123;db&#125; &amp;&amp; $event-&gt;&#123;db&#125; eq &quot;smart_mine&quot;&#x27;</span> /var/log/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 只分析SELECT查询</span></span><br><span class="line">pt-query-digest --filter <span class="string">&#x27;$event-&gt;&#123;arg&#125; =~ /^SELECT/i&#x27;</span> /var/log/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 按查询耗时排序，显示前10条</span></span><br><span class="line">pt-query-digest --order-by Query_time:<span class="built_in">sum</span> --<span class="built_in">limit</span> 10 /var/log/mysql/slow.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 将分析结果存入数据库表（便于后续分析）</span></span><br><span class="line">pt-query-digest --review h=localhost,D=smart_mine,t=slow_query_review \</span><br><span class="line">  --create-review-table /var/log/mysql/slow.log</span><br></pre></td></tr></table></figure>
 
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">pt-query-digest 报告关键指标：</span><br><span class="line"></span><br><span class="line">  ┌──────────────┬──────────────────────────────────────┬──────────────┐</span><br><span class="line">  │ 指标          │ 含义                                  │ 优化优先级    │</span><br><span class="line">  ├──────────────┼──────────────────────────────────────┼──────────────┤</span><br><span class="line">  │ Response time │ 该类查询总响应时间                     │ 越大越优先    │</span><br><span class="line">  │ Calls        │ 执行次数                               │ 高频优先      │</span><br><span class="line">  │ R/Call       │ 平均每次查询时间                        │ 越大越优先    │</span><br><span class="line">  │ V/M          │ 方差/均值比                            │ 值大说明不稳定 │</span><br><span class="line">  │ Rows_examined│ 总扫描行数                             │ 可定位低效查询 │</span><br><span class="line">  └──────────────┴──────────────────────────────────────┴──────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="1-4-实际项目慢SQL发现流程"><a href="#1-4-实际项目慢SQL发现流程" class="headerlink" title="1.4 实际项目慢SQL发现流程"></a>1.4 实际项目慢SQL发现流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">慢SQL发现与治理全流程：</span><br><span class="line"></span><br><span class="line">  ┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐</span><br><span class="line">  │ 慢查询日志采集 │ ──→ │ pt-query-digest  │ ──→ │ 慢SQL排行榜      │</span><br><span class="line">  │ (MySQL配置)   │     │ 分析聚合          │     │ (Top N排序)      │</span><br><span class="line">  └──────────────┘     └──────────────────┘     └────────┬─────────┘</span><br><span class="line">                                                         │</span><br><span class="line">                                                         ▼</span><br><span class="line">  ┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐</span><br><span class="line">  │ 优化上线验证  │ ←── │ 索引优化/SQL改写  │ ←── │ EXPLAIN分析      │</span><br><span class="line">  │ (压测+灰度)   │     │ (针对性方案)      │     │ (执行计划诊断)   │</span><br><span class="line">  └──────────────┘     └──────────────────┘     └──────────────────┘</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>含义</th>
+<th>优化优先级</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Response time</td>
+<td>该类查询总响应时间</td>
+<td>越大越优先</td>
+</tr>
+<tr>
+<td>Calls</td>
+<td>执行次数</td>
+<td>高频优先</td>
+</tr>
+<tr>
+<td>R&#x2F;Call</td>
+<td>平均每次查询时间</td>
+<td>越大越优先</td>
+</tr>
+<tr>
+<td>V&#x2F;M</td>
+<td>方差&#x2F;均值比</td>
+<td>值大说明不稳定</td>
+</tr>
+<tr>
+<td>Rows_examined</td>
+<td>总扫描行数</td>
+<td>可定位低效查询</td>
+</tr>
+</tbody></table>
+<h3 id="1-4-实际项目慢SQL发现流程"><a href="#1-4-实际项目慢SQL发现流程" class="headerlink" title="1.4 实际项目慢SQL发现流程"></a>1.4 实际项目慢SQL发现流程</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;慢查询日志采集&quot;]</span><br><span class="line">    N2[&quot;pt-query-digest&quot;]</span><br><span class="line">    N3[&quot;慢SQL排行榜 (MySQL配置)&quot;]</span><br><span class="line">    N4[&quot;分析聚合 (Top N排序)&quot;]</span><br><span class="line">    N5[&quot;优化上线验证  索引优化SQL改写  EXPLAIN分析 (压测&quot;]</span><br><span class="line">    N6[&quot;灰度) (针对性方案) (执行计划诊断)&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h2 id="二、EXPLAIN执行计划深度解读"><a href="#二、EXPLAIN执行计划深度解读" class="headerlink" title="二、EXPLAIN执行计划深度解读"></a>二、EXPLAIN执行计划深度解读</h2><h3 id="2-1-EXPLAIN基础用法"><a href="#2-1-EXPLAIN基础用法" class="headerlink" title="2.1 EXPLAIN基础用法"></a>2.1 EXPLAIN基础用法</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 基本执行计划</span></span><br><span class="line">EXPLAIN <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span> <span class="keyword">AND</span> device_id <span class="operator">=</span> <span class="number">100</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- MySQL 8.0+ 支持EXPLAIN ANALYZE（实际执行并返回耗时）</span></span><br><span class="line">EXPLAIN ANALYZE <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span> <span class="keyword">AND</span> device_id <span class="operator">=</span> <span class="number">100</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看优化器详细信息</span></span><br><span class="line">EXPLAIN FORMAT<span class="operator">=</span>TREE <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order <span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span>;</span><br></pre></td></tr></table></figure>
 
@@ -524,8 +557,7 @@ article: http://ogp.me/ns/article#">
 <li>实际有效数据只有约2000行（status&#x3D;0且在8月份），却扫描了125万行</li>
 </ol>
 <h2 id="三、B-Tree索引底层结构"><a href="#三、B-Tree索引底层结构" class="headerlink" title="三、B+Tree索引底层结构"></a>三、B+Tree索引底层结构</h2><h3 id="3-1-B-Tree结构图解"><a href="#3-1-B-Tree结构图解" class="headerlink" title="3.1 B+Tree结构图解"></a>3.1 B+Tree结构图解</h3><p>InnoDB存储引擎默认使用B+Tree作为索引的数据结构。理解B+Tree的结构是索引优化的基础。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">                      ┌─────────────────────┐</span><br><span class="line">                      │   Root Page (页1)    │</span><br><span class="line">                      │  [10|25|50|75|100]   │</span><br><span class="line">                      └──┬──┬──┬──┬──┬──────┘</span><br><span class="line">                         │  │  │  │  │</span><br><span class="line">        ┌────────────────┘  │  │  │  └────────────────┐</span><br><span class="line">        │                   │  │  │                     │</span><br><span class="line">  ┌─────▼──────┐   ┌───────▼──▼┐ │              ┌──────▼─────┐</span><br><span class="line">  │ Non-Leaf(2)│   │Non-Leaf(3)│ │              │Non-Leaf(4) │</span><br><span class="line">  │ [10|15|20]  │   │[25|30|40] │ │              │[50|60|75]  │</span><br><span class="line">  └──┬──┬──┬───┘   └─┬──┬──┬──┘ │              └──┬──┬──┬───┘</span><br><span class="line">     │  │  │          │  │  │    │                 │  │  │</span><br><span class="line">┌────▼┐┌▼──┐┌▼───┐ ┌─▼┐┌▼─┐┌▼──┐┌▼────┐    ┌────▼┐┌▼──┐┌▼───┐</span><br><span class="line">│L1  ││L2 ││L3  │ │L4││L5││L6 ││L7   │    │L8   ││L9 ││L10 │</span><br><span class="line">│1-9 ││10 ││15  │ │20││25││30 ││40   │    │50   ││60 ││75  │</span><br><span class="line">│    ││-14││-19 │ │-24││-29││-39││-49  │    │-59  ││-74││-100│</span><br><span class="line">└──┬─┘└─┬─┘└──┬─┘ └─┬─┘└─┬─┘└──┬─┘└──┬──┘    └──┬──┘└─┬─┘└──┬─┘</span><br><span class="line">   │     │     │      │     │      │      │          │      │     │</span><br><span class="line">   ▼     ▼     ▼      ▼     ▼      ▼      ▼          ▼      ▼     ▼</span><br><span class="line">[数据行] [数据行] [数据行] [数据行] [数据行] [数据行] [数据行]  [数据行] [数据行] [数据行]</span><br><span class="line"></span><br><span class="line">←──←──←──←──←──←──←──←── 双向链表连接(叶子节点) ──→──→──→──→──→──→──→──→</span><br></pre></td></tr></table></figure>
-
+<p>-14-19  -24-29-39-49      -59  -74-100</p>
 <h3 id="3-2-B-Tree与B-Tree对比"><a href="#3-2-B-Tree与B-Tree对比" class="headerlink" title="3.2 B+Tree与B-Tree对比"></a>3.2 B+Tree与B-Tree对比</h3><table>
 <thead>
 <tr>
@@ -567,10 +599,12 @@ article: http://ogp.me/ns/article#">
 <li>叶子节点存储完整行数据（聚簇索引）或主键值（二级索引）</li>
 <li>一棵3层B+Tree可存储约 1170 x 1170 x (16KB&#x2F;行大小) 行数据，若每行1KB则约21亿行</li>
 </ul>
-<h3 id="3-3-聚簇索引-vs-二级索引"><a href="#3-3-聚簇索引-vs-二级索引" class="headerlink" title="3.3 聚簇索引 vs 二级索引"></a>3.3 聚簇索引 vs 二级索引</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">聚簇索引（主键索引）：</span><br><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│  主键值(PK) → 完整行数据                               │</span><br><span class="line">│  [1] → &#123;id:1, name:&#x27;采煤机A&#x27;, type:1, area_id:5&#125;     │</span><br><span class="line">│  [2] → &#123;id:2, name:&#x27;掘进机B&#x27;, type:2, area_id:3&#125;     │</span><br><span class="line">│  叶子节点直接包含所有列的数据                              │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">二级索引（非主键索引）：</span><br><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│  索引列值 → 主键值(PK)                                 │</span><br><span class="line">│  [1] → 1                                            │</span><br><span class="line">│  [2] → 2                                            │</span><br><span class="line">│  叶子节点仅包含索引列值 + 主键值                          │</span><br><span class="line">│  查询其他列需要回表（通过PK查聚簇索引）                     │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="3-3-聚簇索引-vs-二级索引"><a href="#3-3-聚簇索引-vs-二级索引" class="headerlink" title="3.3 聚簇索引 vs 二级索引"></a>3.3 聚簇索引 vs 二级索引</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;主键值(PK)&quot;]</span><br><span class="line">    N2[&quot;完整行数据 [1]&quot;]</span><br><span class="line">    N3[&quot;&#123;id&quot;]</span><br><span class="line">    N4[&quot;1, name&quot;]</span><br><span class="line">    N5[&quot;采煤机A, type&quot;]</span><br><span class="line">    N6[&quot;1, area_id&quot;]</span><br><span class="line">    N7[&quot;5&#125; [2]&quot;]</span><br><span class="line">    N8[&quot;2, name&quot;]</span><br><span class="line">    N9[&quot;掘进机B, type&quot;]</span><br><span class="line">    N10[&quot;2, area_id&quot;]</span><br><span class="line">    N11[&quot;3&#125; 叶子节点直接包含所有列的数据&quot;]</span><br><span class="line">    N12[&quot;索引列值&quot;]</span><br><span class="line">    N13[&quot;主键值(PK) [1]&quot;]</span><br><span class="line">    N14[&quot;1 [2]&quot;]</span><br><span class="line">    N15[&quot;2 叶子节点仅包含索引列值&quot;]</span><br><span class="line">    N16[&quot;主键值 查询其他列需要回表通过PK查聚簇索引&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N2 --&gt; N7</span><br><span class="line">    N3 --&gt; N8</span><br><span class="line">    N3 --&gt; N9</span><br><span class="line">    N3 --&gt; N10</span><br><span class="line">    N3 --&gt; N11</span><br><span class="line">    N4 --&gt; N3</span><br><span class="line">    N4 --&gt; N8</span><br><span class="line">    N4 --&gt; N9</span><br><span class="line">    N4 --&gt; N10</span><br><span class="line">    N4 --&gt; N11</span><br><span class="line">    N5 --&gt; N3</span><br><span class="line">    N5 --&gt; N8</span><br><span class="line">    N5 --&gt; N9</span><br><span class="line">    N5 --&gt; N10</span><br><span class="line">    N5 --&gt; N11</span><br><span class="line">    N6 --&gt; N3</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N6 --&gt; N9</span><br><span class="line">    N6 --&gt; N10</span><br><span class="line">    N6 --&gt; N11</span><br><span class="line">    N7 --&gt; N3</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line">    N7 --&gt; N10</span><br><span class="line">    N7 --&gt; N11</span><br><span class="line">    N3 --&gt; N12</span><br><span class="line">    N8 --&gt; N12</span><br><span class="line">    N9 --&gt; N12</span><br><span class="line">    N10 --&gt; N12</span><br><span class="line">    N11 --&gt; N12</span><br><span class="line">    N12 --&gt; N13</span><br><span class="line">    N13 --&gt; N14</span><br><span class="line">    N14 --&gt; N15</span><br><span class="line">    N14 --&gt; N16</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <p><strong>回表过程示意：</strong></p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">二级索引查找 type=1</span><br><span class="line">        │</span><br><span class="line">        ▼</span><br><span class="line">  ┌─────────────┐      1. 在二级索引B+Tree中</span><br><span class="line">  │  找到PK=1   │         查找type=1</span><br><span class="line">  └──────┬──────┘</span><br><span class="line">         │            2. 拿到主键PK=1</span><br><span class="line">         ▼</span><br><span class="line">  ┌─────────────────┐  3. 到聚簇索引B+Tree中</span><br><span class="line">  │ 聚簇索引查PK=1  │     查找完整行数据</span><br><span class="line">  │ 得到完整行数据    │</span><br><span class="line">  └─────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;找到PK1 查找type1&quot;]</span><br><span class="line">    N2[&quot;聚簇索引查PK1 查找完整行数据&quot;]</span><br><span class="line">    N3[&quot;得到完整行数据&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h2 id="四、索引类型与设计原则"><a href="#四、索引类型与设计原则" class="headerlink" title="四、索引类型与设计原则"></a>四、索引类型与设计原则</h2><h3 id="4-1-索引类型对比表"><a href="#4-1-索引类型对比表" class="headerlink" title="4.1 索引类型对比表"></a>4.1 索引类型对比表</h3><table>
 <thead>
@@ -646,15 +680,22 @@ article: http://ogp.me/ns/article#">
 <h2 id="五、索引优化实战"><a href="#五、索引优化实战" class="headerlink" title="五、索引优化实战"></a>五、索引优化实战</h2><h3 id="5-1-联合索引设计"><a href="#5-1-联合索引设计" class="headerlink" title="5.1 联合索引设计"></a>5.1 联合索引设计</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 问题SQL：按用户查工单，按时间排序</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order</span><br><span class="line"><span class="keyword">WHERE</span> reporter_id <span class="operator">=</span> <span class="number">10001</span> <span class="keyword">AND</span> status <span class="operator">=</span> <span class="number">1</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> create_time <span class="keyword">DESC</span></span><br><span class="line">LIMIT <span class="number">20</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- ❌ 错误索引：分别建单列索引</span></span><br><span class="line"><span class="comment">-- MySQL只会选一个索引，另一个条件要回表过滤</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_reporter <span class="keyword">ON</span> t_work_order(reporter_id);</span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_status <span class="keyword">ON</span> t_work_order(status);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 正确索引：联合索引（最左前缀原则）</span></span><br><span class="line"><span class="comment">-- reporter_id在前（等值条件），status在后（等值条件），create_time在最后（排序）</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_reporter_status_time <span class="keyword">ON</span> t_work_order(reporter_id, status, create_time);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 索引设计原则：</span></span><br><span class="line"><span class="comment">-- 1. 等值条件放前面，范围条件放后面</span></span><br><span class="line"><span class="comment">-- 2. 排序字段放最后（避免filesort）</span></span><br><span class="line"><span class="comment">-- 3. 高选择性字段放前面</span></span><br></pre></td></tr></table></figure>
 
 <p><strong>联合索引工作原理：</strong></p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">索引 idx_reporter_status_time (reporter_id, status, create_time) 的B+Tree排序规则：</span><br><span class="line"></span><br><span class="line">  先按reporter_id排序 → 相同reporter_id按status排序 → 相同status按create_time排序</span><br><span class="line"></span><br><span class="line">  ┌─────────────────────────────────────────────────────────────────┐</span><br><span class="line">  │ [10001, 0, 2024-08-01] → PK=1                                  │</span><br><span class="line">  │ [10001, 0, 2024-08-05] → PK=5                                  │</span><br><span class="line">  │ [10001, 1, 2024-08-03] → PK=3   ← status=0与status=1之间有序  │</span><br><span class="line">  │ [10001, 1, 2024-08-10] → PK=10                                 │</span><br><span class="line">  │ [10002, 0, 2024-08-02] → PK=2   ← reporter_id变化，重新排序    │</span><br><span class="line">  │ [10002, 1, 2024-08-08] → PK=8                                  │</span><br><span class="line">  └─────────────────────────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">  WHERE reporter_id=10001 AND status=1 ORDER BY create_time DESC</span><br><span class="line">  → 直接定位到 [10001, 1, *] 范围，已按create_time有序，无需filesort</span><br></pre></td></tr></table></figure>
-
+<p><strong>[10001, 0, 2024-08-01] → PK&#x3D;1</strong>：</p>
+<ul>
+<li>[10001, 0, 2024-08-05] → PK&#x3D;5</li>
+<li>[10001, 1, 2024-08-03] → PK&#x3D;3   ← status&#x3D;0与status&#x3D;1之间有序</li>
+<li>[10001, 1, 2024-08-10] → PK&#x3D;10</li>
+<li>[10002, 0, 2024-08-02] → PK&#x3D;2   ← reporter_id变化，重新排序</li>
+<li>[10002, 1, 2024-08-08] → PK&#x3D;8</li>
+</ul>
 <h3 id="5-2-覆盖索引优化"><a href="#5-2-覆盖索引优化" class="headerlink" title="5.2 覆盖索引优化"></a>5.2 覆盖索引优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 问题SQL：查询设备工单数量</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="built_in">COUNT</span>(<span class="operator">*</span>) <span class="keyword">FROM</span> t_work_order <span class="keyword">WHERE</span> reporter_id <span class="operator">=</span> <span class="number">10001</span> <span class="keyword">AND</span> status <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化：覆盖索引，不需要回表</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_reporter_status <span class="keyword">ON</span> t_work_order(reporter_id, status);</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 覆盖索引：查询的所有列都在索引中</span></span><br><span class="line"><span class="comment">-- Extra显示 Using index，不需要回表查数据</span></span><br></pre></td></tr></table></figure>
 
 <p><strong>覆盖索引验证：</strong></p>
 <figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">EXPLAIN <span class="keyword">SELECT</span> o.id, o.order_no, o.device_id, o.priority, o.status,</span><br><span class="line">       o.create_time</span><br><span class="line"><span class="keyword">FROM</span> t_work_order o</span><br><span class="line"><span class="keyword">WHERE</span> o.status <span class="operator">=</span> <span class="number">0</span></span><br><span class="line">  <span class="keyword">AND</span> o.create_time <span class="operator">&gt;=</span> <span class="string">&#x27;2024-08-01 00:00:00&#x27;</span></span><br><span class="line">  <span class="keyword">AND</span> o.create_time <span class="operator">&lt;=</span> <span class="string">&#x27;2024-08-31 23:59:59&#x27;</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> o.create_time <span class="keyword">DESC</span></span><br><span class="line">LIMIT <span class="number">0</span>, <span class="number">20</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- Extra: Using index  ← 命中覆盖索引</span></span><br></pre></td></tr></table></figure>
 
 <h3 id="5-3-索引下推（Index-Condition-Pushdown-ICP）"><a href="#5-3-索引下推（Index-Condition-Pushdown-ICP）" class="headerlink" title="5.3 索引下推（Index Condition Pushdown, ICP）"></a>5.3 索引下推（Index Condition Pushdown, ICP）</h3><p>Index Condition Pushdown是MySQL 5.6引入的优化。在没有ICP时，存储引擎通过索引查找到记录后，再返回给Server层进行WHERE条件过滤；有了ICP后，部分WHERE条件可以直接在存储引擎层通过索引列进行过滤，减少回表次数。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">无ICP流程：</span><br><span class="line">┌────────────┐     ┌──────────────┐     ┌──────────────┐</span><br><span class="line">│ 存储引擎     │     │ 存储引擎       │     │ Server层      │</span><br><span class="line">│ 索引查找到行 │ ──→ │ 回表获取完整行  │ ──→ │ WHERE条件过滤  │</span><br><span class="line">│ (所有匹配行)  │     │ (所有匹配行)    │     │ (过滤后少量行) │</span><br><span class="line">└────────────┘     └──────────────┘     └──────────────┘</span><br><span class="line">  回表100次                               最终只需10行</span><br><span class="line"></span><br><span class="line">有ICP流程：</span><br><span class="line">┌────────────┐     ┌──────────────────┐     ┌──────────────┐</span><br><span class="line">│ 存储引擎     │     │ 存储引擎(ICP)     │     │ Server层      │</span><br><span class="line">│ 索引查找到行 │ ──→ │ 索引列条件先过滤   │ ──→ │ 剩余WHERE过滤  │</span><br><span class="line">│ (所有匹配行)  │     │ (减少回表次数)     │     │ (最终结果)    │</span><br><span class="line">└────────────┘     └──────────────────┘     └──────────────┘</span><br><span class="line">  回表10次（而非100次）</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;存储引擎 存储引擎 Server层&quot;]</span><br><span class="line">    N2[&quot;回表获取完整行&quot;]</span><br><span class="line">    N3[&quot;索引查找到行&quot;]</span><br><span class="line">    N4[&quot;WHERE条件过滤 (所有匹配行)&quot;]</span><br><span class="line">    N5[&quot;(所有匹配行) (过滤后少量行)&quot;]</span><br><span class="line">    N6[&quot;存储引擎 存储引擎(ICP)&quot;]</span><br><span class="line">    N7[&quot;Server层 索引查找到行&quot;]</span><br><span class="line">    N8[&quot;索引列条件先过滤&quot;]</span><br><span class="line">    N9[&quot;剩余WHERE过滤 (所有匹配行)&quot;]</span><br><span class="line">    N10[&quot;(减少回表次数) (最终结果)&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line">    N8 --&gt; N10</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 组合索引：(device_type, status)</span></span><br><span class="line"><span class="comment">-- 查询条件：device_type = 1 AND status = 1 AND mine_area_id = 5</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 无ICP时：</span></span><br><span class="line"><span class="comment">-- 1. 存储引擎通过索引(device_type, status)找到 device_type=1 AND status=1 的所有行</span></span><br><span class="line"><span class="comment">-- 2. 每一行都回表获取完整行数据</span></span><br><span class="line"><span class="comment">-- 3. Server层再过滤 mine_area_id = 5</span></span><br><span class="line"><span class="comment">-- 假设device_type=1 AND status=1有100条记录，mine_area_id=5只有10条</span></span><br><span class="line"><span class="comment">-- 则回表100次，90次是浪费的</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 有ICP时：</span></span><br><span class="line"><span class="comment">-- 1. 存储引擎通过索引(device_type, status)找到 device_type=1 AND status=1 的所有行</span></span><br><span class="line"><span class="comment">-- 2. 存储引擎在索引中能判断的就直接过滤</span></span><br><span class="line"><span class="comment">-- 3. 只有满足条件的行才回表</span></span><br><span class="line"><span class="comment">-- 回表次数可能减少到10次</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看是否使用了ICP</span></span><br><span class="line">EXPLAIN <span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_device</span><br><span class="line"><span class="keyword">WHERE</span> device_type <span class="operator">=</span> <span class="number">1</span> <span class="keyword">AND</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">AND</span> mine_area_id <span class="operator">=</span> <span class="number">5</span>;</span><br><span class="line"><span class="comment">-- Extra: Using index condition</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ICP开关控制</span></span><br><span class="line"><span class="keyword">SET</span> optimizer_switch <span class="operator">=</span> <span class="string">&#x27;index_condition_pushdown=on&#x27;</span>;   <span class="comment">-- 默认开启</span></span><br><span class="line"><span class="keyword">SET</span> optimizer_switch <span class="operator">=</span> <span class="string">&#x27;index_condition_pushdown=off&#x27;</span>;  <span class="comment">-- 关闭（用于对比测试）</span></span><br></pre></td></tr></table></figure>
 
@@ -794,7 +835,8 @@ article: http://ogp.me/ns/article#">
 <h2 id="七、大表优化"><a href="#七、大表优化" class="headerlink" title="七、大表优化"></a>七、大表优化</h2><h3 id="7-1-深分页优化"><a href="#7-1-深分页优化" class="headerlink" title="7.1 深分页优化"></a>7.1 深分页优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ 问题：深分页越往后越慢</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order <span class="keyword">ORDER</span> <span class="keyword">BY</span> id LIMIT <span class="number">1000000</span>, <span class="number">20</span>;</span><br><span class="line"><span class="comment">-- 扫描1000020行，丢弃前1000000行</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 方案1：游标分页（推荐）</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order <span class="keyword">WHERE</span> id <span class="operator">&gt;</span> <span class="number">1000000</span> <span class="keyword">ORDER</span> <span class="keyword">BY</span> id LIMIT <span class="number">20</span>;</span><br><span class="line"><span class="comment">-- 只扫描20行</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 方案2：子查询优化（延迟关联）</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order o</span><br><span class="line"><span class="keyword">INNER</span> <span class="keyword">JOIN</span> (<span class="keyword">SELECT</span> id <span class="keyword">FROM</span> t_work_order <span class="keyword">ORDER</span> <span class="keyword">BY</span> id LIMIT <span class="number">1000000</span>, <span class="number">20</span>) t</span><br><span class="line"><span class="keyword">ON</span> o.id <span class="operator">=</span> t.id;</span><br><span class="line"><span class="comment">-- 子查询走覆盖索引，只取ID，再回表取数据</span></span><br></pre></td></tr></table></figure>
 
 <p><strong>深分页优化原理图：</strong></p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">传统深分页 LIMIT 1000000, 20：</span><br><span class="line">  ┌────────────────────────────────────────────────────────────────┐</span><br><span class="line">  │  扫描1,000,020行                                               │</span><br><span class="line">  │  [行1][行2]...[行1000000] ← 丢弃 │ [行1000001]...[行1000020] ← 返回 │</span><br><span class="line">  │  ◄────────── 无用扫描 ──────────►  ◄──── 有效数据 ────►          │</span><br><span class="line">  └────────────────────────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">游标分页 WHERE id &gt; 1000000 LIMIT 20：</span><br><span class="line">  ┌──────────────────────────────┐</span><br><span class="line">  │  直接定位到id&gt;1000000           │</span><br><span class="line">  │  [行1000001]...[行1000020]    │</span><br><span class="line">  │  ◄──── 只扫描20行 ────►       │</span><br><span class="line">  └──────────────────────────────┘</span><br><span class="line"></span><br><span class="line">延迟关联（子查询覆盖索引）：</span><br><span class="line">  ┌──────────────────────────────────────────────┐</span><br><span class="line">  │  Step1: 子查询走覆盖索引，只取id               │</span><br><span class="line">  │  SELECT id FROM t_work_order                  │</span><br><span class="line">  │  ORDER BY id LIMIT 1000000, 20                │</span><br><span class="line">  │  → 无回表，仅扫描索引，速度快                    │</span><br><span class="line">  │                                                │</span><br><span class="line">  │  Step2: 用id回表取完整数据                       │</span><br><span class="line">  │  SELECT * FROM t_work_order                    │</span><br><span class="line">  │  WHERE id IN (...)  ← 只有20个id，回表20次      │</span><br><span class="line">  └──────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;扫描1,000,020行&quot;]</span><br><span class="line">    N2[&quot;直接定位到id1000000&quot;]</span><br><span class="line">    N3[&quot;[行1000001]...[行1000020]&quot;]</span><br><span class="line">    N4[&quot;只扫描20行&quot;]</span><br><span class="line">    N5[&quot;[行1][行2]...[行1000000]&quot;]</span><br><span class="line">    N6[&quot;丢弃&quot;]</span><br><span class="line">    N7[&quot;返回&quot;]</span><br><span class="line">    N8[&quot;无用扫描&quot;]</span><br><span class="line">    N9[&quot;有效数据&quot;]</span><br><span class="line">    N10[&quot;Step1: 子查询走覆盖索引&quot;]</span><br><span class="line">    N11[&quot;无回表&quot;]</span><br><span class="line">    N12[&quot;仅扫描索引&quot;]</span><br><span class="line">    N13[&quot;回表20次&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N5 --&gt; N2</span><br><span class="line">    N5 --&gt; N3</span><br><span class="line">    N5 --&gt; N4</span><br><span class="line">    N6 --&gt; N2</span><br><span class="line">    N6 --&gt; N3</span><br><span class="line">    N6 --&gt; N4</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N7 --&gt; N2</span><br><span class="line">    N7 --&gt; N3</span><br><span class="line">    N7 --&gt; N4</span><br><span class="line">    N8 --&gt; N2</span><br><span class="line">    N8 --&gt; N3</span><br><span class="line">    N8 --&gt; N4</span><br><span class="line">    N9 --&gt; N2</span><br><span class="line">    N9 --&gt; N3</span><br><span class="line">    N9 --&gt; N4</span><br><span class="line">    N2 --&gt; N10</span><br><span class="line">    N3 --&gt; N10</span><br><span class="line">    N4 --&gt; N10</span><br><span class="line">    N10 --&gt; N11</span><br><span class="line">    N10 --&gt; N12</span><br><span class="line">    N10 --&gt; N13</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="7-2-批量操作优化"><a href="#7-2-批量操作优化" class="headerlink" title="7.2 批量操作优化"></a>7.2 批量操作优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ 逐条INSERT</span></span><br><span class="line"><span class="keyword">INSERT INTO</span> t_work_order <span class="keyword">VALUES</span> (...);  <span class="comment">-- 执行1000次</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 批量INSERT</span></span><br><span class="line"><span class="keyword">INSERT INTO</span> t_work_order <span class="keyword">VALUES</span> (...), (...), (...);  <span class="comment">-- 一次插入1000条</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ❌ 逐条UPDATE</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_work_order <span class="keyword">SET</span> status <span class="operator">=</span> <span class="number">1</span> <span class="keyword">WHERE</span> id <span class="operator">=</span> <span class="number">1</span>;  <span class="comment">-- 执行1000次</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 批量UPDATE（CASE WHEN）</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_work_order <span class="keyword">SET</span> status <span class="operator">=</span> <span class="keyword">CASE</span> id</span><br><span class="line">    <span class="keyword">WHEN</span> <span class="number">1</span> <span class="keyword">THEN</span> <span class="number">1</span></span><br><span class="line">    <span class="keyword">WHEN</span> <span class="number">2</span> <span class="keyword">THEN</span> <span class="number">2</span></span><br><span class="line">    <span class="keyword">WHEN</span> <span class="number">3</span> <span class="keyword">THEN</span> <span class="number">3</span></span><br><span class="line"><span class="keyword">END</span></span><br><span class="line"><span class="keyword">WHERE</span> id <span class="keyword">IN</span> (<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>);</span><br></pre></td></tr></table></figure>
 
@@ -836,8 +878,13 @@ article: http://ogp.me/ns/article#">
 <h3 id="7-3-大表JOIN优化"><a href="#7-3-大表JOIN优化" class="headerlink" title="7.3 大表JOIN优化"></a>7.3 大表JOIN优化</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 实际项目慢查询：工单关联设备信息</span></span><br><span class="line"><span class="comment">-- ❌ 无索引的JOIN</span></span><br><span class="line"><span class="keyword">SELECT</span> o.<span class="operator">*</span>, d.device_name, d.device_no</span><br><span class="line"><span class="keyword">FROM</span> t_work_order o</span><br><span class="line"><span class="keyword">JOIN</span> t_device d <span class="keyword">ON</span> o.device_id <span class="operator">=</span> d.id</span><br><span class="line"><span class="keyword">WHERE</span> o.status <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 优化策略：</span></span><br><span class="line"><span class="comment">-- 1. 确保JOIN字段有索引（t_device.id是主键，已有索引）</span></span><br><span class="line"><span class="comment">-- 2. 确保驱动表的选择正确</span></span><br><span class="line"><span class="comment">-- 3. 使用小表做驱动表</span></span><br></pre></td></tr></table></figure>
 
 <p><strong>JOIN执行流程与优化：</strong></p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">Nested-Loop Join（嵌套循环连接）：</span><br><span class="line"></span><br><span class="line">  驱动表 t_work_order（假设扫描2000行）</span><br><span class="line">    │</span><br><span class="line">    ├── 第1行 → device_id=5 → 在t_device中查找id=5 ← 有索引：1次查找</span><br><span class="line">    ├── 第2行 → device_id=12 → 在t_device中查找id=12 ← 有索引：1次查找</span><br><span class="line">    ├── ...</span><br><span class="line">    └── 第2000行 → device_id=99 → 在t_device中查找id=99</span><br><span class="line"></span><br><span class="line">  有索引：2000次索引查找，每次O(log N)</span><br><span class="line">  无索引：2000次全表扫描，每次O(M)  ← 性能灾难</span><br><span class="line"></span><br><span class="line">  ┌───────────────────────────────────────────────┐</span><br><span class="line">  │  优化原则：                                     │</span><br><span class="line">  │  ① 被驱动表的JOIN字段必须有索引                   │</span><br><span class="line">  │  ② 小结果集做驱动表                              │</span><br><span class="line">  │  ③ 用EXPLAIN确认type=ref/eq_ref                 │</span><br><span class="line">  │  ④ 避免Using join buffer                        │</span><br><span class="line">  └───────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<p><strong>优化原则：</strong>：</p>
+<ul>
+<li>① 被驱动表的JOIN字段必须有索引</li>
+<li>② 小结果集做驱动表</li>
+<li>③ 用EXPLAIN确认type&#x3D;ref&#x2F;eq_ref</li>
+<li>④ 避免Using join buffer</li>
+</ul>
 <h2 id="八、索引统计信息优化"><a href="#八、索引统计信息优化" class="headerlink" title="八、索引统计信息优化"></a>八、索引统计信息优化</h2><h3 id="8-1-统计信息的作用"><a href="#8-1-统计信息的作用" class="headerlink" title="8.1 统计信息的作用"></a>8.1 统计信息的作用</h3><p>MySQL优化器基于统计信息来选择执行计划。如果统计信息不准确，优化器可能选择错误的索引或执行计划。</p>
 <figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 查看表的统计信息</span></span><br><span class="line"><span class="keyword">SHOW</span> <span class="keyword">TABLE</span> STATUS <span class="keyword">LIKE</span> <span class="string">&#x27;t_work_order&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看索引统计信息</span></span><br><span class="line"><span class="keyword">SHOW</span> INDEX <span class="keyword">FROM</span> t_work_order;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 关键指标：Cardinality（基数）</span></span><br><span class="line"><span class="comment">-- 表示索引中唯一值的估计数量</span></span><br><span class="line"><span class="comment">-- Cardinality / 表行数 ≈ 选择性，越接近1越好</span></span><br></pre></td></tr></table></figure>
 
@@ -893,15 +940,49 @@ article: http://ogp.me/ns/article#">
 <h3 id="9-3-排查优化器选错索引"><a href="#9-3-排查优化器选错索引" class="headerlink" title="9.3 排查优化器选错索引"></a>9.3 排查优化器选错索引</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 场景：优化器未选择预期索引</span></span><br><span class="line"><span class="comment">-- 开启Trace</span></span><br><span class="line"><span class="keyword">SET</span> optimizer_trace <span class="operator">=</span> <span class="string">&#x27;enabled=on&#x27;</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 执行查询</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order</span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span> <span class="keyword">AND</span> create_time <span class="operator">&gt;</span> <span class="string">&#x27;2024-08-01&#x27;</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> create_time <span class="keyword">DESC</span> LIMIT <span class="number">20</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 查看Trace</span></span><br><span class="line"><span class="keyword">SELECT</span> TRACE <span class="keyword">FROM</span> INFORMATION_SCHEMA.OPTIMIZER_TRACE\G</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 重点关注range_analysis部分：</span></span><br><span class="line"><span class="comment">-- &quot;analyzing_range_alternatives&quot;: &#123;</span></span><br><span class="line"><span class="comment">--   &quot;range_scan_alternatives&quot;: [</span></span><br><span class="line"><span class="comment">--     &#123;</span></span><br><span class="line"><span class="comment">--       &quot;index&quot;: &quot;idx_status&quot;,</span></span><br><span class="line"><span class="comment">--       &quot;ranges&quot;: [&quot;status &lt;= 0 AND status &gt;= 0&quot;],</span></span><br><span class="line"><span class="comment">--       &quot;rowid_ordered&quot;: false,</span></span><br><span class="line"><span class="comment">--       &quot;cost&quot;: 120000  ← 该索引的成本</span></span><br><span class="line"><span class="comment">--     &#125;,</span></span><br><span class="line"><span class="comment">--     &#123;</span></span><br><span class="line"><span class="comment">--       &quot;index&quot;: &quot;idx_status_create_time&quot;,</span></span><br><span class="line"><span class="comment">--       &quot;ranges&quot;: [&quot;status &lt;= 0 AND status &gt;= 0 AND create_time &gt;= &#x27;2024-08-01&#x27;&quot;],</span></span><br><span class="line"><span class="comment">--       &quot;rowid_ordered&quot;: false,</span></span><br><span class="line"><span class="comment">--       &quot;cost&quot;: 2000   ← 该索引成本更低</span></span><br><span class="line"><span class="comment">--     &#125;</span></span><br><span class="line"><span class="comment">--   ],</span></span><br><span class="line"><span class="comment">--   &quot;chosen_range_access&quot;: &#123;</span></span><br><span class="line"><span class="comment">--     &quot;index&quot;: &quot;idx_status_create_time&quot;  ← 优化器选择的结果</span></span><br><span class="line"><span class="comment">--   &#125;</span></span><br><span class="line"><span class="comment">-- &#125;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 如果优化器选错了索引，可以：</span></span><br><span class="line"><span class="comment">-- 1. USE INDEX / FORCE INDEX 强制指定索引</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> t_work_order FORCE INDEX(idx_status_create_time)</span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span> <span class="keyword">AND</span> create_time <span class="operator">&gt;</span> <span class="string">&#x27;2024-08-01&#x27;</span></span><br><span class="line"><span class="keyword">ORDER</span> <span class="keyword">BY</span> create_time <span class="keyword">DESC</span> LIMIT <span class="number">20</span>;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 2. 更新统计信息</span></span><br><span class="line">ANALYZE <span class="keyword">TABLE</span> t_work_order;</span><br><span class="line"></span><br><span class="line"><span class="comment">-- 3. 调整索引设计</span></span><br></pre></td></tr></table></figure>
 
 <h2 id="十、InnoDB锁与索引的关系"><a href="#十、InnoDB锁与索引的关系" class="headerlink" title="十、InnoDB锁与索引的关系"></a>十、InnoDB锁与索引的关系</h2><h3 id="10-1-索引对锁的影响"><a href="#10-1-索引对锁的影响" class="headerlink" title="10.1 索引对锁的影响"></a>10.1 索引对锁的影响</h3><p>InnoDB的行锁是基于索引实现的。如果没有使用索引，行锁会退化为表锁，这是很多线上事故的根源。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">有索引时（行锁）：</span><br><span class="line">  UPDATE t_work_order SET status = 1 WHERE id = 100;</span><br><span class="line">  ┌──────────────────────────────────────────────────┐</span><br><span class="line">  │  只锁定 id=100 这一行                              │</span><br><span class="line">  │  [行1] [行2] ... [行100 🔒] ... [行N]             │</span><br><span class="line">  │  其他行不受影响，并发正常                             │</span><br><span class="line">  └──────────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">无索引时（表锁/大范围锁）：</span><br><span class="line">  UPDATE t_work_order SET status = 1 WHERE status = 0;</span><br><span class="line">  （status列无索引）</span><br><span class="line">  ┌──────────────────────────────────────────────────┐</span><br><span class="line">  │  锁定所有行！                                      │</span><br><span class="line">  │  [行1 🔒] [行2 🔒] ... [行N 🔒]                   │</span><br><span class="line">  │  所有UPDATE/DELETE被阻塞                            │</span><br><span class="line">  └──────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;锁定所有行 [行1 ] [行2 ] ... [行N ] 所有UPDATE&quot;]</span><br><span class="line">    N2[&quot;DELETE被阻塞&quot;]</span><br><span class="line">    N3[&quot;并发正常&quot;]</span><br><span class="line">    N3 --&gt; N1</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h3 id="10-2-源码层面理解锁与索引"><a href="#10-2-源码层面理解锁与索引" class="headerlink" title="10.2 源码层面理解锁与索引"></a>10.2 源码层面理解锁与索引</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// InnoDB 锁定行记录的源码逻辑（简化版）</span></span><br><span class="line"><span class="comment">// 文件：storage/innobase/lock/lock0lock.cc</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 核心函数：lock_rec_lock()</span></span><br><span class="line"><span class="comment">// 当SQL通过索引定位到行时：</span></span><br><span class="line"><span class="comment">//   1. 对聚簇索引上的行加记录锁（Record Lock）</span></span><br><span class="line"><span class="comment">//   2. 如果是范围查询，还需要加间隙锁（Gap Lock）防止幻读</span></span><br><span class="line"><span class="comment">//   3. 如果没有使用索引：</span></span><br><span class="line"><span class="comment">//      → 执行全表扫描</span></span><br><span class="line"><span class="comment">//      → 对每一行都加锁（因为InnoDB不知道哪些行满足条件）</span></span><br><span class="line"><span class="comment">//      → 等价于表锁</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 锁类型与索引关系：</span></span><br><span class="line"><span class="comment">// ┌─────────────┬──────────────────┬──────────────────────┐</span></span><br><span class="line"><span class="comment">// │ 锁类型       │ 触发条件          │ 索引要求              │</span></span><br><span class="line"><span class="comment">// ├─────────────┼──────────────────┼──────────────────────┤</span></span><br><span class="line"><span class="comment">// │ Record Lock │ 等值条件精确匹配    │ 必须走唯一索引         │</span></span><br><span class="line"><span class="comment">// │ Gap Lock    │ 范围查询或无匹配行  │ 走索引时自动加         │</span></span><br><span class="line"><span class="comment">// │ Next-Key Lock│ 默认行锁算法      │ 走索引时 Record+Gap   │</span></span><br><span class="line"><span class="comment">// │ 表锁         │ 未走索引           │ 无索引时退化为表锁     │</span></span><br><span class="line"><span class="comment">// └─────────────┴──────────────────┴──────────────────────┘</span></span><br></pre></td></tr></table></figure>
-
+<h3 id="10-2-源码层面理解锁与索引"><a href="#10-2-源码层面理解锁与索引" class="headerlink" title="10.2 源码层面理解锁与索引"></a>10.2 源码层面理解锁与索引</h3><table>
+<thead>
+<tr>
+<th>&#x2F;&#x2F;</th>
+<th>锁类型</th>
+<th>触发条件</th>
+<th>索引要求</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>&#x2F;&#x2F;</td>
+<td>Record Lock</td>
+<td>等值条件精确匹配</td>
+<td>必须走唯一索引</td>
+</tr>
+<tr>
+<td>&#x2F;&#x2F;</td>
+<td>Gap Lock</td>
+<td>范围查询或无匹配行</td>
+<td>走索引时自动加</td>
+</tr>
+<tr>
+<td>&#x2F;&#x2F;</td>
+<td>Next-Key Lock</td>
+<td>默认行锁算法</td>
+<td>走索引时 Record+Gap</td>
+</tr>
+<tr>
+<td>&#x2F;&#x2F;</td>
+<td>表锁</td>
+<td>未走索引</td>
+<td>无索引时退化为表锁</td>
+</tr>
+</tbody></table>
 <h3 id="10-3-锁优化实战"><a href="#10-3-锁优化实战" class="headerlink" title="10.3 锁优化实战"></a>10.3 锁优化实战</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- ❌ 问题SQL：批量更新，无索引导致锁住大量行</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_work_order <span class="keyword">SET</span> status <span class="operator">=</span> <span class="number">1</span></span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span> <span class="keyword">AND</span> create_time <span class="operator">&lt;</span> <span class="string">&#x27;2024-01-01&#x27;</span>;</span><br><span class="line"><span class="comment">-- 如果status无索引，需要扫描全表，锁住所有行</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 解决方案1：创建索引</span></span><br><span class="line"><span class="keyword">CREATE</span> INDEX idx_status_time <span class="keyword">ON</span> t_work_order(status, create_time);</span><br><span class="line"><span class="comment">-- 有了索引，只锁定满足条件的行</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 解决方案2：分批更新</span></span><br><span class="line"><span class="comment">-- 每次更新1000条，减少锁持有时间</span></span><br><span class="line"><span class="keyword">UPDATE</span> t_work_order <span class="keyword">SET</span> status <span class="operator">=</span> <span class="number">1</span></span><br><span class="line"><span class="keyword">WHERE</span> status <span class="operator">=</span> <span class="number">0</span> <span class="keyword">AND</span> create_time <span class="operator">&lt;</span> <span class="string">&#x27;2024-01-01&#x27;</span></span><br><span class="line">LIMIT <span class="number">1000</span>;</span><br><span class="line"><span class="comment">-- 重复执行直到affected_rows=0</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- ✅ 解决方案3：程序分批</span></span><br><span class="line"><span class="comment">-- Java伪代码</span></span><br><span class="line"><span class="type">int</span> batchSize <span class="operator">=</span> <span class="number">1000</span>;</span><br><span class="line"><span class="type">int</span> affected;</span><br><span class="line">do &#123;</span><br><span class="line">    affected <span class="operator">=</span> mapper.updateStatusBatch(<span class="number">1000</span>);</span><br><span class="line">    Thread.sleep(<span class="number">100</span>);  <span class="operator">/</span><span class="operator">/</span> 给其他事务执行机会</span><br><span class="line">&#125; while (affected <span class="operator">&gt;</span> <span class="number">0</span>);</span><br></pre></td></tr></table></figure>
 
 <h2 id="十一、MySQL-Server参数调优"><a href="#十一、MySQL-Server参数调优" class="headerlink" title="十一、MySQL Server参数调优"></a>十一、MySQL Server参数调优</h2><h3 id="11-1-InnoDB-Buffer-Pool"><a href="#11-1-InnoDB-Buffer-Pool" class="headerlink" title="11.1 InnoDB Buffer Pool"></a>11.1 InnoDB Buffer Pool</h3><figure class="highlight ini"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># my.cnf 核心参数</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Buffer Pool大小：物理内存的60%~80%（专用数据库服务器）</span></span><br><span class="line"><span class="comment"># 实际项目：64GB内存服务器 → 设置48GB</span></span><br><span class="line"><span class="attr">innodb_buffer_pool_size</span> = <span class="number">48</span>G</span><br><span class="line"></span><br><span class="line"><span class="comment"># Buffer Pool实例数：多实例减少锁竞争</span></span><br><span class="line"><span class="comment"># 建议：Buffer Pool &gt;= 1GB时，实例数 = CPU核心数（不超过8）</span></span><br><span class="line"><span class="attr">innodb_buffer_pool_instances</span> = <span class="number">8</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 预读配置</span></span><br><span class="line"><span class="attr">innodb_read_ahead_threshold</span> = <span class="number">56</span>    <span class="comment"># 线性预读阈值</span></span><br><span class="line"><span class="attr">innodb_random_read_ahead</span> = <span class="literal">OFF</span>      <span class="comment"># 随机预读（一般关闭）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 刷新策略</span></span><br><span class="line"><span class="attr">innodb_flush_method</span> = O_DIRECT      <span class="comment"># 绕过OS缓存，减少双缓存</span></span><br><span class="line"><span class="attr">innodb_flush_log_at_trx_commit</span> = <span class="number">1</span>  <span class="comment"># 每次事务提交都刷盘（最安全）</span></span><br></pre></td></tr></table></figure>
 
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">InnoDB Buffer Pool 结构：</span><br><span class="line"></span><br><span class="line">  ┌───────────────────────────────────────────────────────────────┐</span><br><span class="line">  │                    Buffer Pool (48GB)                         │</span><br><span class="line">  │                                                               │</span><br><span class="line">  │  ┌─────────────────┐  ┌─────────────────┐                    │</span><br><span class="line">  │  │   Instance 0     │  │   Instance 1     │  ... x 8 实例     │</span><br><span class="line">  │  │                  │  │                  │                    │</span><br><span class="line">  │  │  ┌─────────────┐│  │  ┌─────────────┐│                    │</span><br><span class="line">  │  │  │  LRU List    ││  │  │  LRU List    ││                    │</span><br><span class="line">  │  │  │              ││  │  │              ││                    │</span><br><span class="line">  │  │  │ [Young区5/8] ││  │  │ [Young区5/8] ││ ← 热数据          │</span><br><span class="line">  │  │  │ [Old区3/8]   ││  │  │ [Old区3/8]   ││ ← 冷数据          │</span><br><span class="line">  │  │  └─────────────┘│  │  └─────────────┘│                    │</span><br><span class="line">  │  │                  │  │                  │                    │</span><br><span class="line">  │  │  ┌─────────────┐│  │  ┌─────────────┐│                    │</span><br><span class="line">  │  │  │  Flush List  ││  │  │  Flush List  ││ ← 脏页列表        │</span><br><span class="line">  │  │  │ (脏页等待刷盘)││  │  │ (脏页等待刷盘)││                    │</span><br><span class="line">  │  │  └─────────────┘│  │  └─────────────┘│                    │</span><br><span class="line">  │  └─────────────────┘  └─────────────────┘                    │</span><br><span class="line">  └───────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;8] [Young区5&quot;]</span><br><span class="line">    N2[&quot;8]  热数据 [Old区3&quot;]</span><br><span class="line">    N3[&quot;8] [Old区3&quot;]</span><br><span class="line">    N4[&quot;8]  冷数据&quot;]</span><br><span class="line">    N5[&quot;LRU List LRU List [Young区5&quot;]</span><br><span class="line">    N6[&quot;Flush List Flush&quot;]</span><br><span class="line">    N7[&quot;List  脏页列表 (脏页等待刷盘)&quot;]</span><br><span class="line">    N8[&quot;(脏页等待刷盘)&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N2 --&gt; N1</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N3 --&gt; N1</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N4 --&gt; N1</span><br><span class="line">    N4 --&gt; N2</span><br><span class="line">    N4 --&gt; N3</span><br><span class="line">    N1 --&gt; N5</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N5 --&gt; N8</span><br><span class="line">    N1 --&gt; N6</span><br><span class="line">    N1 --&gt; N7</span><br><span class="line">    N1 --&gt; N8</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N2 --&gt; N7</span><br><span class="line">    N2 --&gt; N8</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N3 --&gt; N7</span><br><span class="line">    N3 --&gt; N8</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N4 --&gt; N8</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="11-2-核心参数调优对照表"><a href="#11-2-核心参数调优对照表" class="headerlink" title="11.2 核心参数调优对照表"></a>11.2 核心参数调优对照表</h3><table>
 <thead>
@@ -1204,8 +1285,8 @@ article: http://ogp.me/ns/article#">
 <li><input disabled="" type="checkbox"> 更新核心表统计信息</li>
 <li><input disabled="" type="checkbox"> 检查索引使用率变化</li>
 </ul>
-<h3 id="15-3-实际项目调优全景"><a href="#15-3-实际项目调优全景" class="headerlink" title="15.3 实际项目调优全景"></a>15.3 实际项目调优全景</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line">实际项目 MySQL 调优全景：</span><br><span class="line"></span><br><span class="line">  ┌─────────────────────────────────────────────────────────────────┐</span><br><span class="line">  │                        应用层                                     │</span><br><span class="line">  │  Spring Boot + MyBatis/JPA + HikariCP/Druid                      │</span><br><span class="line">  │  → 慢SQL拦截日志  → 连接池监控  → SQL审计                          │</span><br><span class="line">  └──────────────────────────────┬──────────────────────────────────┘</span><br><span class="line">                                 │</span><br><span class="line">                                 ▼</span><br><span class="line">  ┌─────────────────────────────────────────────────────────────────┐</span><br><span class="line">  │                      MySQL Server层                               │</span><br><span class="line">  │                                                                   │</span><br><span class="line">  │  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐   │</span><br><span class="line">  │  │ 慢查询日志       │  │ EXPLAIN分析     │  │ Optimizer Trace  │   │</span><br><span class="line">  │  │ +pt-digest分析  │  │ 执行计划诊断     │  │ 索引选择追踪      │   │</span><br><span class="line">  │  └────────────────┘  └────────────────┘  └──────────────────┘   │</span><br><span class="line">  │                                                                   │</span><br><span class="line">  │  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐   │</span><br><span class="line">  │  │ 统计信息维护     │  │ 索引设计优化     │  │ 参数调优          │   │</span><br><span class="line">  │  │ ANALYZE TABLE   │  │ 最左前缀+覆盖   │  │ Buffer Pool等     │   │</span><br><span class="line">  │  └────────────────┘  └────────────────┘  └──────────────────┘   │</span><br><span class="line">  └──────────────────────────────┬──────────────────────────────────┘</span><br><span class="line">                                 │</span><br><span class="line">                                 ▼</span><br><span class="line">  ┌─────────────────────────────────────────────────────────────────┐</span><br><span class="line">  │                      InnoDB存储引擎层                              │</span><br><span class="line">  │                                                                   │</span><br><span class="line">  │  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐   │</span><br><span class="line">  │  │ B+Tree索引      │  │ ICP/MRR优化     │  │ 锁机制           │   │</span><br><span class="line">  │  │ 聚簇+二级索引   │  │ 索引下推+排序回表│  │ 行锁/间隙锁/临键锁│   │</span><br><span class="line">  │  └────────────────┘  └────────────────┘  └──────────────────┘   │</span><br><span class="line">  │                                                                   │</span><br><span class="line">  │  ┌────────────────────────────────────────────────────────────┐  │</span><br><span class="line">  │  │              Buffer Pool (缓存数据页+索引页)                  │  │</span><br><span class="line">  │  │  LRU Young区(热数据) | LRU Old区(冷数据) | Flush List(脏页)  │  │</span><br><span class="line">  │  └────────────────────────────────────────────────────────────┘  │</span><br><span class="line">  └─────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="15-3-实际项目调优全景"><a href="#15-3-实际项目调优全景" class="headerlink" title="15.3 实际项目调优全景"></a>15.3 实际项目调优全景</h3><p><strong>架构流程</strong>：</p>
+<p>应用层 Spring Boot + MyBatis&#x2F;JPA + HikariCP&#x2F;Druid → 慢SQL拦截日志  → 连接池监控  → SQL审计 → MySQL Server层 ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐ 慢查询日志          EXPLAIN分析        Optimizer Trace +pt-digest分析     执行计划诊断        索引选择追踪 → 慢查询日志          EXPLAIN分析        Optimizer Trace +pt-digest分析     执行计划诊断        索引选择追踪 → 统计信息维护        索引设计优化        参数调优 ANALYZE TABLE      最左前缀+覆盖      Buffer Pool等 → InnoDB存储引擎层 ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐ B+Tree索引         ICP&#x2F;MRR优化        锁机制 聚簇+二级索引      索引下推+排序回表   行锁&#x2F;间隙锁&#x2F;临键锁 → B+Tree索引         ICP&#x2F;MRR优化        锁机制 聚簇+二级索引      索引下推+排序回表   行锁&#x2F;间隙锁&#x2F;临键锁 → Buffer Pool (缓存数据页+索引页) LRU Young区(热数据) | LRU Old区(冷数据) | Flush List(脏页)</p>
 <p>MySQL深度调优的核心是”减少数据访问量”：通过B+Tree索引减少扫描行数，通过覆盖索引减少回表次数，通过ICP和MRR优化存储引擎层访问效率，通过游标分页解决深分页问题。调优不是盲目加索引，而是先通过慢查询日志定位瓶颈，用EXPLAIN和Optimizer Trace分析执行计划找到根因，再针对性优化。索引设计要遵循最左前缀原则，避免索引失效的常见陷阱，同时关注InnoDB锁与索引的关系，定期维护统计信息和索引健康度，才能真正保障系统稳定运行。</p>
 
     </div>
@@ -1312,14 +1393,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2024/" aria-label="分类: 2024">
                         2024
-                        <span>(41)</span>
+                        <span>(39)</span>
                     </a>
                 </div>
             
@@ -1485,7 +1566,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

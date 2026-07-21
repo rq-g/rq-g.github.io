@@ -1,0 +1,1536 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>Redis缓存架构优化——解决热点key和缓存穿透问题 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<meta property="og:title" content="Redis缓存架构优化——解决热点key和缓存穿透问题">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rq-g.github.io/2025/09/20/5346bd72d221/index.html">
+<meta property="og:image" content="">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+
+  
+  
+  
+  <meta name="description" content="前言在实际场景中，Redis作为核心缓存组件承载了设备实时数据、告警信息、人员定位等高频访问数据。在一次矿井综采工作面数据大屏展示场景中，某工作面的实时监测数据key被大量前端轮询请求集中访问，导致RedisCPU瞬间飙升至99%，整个监控系统响应超时。经过分析，发现是典型的热点key问题叠加缓存穿透。通过引">
+
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.png" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2025-09-20T06:30:00.000Z">
+  <article class="post">
+    <h1 class="post-title">Redis缓存架构优化——解决热点key和缓存穿透问题</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2025-09-20T06:30:00.000Z">2025-09-20</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2025/">2025</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2025/Redis/">Redis</a>
+        </span>
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>在实际场景中，Redis作为核心缓存组件承载了设备实时数据、告警信息、人员定位等高频访问数据。在一次矿井综采工作面数据大屏展示场景中，某工作面的实时监测数据key被大量前端轮询请求集中访问，导致Redis CPU瞬间飙升至99%，整个监控系统响应超时。经过分析，发现是典型的热点key问题叠加缓存穿透。通过引入多级缓存架构、热点key检测与预热、布隆过滤器拦截无效请求、限流降级等策略组合，最终将Redis CPU控制在30%以内，缓存穿透率从15%降至0.1%。</p>
+<hr>
+<h2 id="一、Redis缓存架构总览"><a href="#一、Redis缓存架构总览" class="headerlink" title="一、Redis缓存架构总览"></a>一、Redis缓存架构总览</h2><h3 id="1-1-多级缓存架构"><a href="#1-1-多级缓存架构" class="headerlink" title="1.1 多级缓存架构"></a>1.1 多级缓存架构</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;客户端请求&quot;]</span><br><span class="line">    N2[&quot;Nginx 本地缓存 (proxy_cache, 共享字典) TTL&quot;]</span><br><span class="line">    N3[&quot;15s&quot;]</span><br><span class="line">    N4[&quot;应用层 本地缓存 (Caffeine&quot;]</span><br><span class="line">    N5[&quot;Guava Cache) 最大10005000个key, TTL: 530min&quot;]</span><br><span class="line">    N6[&quot;Redis 分布式缓存 (Cluster模式, 分片&quot;]</span><br><span class="line">    N7[&quot;主从) TTL: 30min2h&quot;]</span><br><span class="line">    N8[&quot;数据库 (MySQL) 回写缓存&quot;]</span><br><span class="line">    N9[&quot;异步更新&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p><strong>多级缓存数据流转规则</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>命中率目标</th>
+<th>平均延迟</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Nginx本地缓存</td>
+<td>30%~50%</td>
+<td>&lt;1ms</td>
+<td>静态资源、高频只读数据</td>
+</tr>
+<tr>
+<td>应用本地缓存</td>
+<td>40%~60%</td>
+<td>&lt;1ms</td>
+<td>热点key、配置信息</td>
+</tr>
+<tr>
+<td>Redis分布式缓存</td>
+<td>90%+</td>
+<td>1~5ms</td>
+<td>通用业务数据</td>
+</tr>
+<tr>
+<td>数据库</td>
+<td>兜底</td>
+<td>10~100ms</td>
+<td>全量数据源</td>
+</tr>
+</tbody></table>
+<h3 id="1-2-缓存架构设计原则"><a href="#1-2-缓存架构设计原则" class="headerlink" title="1.2 缓存架构设计原则"></a>1.2 缓存架构设计原则</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">1. 快速失败优于级联阻塞：每层缓存设置超时时间，不因底层慢导致上层积压</span><br><span class="line">2. 本地缓存做兜底：Redis不可用时，本地缓存仍能提供有限服务</span><br><span class="line">3. 数据一致性优先级：强一致性场景少用缓存，最终一致性场景异步更新</span><br><span class="line">4. 缓存粒度权衡：粗粒度减少key数量，细粒度减少传输体积，需折中</span><br><span class="line">5. 监控先行：上线前必须有缓存命中率、RT、错误率的监控面板</span><br></pre></td></tr></table></figure>
+
+<h2 id="二、缓存穿透解决方案"><a href="#二、缓存穿透解决方案" class="headerlink" title="二、缓存穿透解决方案"></a>二、缓存穿透解决方案</h2><h3 id="2-1-问题分析"><a href="#2-1-问题分析" class="headerlink" title="2.1 问题分析"></a>2.1 问题分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">缓存穿透：查询一个数据库中不存在的数据，缓存永远无法命中，</span><br><span class="line">每次请求都会穿透到数据库。</span><br><span class="line"></span><br><span class="line">典型场景（实际项目）：</span><br><span class="line">- 前端传入不存在的设备ID查询实时数据 → 每次都查库</span><br><span class="line">- 恶意请求随机人员ID查询定位信息 → 大量无效查询</span><br><span class="line">- 已删除设备的历史数据仍被定时任务轮询 → 数据库压力暴增</span><br><span class="line"></span><br><span class="line">影响：数据库连接池耗尽 → 服务不可用 → 级联故障</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-2-缓存穿透解决方案对比"><a href="#2-2-缓存穿透解决方案对比" class="headerlink" title="2.2 缓存穿透解决方案对比"></a>2.2 缓存穿透解决方案对比</h3><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>原理</th>
+<th>优点</th>
+<th>缺点</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>布隆过滤器</strong></td>
+<td>位图判断元素是否可能存在</td>
+<td>内存占用极小，查询O(k)</td>
+<td>存在误判率，不支持删除</td>
+<td>数据量大、查询频繁</td>
+</tr>
+<tr>
+<td><strong>缓存空值</strong></td>
+<td>查不到则缓存空对象</td>
+<td>实现简单，精确</td>
+<td>浪费内存，需要更多key</td>
+<td>穿透key较少</td>
+</tr>
+<tr>
+<td><strong>缓存null标记</strong></td>
+<td>缓存特殊null值+短TTL</td>
+<td>精确拦截，避免误判</td>
+<td>空间浪费，需维护TTL</td>
+<td>穿透key可控</td>
+</tr>
+<tr>
+<td><strong>接口校验</strong></td>
+<td>参数合法性前置校验</td>
+<td>零穿透，从源头拦截</td>
+<td>无法防御合法但不存在ID</td>
+<td>ID规则明确的场景</td>
+</tr>
+<tr>
+<td><strong>限流</strong></td>
+<td>限制单IP&#x2F;用户请求频率</td>
+<td>防止恶意攻击</td>
+<td>不解决根本问题</td>
+<td>防刷、防爬虫</td>
+</tr>
+</tbody></table>
+<h3 id="2-3-布隆过滤器实现"><a href="#2-3-布隆过滤器实现" class="headerlink" title="2.3 布隆过滤器实现"></a>2.3 布隆过滤器实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BloomFilterService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> BloomFilter&lt;String&gt; bloomFilter;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> ProductService productService;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 初始化布隆过滤器</span></span><br><span class="line"><span class="comment">     * 预计1000万条数据，误判率0.01%（1/10000）</span></span><br><span class="line"><span class="comment">     * 内存占用约 23MB</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@PostConstruct</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">init</span><span class="params">()</span> &#123;</span><br><span class="line">        List&lt;Long&gt; allProductIds = productService.getAllProductIds();</span><br><span class="line">        <span class="comment">// 预分配容量，避免扩容</span></span><br><span class="line">        <span class="built_in">this</span>.bloomFilter = BloomFilter.create(</span><br><span class="line">            Funnels.stringFunnel(StandardCharsets.UTF_8),</span><br><span class="line">            Math.max(allProductIds.size() * <span class="number">10</span>, <span class="number">10_000_000</span>), <span class="comment">// 预留10倍空间</span></span><br><span class="line">            <span class="number">0.0001</span>  <span class="comment">// 误判率万分之一</span></span><br><span class="line">        );</span><br><span class="line"></span><br><span class="line">        <span class="keyword">for</span> (Long id : allProductIds) &#123;</span><br><span class="line">            bloomFilter.put(<span class="string">&quot;product:info:&quot;</span> + id);</span><br><span class="line">        &#125;</span><br><span class="line">        log.info(<span class="string">&quot;BloomFilter初始化完成，加载&#123;&#125;条数据&quot;</span>, allProductIds.size());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 判断key是否可能存在</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">mightContain</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> bloomFilter.mightContain(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 新增数据时同步更新布隆过滤器</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">add</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        bloomFilter.put(key);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>布隆过滤器误判率与内存占用关系</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>元素数量</th>
+<th>误判率</th>
+<th>位图大小</th>
+<th>内存占用</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>100万</td>
+<td>1%</td>
+<td>9.6bit&#x2F;元素</td>
+<td>1.2MB</td>
+</tr>
+<tr>
+<td>100万</td>
+<td>0.1%</td>
+<td>14.4bit&#x2F;元素</td>
+<td>1.8MB</td>
+</tr>
+<tr>
+<td>100万</td>
+<td>0.01%</td>
+<td>19.2bit&#x2F;元素</td>
+<td>2.4MB</td>
+</tr>
+<tr>
+<td>1000万</td>
+<td>0.01%</td>
+<td>19.2bit&#x2F;元素</td>
+<td>23MB</td>
+</tr>
+<tr>
+<td>1亿</td>
+<td>0.01%</td>
+<td>19.2bit&#x2F;元素</td>
+<td>230MB</td>
+</tr>
+</tbody></table>
+<h3 id="2-4-缓存空值实现"><a href="#2-4-缓存空值实现" class="headerlink" title="2.4 缓存空值实现"></a>2.4 缓存空值实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CachePenetrationService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">NULL_VALUE</span> <span class="operator">=</span> <span class="string">&quot;NULL_PLACEHOLDER&quot;</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">NULL_CACHE_TTL_MINUTES</span> <span class="operator">=</span> <span class="number">5</span>;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> BloomFilterService bloomFilterService;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> DeviceDataService deviceDataService;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 多层防线：布隆过滤器 → 缓存 → 空值缓存</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> DeviceData <span class="title function_">getDeviceData</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:data:&quot;</span> + deviceId;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 第一层：布隆过滤器快速判断</span></span><br><span class="line">        <span class="keyword">if</span> (!bloomFilterService.mightContain(key)) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;布隆过滤器拦截无效请求, deviceId=&#123;&#125;&quot;</span>, deviceId);</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 第二层：查Redis缓存</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">value</span> <span class="operator">=</span> redisTemplate.opsForValue().get(key);</span><br><span class="line">        <span class="keyword">if</span> (value != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">if</span> (NULL_VALUE.equals(value)) &#123;</span><br><span class="line">                <span class="comment">// 命中空值缓存，说明数据不存在</span></span><br><span class="line">                <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> JSON.parseObject(value, DeviceData.class);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 第三层：查数据库</span></span><br><span class="line">        <span class="type">DeviceData</span> <span class="variable">data</span> <span class="operator">=</span> deviceDataService.getByDeviceId(deviceId);</span><br><span class="line">        <span class="keyword">if</span> (data == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="comment">// 缓存空值，防止重复穿透</span></span><br><span class="line">            <span class="comment">// 空值TTL较短，避免数据新增后仍返回null</span></span><br><span class="line">            redisTemplate.opsForValue().set(key, NULL_VALUE,</span><br><span class="line">                NULL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);</span><br><span class="line">            log.info(<span class="string">&quot;缓存空值, key=&#123;&#125;&quot;</span>, key);</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 正常数据写入缓存</span></span><br><span class="line">        redisTemplate.opsForValue().set(key, JSON.toJSONString(data),</span><br><span class="line">            <span class="number">30</span>, TimeUnit.MINUTES);</span><br><span class="line">        <span class="keyword">return</span> data;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="三、缓存击穿解决方案"><a href="#三、缓存击穿解决方案" class="headerlink" title="三、缓存击穿解决方案"></a>三、缓存击穿解决方案</h2><h3 id="3-1-问题分析"><a href="#3-1-问题分析" class="headerlink" title="3.1 问题分析"></a>3.1 问题分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">缓存击穿：某个热点key过期的瞬间，大量并发请求同时穿透到数据库。</span><br><span class="line"></span><br><span class="line">与缓存穿透的区别：</span><br><span class="line">- 穿透：数据不存在，请求永远穿透</span><br><span class="line">- 击穿：数据存在但缓存过期，瞬间大量请求同时穿透</span><br><span class="line"></span><br><span class="line">典型场景（实际项目）：</span><br><span class="line">- 矿井主通风机实时状态key过期 → 数百个客户端同时请求 → 数据库瞬间压力</span><br><span class="line">- 工作面产量统计key到期 → 大屏+报表+APP同时请求 → 连接池打满</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-2-缓存击穿解决方案对比"><a href="#3-2-缓存击穿解决方案对比" class="headerlink" title="3.2 缓存击穿解决方案对比"></a>3.2 缓存击穿解决方案对比</h3><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>原理</th>
+<th>优点</th>
+<th>缺点</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>互斥锁</strong></td>
+<td>只允许一个线程重建缓存</td>
+<td>保证只有一个请求穿透</td>
+<td>存在锁等待，可能死锁</td>
+<td>一般场景，重建快</td>
+</tr>
+<tr>
+<td><strong>逻辑过期</strong></td>
+<td>缓存不设TTL，数据中带逻辑过期时间</td>
+<td>无需等待，用户体验好</td>
+<td>数据短期不一致</td>
+<td>高可用优先场景</td>
+</tr>
+<tr>
+<td><strong>热点预热</strong></td>
+<td>提前加载热点数据到缓存</td>
+<td>完全避免击穿</td>
+<td>需预知热点，维护成本高</td>
+<td>可预测热点场景</td>
+</tr>
+<tr>
+<td><strong>永不过期</strong></td>
+<td>缓存永不过期，异步更新</td>
+<td>无击穿风险</td>
+<td>数据可能过时</td>
+<td>一致性要求低的场景</td>
+</tr>
+<tr>
+<td><strong>分级缓存</strong></td>
+<td>L1短TTL + L2长TTL</td>
+<td>L1过期时L2仍可用</td>
+<td>架构复杂</td>
+<td>高并发核心数据</td>
+</tr>
+</tbody></table>
+<h3 id="3-3-互斥锁方案"><a href="#3-3-互斥锁方案" class="headerlink" title="3.3 互斥锁方案"></a>3.3 互斥锁方案</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MutexCacheService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> DeviceDataService deviceDataService;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">LOCK_PREFIX</span> <span class="operator">=</span> <span class="string">&quot;lock:cache:&quot;</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">LOCK_EXPIRE_SECONDS</span> <span class="operator">=</span> <span class="number">10</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">LOCK_WAIT_MILLIS</span> <span class="operator">=</span> <span class="number">50</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 互斥锁重建缓存</span></span><br><span class="line"><span class="comment">     * 只有获取到锁的线程才能查库并重建缓存，其他线程等待后重试读取缓存</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> DeviceData <span class="title function_">getWithMutex</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:data:&quot;</span> + deviceId;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 1. 查缓存</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">value</span> <span class="operator">=</span> redisTemplate.opsForValue().get(key);</span><br><span class="line">        <span class="keyword">if</span> (value != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span> JSON.parseObject(value, DeviceData.class);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 缓存未命中，尝试获取互斥锁</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">lockKey</span> <span class="operator">=</span> LOCK_PREFIX + deviceId;</span><br><span class="line">        <span class="type">boolean</span> <span class="variable">locked</span> <span class="operator">=</span> tryLock(lockKey);</span><br><span class="line">        <span class="keyword">if</span> (locked) &#123;</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                <span class="comment">// 双重检查：获取锁后再查一次缓存</span></span><br><span class="line">                value = redisTemplate.opsForValue().get(key);</span><br><span class="line">                <span class="keyword">if</span> (value != <span class="literal">null</span>) &#123;</span><br><span class="line">                    <span class="keyword">return</span> JSON.parseObject(value, DeviceData.class);</span><br><span class="line">                &#125;</span><br><span class="line"></span><br><span class="line">                <span class="comment">// 3. 查数据库并重建缓存</span></span><br><span class="line">                <span class="type">DeviceData</span> <span class="variable">data</span> <span class="operator">=</span> deviceDataService.getByDeviceId(deviceId);</span><br><span class="line">                <span class="keyword">if</span> (data != <span class="literal">null</span>) &#123;</span><br><span class="line">                    redisTemplate.opsForValue().set(key,</span><br><span class="line">                        JSON.toJSONString(data), <span class="number">30</span>, TimeUnit.MINUTES);</span><br><span class="line">                &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                    <span class="comment">// 缓存空值防穿透</span></span><br><span class="line">                    redisTemplate.opsForValue().set(key, <span class="string">&quot;NULL&quot;</span>,</span><br><span class="line">                        <span class="number">5</span>, TimeUnit.MINUTES);</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="keyword">return</span> data;</span><br><span class="line">            &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                <span class="comment">// 4. 释放锁</span></span><br><span class="line">                unlock(lockKey);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">// 5. 未获取到锁，等待后重试</span></span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                Thread.sleep(LOCK_WAIT_MILLIS);</span><br><span class="line">            &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</span><br><span class="line">                Thread.currentThread().interrupt();</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">return</span> getWithMutex(deviceId); <span class="comment">// 递归重试</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">tryLock</span><span class="params">(String lockKey)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> Boolean.TRUE.equals(</span><br><span class="line">            redisTemplate.opsForValue().setIfAbsent(</span><br><span class="line">                lockKey, <span class="string">&quot;1&quot;</span>, LOCK_EXPIRE_SECONDS, TimeUnit.SECONDS));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">unlock</span><span class="params">(String lockKey)</span> &#123;</span><br><span class="line">        redisTemplate.delete(lockKey);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-4-逻辑过期方案"><a href="#3-4-逻辑过期方案" class="headerlink" title="3.4 逻辑过期方案"></a>3.4 逻辑过期方案</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Data</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CacheData</span>&lt;T&gt; &#123;</span><br><span class="line">    <span class="comment">/** 逻辑过期时间 */</span></span><br><span class="line">    <span class="keyword">private</span> LocalDateTime expireTime;</span><br><span class="line">    <span class="comment">/** 实际数据 */</span></span><br><span class="line">    <span class="keyword">private</span> T data;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LogicalExpireCacheService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> DeviceDataService deviceDataService;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">LOCK_PREFIX</span> <span class="operator">=</span> <span class="string">&quot;lock:cache:&quot;</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">CACHE_LOGICAL_TTL_MINUTES</span> <span class="operator">=</span> <span class="number">30</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 缓存不设物理TTL，通过逻辑过期时间判断</span></span><br><span class="line">    <span class="keyword">public</span> DeviceData <span class="title function_">getWithLogicalExpire</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:data:&quot;</span> + deviceId;</span><br><span class="line">        <span class="type">String</span> <span class="variable">json</span> <span class="operator">=</span> redisTemplate.opsForValue().get(key);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 缓存不存在，返回null（需要预热保证缓存一定存在）</span></span><br><span class="line">        <span class="keyword">if</span> (json == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        CacheData&lt;DeviceData&gt; cacheData = JSON.parseObject(json,</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">TypeReference</span>&lt;CacheData&lt;DeviceData&gt;&gt;()&#123;&#125;);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 判断是否逻辑过期</span></span><br><span class="line">        <span class="keyword">if</span> (cacheData.getExpireTime().isAfter(LocalDateTime.now())) &#123;</span><br><span class="line">            <span class="comment">// 未过期，直接返回</span></span><br><span class="line">            <span class="keyword">return</span> cacheData.getData();</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 已逻辑过期，尝试获取锁异步更新</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">lockKey</span> <span class="operator">=</span> LOCK_PREFIX + deviceId;</span><br><span class="line">        <span class="type">boolean</span> <span class="variable">locked</span> <span class="operator">=</span> tryLock(lockKey);</span><br><span class="line">        <span class="keyword">if</span> (locked) &#123;</span><br><span class="line">            <span class="comment">// 获取到锁，异步重建缓存</span></span><br><span class="line">            CompletableFuture.runAsync(() -&gt; &#123;</span><br><span class="line">                <span class="keyword">try</span> &#123;</span><br><span class="line">                    <span class="type">DeviceData</span> <span class="variable">newData</span> <span class="operator">=</span> deviceDataService.getByDeviceId(deviceId);</span><br><span class="line">                    CacheData&lt;DeviceData&gt; newCache = <span class="keyword">new</span> <span class="title class_">CacheData</span>&lt;&gt;();</span><br><span class="line">                    newCache.setData(newData);</span><br><span class="line">                    newCache.setExpireTime(</span><br><span class="line">                        LocalDateTime.now().plusMinutes(CACHE_LOGICAL_TTL_MINUTES));</span><br><span class="line">                    redisTemplate.opsForValue().set(key,</span><br><span class="line">                        JSON.toJSONString(newCache));</span><br><span class="line">                &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                    unlock(lockKey);</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 无论是否获取到锁，都返回旧数据（保证可用性优先）</span></span><br><span class="line">        <span class="keyword">return</span> cacheData.getData();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">tryLock</span><span class="params">(String lockKey)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> Boolean.TRUE.equals(</span><br><span class="line">            redisTemplate.opsForValue().setIfAbsent(</span><br><span class="line">                lockKey, <span class="string">&quot;1&quot;</span>, <span class="number">10</span>, TimeUnit.SECONDS));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">unlock</span><span class="params">(String lockKey)</span> &#123;</span><br><span class="line">        redisTemplate.delete(lockKey);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-5-热点key预热方案"><a href="#3-5-热点key预热方案" class="headerlink" title="3.5 热点key预热方案"></a>3.5 热点key预热方案</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">HotKeyWarmUp</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> DeviceDataService deviceDataService;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> WorkfaceService workfaceService;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 每天早班前预热热点设备数据</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：早6:30预热，确保7:00早班大屏加载时缓存已就绪</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 30 6 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">warmUpDeviceData</span><span class="params">()</span> &#123;</span><br><span class="line">        List&lt;String&gt; hotDeviceIds = getHotDeviceIds();</span><br><span class="line">        <span class="type">int</span> <span class="variable">count</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">for</span> (String deviceId : hotDeviceIds) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:data:&quot;</span> + deviceId;</span><br><span class="line">            <span class="keyword">if</span> (Boolean.FALSE.equals(redisTemplate.hasKey(key))) &#123;</span><br><span class="line">                <span class="type">DeviceData</span> <span class="variable">data</span> <span class="operator">=</span> deviceDataService.getByDeviceId(deviceId);</span><br><span class="line">                <span class="keyword">if</span> (data != <span class="literal">null</span>) &#123;</span><br><span class="line">                    redisTemplate.opsForValue().set(key,</span><br><span class="line">                        JSON.toJSONString(data), <span class="number">2</span>, TimeUnit.HOURS);</span><br><span class="line">                    count++;</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        log.info(<span class="string">&quot;热点设备数据预热完成，预热&#123;&#125;个key&quot;</span>, count);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 预热工作面产量统计</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 7 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">warmUpWorkfaceStats</span><span class="params">()</span> &#123;</span><br><span class="line">        List&lt;Long&gt; workfaceIds = workfaceService.getActiveWorkfaceIds();</span><br><span class="line">        <span class="keyword">for</span> (Long workfaceId : workfaceIds) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;workface:stats:&quot;</span> + workfaceId;</span><br><span class="line">            <span class="type">WorkfaceStats</span> <span class="variable">stats</span> <span class="operator">=</span> workfaceService.getStatsById(workfaceId);</span><br><span class="line">            <span class="keyword">if</span> (stats != <span class="literal">null</span>) &#123;</span><br><span class="line">                redisTemplate.opsForValue().set(key,</span><br><span class="line">                    JSON.toJSONString(stats), <span class="number">1</span>, TimeUnit.HOURS);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        log.info(<span class="string">&quot;工作面统计预热完成，预热&#123;&#125;个工作面&quot;</span>, workfaceIds.size());</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取热点设备ID列表</span></span><br><span class="line"><span class="comment">     * 来源：配置中心 + 历史访问统计</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">private</span> List&lt;String&gt; <span class="title function_">getHotDeviceIds</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 从Redis获取昨日访问TOP N设备</span></span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;String&gt;&gt; topDevices =</span><br><span class="line">            redisTemplate.opsForZSet()</span><br><span class="line">                .reverseRangeWithScores(<span class="string">&quot;stats:device:access&quot;</span>, <span class="number">0</span>, <span class="number">49</span>);</span><br><span class="line">        <span class="keyword">if</span> (topDevices == <span class="literal">null</span> || topDevices.isEmpty()) &#123;</span><br><span class="line">            <span class="comment">// 兜底：从配置中心获取</span></span><br><span class="line">            <span class="keyword">return</span> getFallbackDeviceIds();</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> topDevices.stream()</span><br><span class="line">            .map(t -&gt; t.getValue())</span><br><span class="line">            .collect(Collectors.toList());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="四、缓存雪崩解决方案"><a href="#四、缓存雪崩解决方案" class="headerlink" title="四、缓存雪崩解决方案"></a>四、缓存雪崩解决方案</h2><h3 id="4-1-问题分析"><a href="#4-1-问题分析" class="headerlink" title="4.1 问题分析"></a>4.1 问题分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">缓存雪崩：大量key同时过期，或Redis节点宕机，</span><br><span class="line">导致大量请求同时穿透到数据库。</span><br><span class="line"></span><br><span class="line">典型场景（实际项目）：</span><br><span class="line">- 系统重启后大量key使用相同TTL批量加载 → 同一时间集体过期</span><br><span class="line">- Redis Cluster某分片主节点宕机 → 该分片所有请求穿透</span><br><span class="line">- 机房网络抖动 → Redis连接池耗尽 → 全部请求穿透到DB</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-2-缓存雪崩解决方案"><a href="#4-2-缓存雪崩解决方案" class="headerlink" title="4.2 缓存雪崩解决方案"></a>4.2 缓存雪崩解决方案</h3><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>原理</th>
+<th>实现方式</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>随机过期时间</strong></td>
+<td>TTL加随机偏移，打散过期时间</td>
+<td><code>TTL = base + random(0~300s)</code></td>
+<td>所有缓存场景</td>
+</tr>
+<tr>
+<td><strong>多级缓存</strong></td>
+<td>L1过期时L2仍可用</td>
+<td>Caffeine(TTL短) + Redis(TTL长)</td>
+<td>核心业务数据</td>
+</tr>
+<tr>
+<td><strong>熔断降级</strong></td>
+<td>缓存不可用时返回兜底数据</td>
+<td>Sentinel&#x2F;Hystrix</td>
+<td>可降级场景</td>
+</tr>
+<tr>
+<td><strong>Redis高可用</strong></td>
+<td>主从+哨兵&#x2F;Cluster</td>
+<td>避免单点故障</td>
+<td>所有Redis场景</td>
+</tr>
+<tr>
+<td><strong>限流</strong></td>
+<td>限制数据库并发请求数</td>
+<td>信号量&#x2F;令牌桶</td>
+<td>数据库脆弱场景</td>
+</tr>
+<tr>
+<td><strong>提前续期</strong></td>
+<td>缓存快过期时异步续期</td>
+<td>定时任务扫描即将过期的key</td>
+<td>热点数据</td>
+</tr>
+</tbody></table>
+<h3 id="4-3-随机TTL实现"><a href="#4-3-随机TTL实现" class="headerlink" title="4.3 随机TTL实现"></a>4.3 随机TTL实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CacheTTLStrategy</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Random</span> <span class="variable">RANDOM</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Random</span>();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 计算带随机偏移的TTL</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@param</span> baseMinutes 基础过期时间（分钟）</span></span><br><span class="line"><span class="comment">     * <span class="doctag">@param</span> jitterRangeSeconds 随机偏移范围（秒）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">long</span> <span class="title function_">randomTTL</span><span class="params">(<span class="type">int</span> baseMinutes, <span class="type">int</span> jitterRangeSeconds)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">baseSeconds</span> <span class="operator">=</span> baseMinutes * <span class="number">60L</span>;</span><br><span class="line">        <span class="type">long</span> <span class="variable">jitter</span> <span class="operator">=</span> RANDOM.nextInt(jitterRangeSeconds * <span class="number">2</span>) - jitterRangeSeconds;</span><br><span class="line">        <span class="keyword">return</span> baseSeconds + jitter;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 批量设置缓存时打散过期时间</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">batchSetWithJitter</span><span class="params">(Map&lt;String, String&gt; kvMap, <span class="type">int</span> baseMinutes)</span> &#123;</span><br><span class="line">        <span class="keyword">for</span> (Map.Entry&lt;String, String&gt; entry : kvMap.entrySet()) &#123;</span><br><span class="line">            <span class="type">long</span> <span class="variable">ttl</span> <span class="operator">=</span> randomTTL(baseMinutes, <span class="number">300</span>); <span class="comment">// ±5分钟随机偏移</span></span><br><span class="line">            redisTemplate.opsForValue().set(entry.getKey(), entry.getValue(),</span><br><span class="line">                ttl, TimeUnit.SECONDS);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-4-基于Sentinel的熔断降级"><a href="#4-4-基于Sentinel的熔断降级" class="headerlink" title="4.4 基于Sentinel的熔断降级"></a>4.4 基于Sentinel的熔断降级</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CacheCircuitBreaker</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Cache&lt;String, String&gt; fallbackCache = Caffeine.newBuilder()</span><br><span class="line">        .maximumSize(<span class="number">500</span>)</span><br><span class="line">        .expireAfterWrite(<span class="number">10</span>, TimeUnit.MINUTES)</span><br><span class="line">        .build();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 带熔断降级的缓存读取</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@SentinelResource(value = &quot;redisRead&quot;,</span></span><br><span class="line"><span class="meta">        blockHandler = &quot;onBlock&quot;,</span></span><br><span class="line"><span class="meta">        fallback = &quot;onFallback&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">getWithCircuitBreaker</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForValue().get(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 限流降级</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">onBlock</span><span class="params">(String key, BlockException e)</span> &#123;</span><br><span class="line">        log.warn(<span class="string">&quot;Redis请求被限流, key=&#123;&#125;&quot;</span>, key);</span><br><span class="line">        <span class="keyword">return</span> fallbackCache.getIfPresent(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 熔断降级</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">onFallback</span><span class="params">(String key, Throwable e)</span> &#123;</span><br><span class="line">        log.error(<span class="string">&quot;Redis请求熔断, key=&#123;&#125;&quot;</span>, key, e);</span><br><span class="line">        <span class="type">String</span> <span class="variable">fallback</span> <span class="operator">=</span> fallbackCache.getIfPresent(key);</span><br><span class="line">        <span class="keyword">if</span> (fallback != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span> fallback;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 返回兜底静态数据</span></span><br><span class="line">        <span class="keyword">return</span> getDefaultData(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> String <span class="title function_">getDefaultData</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="comment">// 智慧矿山场景：返回安全默认值</span></span><br><span class="line">        <span class="keyword">if</span> (key.startsWith(<span class="string">&quot;device:data:&quot;</span>)) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="string">&quot;&#123;\&quot;status\&quot;:\&quot;UNKNOWN\&quot;,\&quot;message\&quot;:\&quot;缓存服务暂时不可用\&quot;&#125;&quot;</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-5-Sentinel限流规则配置"><a href="#4-5-Sentinel限流规则配置" class="headerlink" title="4.5 Sentinel限流规则配置"></a>4.5 Sentinel限流规则配置</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">cloud:</span></span><br><span class="line">    <span class="attr">sentinel:</span></span><br><span class="line">      <span class="attr">transport:</span></span><br><span class="line">        <span class="attr">dashboard:</span> <span class="string">localhost:8080</span></span><br><span class="line">      <span class="comment"># 熔断规则</span></span><br><span class="line">      <span class="attr">rules:</span></span><br><span class="line">        <span class="attr">degrade:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">resource:</span> <span class="string">redisRead</span></span><br><span class="line">            <span class="attr">grade:</span> <span class="string">EXCEPTION_RATIO</span>    <span class="comment"># 异常比例熔断</span></span><br><span class="line">            <span class="attr">count:</span> <span class="number">0.5</span>                <span class="comment"># 异常比例阈值50%</span></span><br><span class="line">            <span class="attr">timeWindow:</span> <span class="number">30</span>            <span class="comment"># 熔断时长30秒</span></span><br><span class="line">            <span class="attr">minRequestAmount:</span> <span class="number">10</span>      <span class="comment"># 最小请求数</span></span><br><span class="line">            <span class="attr">statIntervalMs:</span> <span class="number">5000</span>      <span class="comment"># 统计时长5秒</span></span><br><span class="line">        <span class="attr">flow:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">resource:</span> <span class="string">redisRead</span></span><br><span class="line">            <span class="attr">count:</span> <span class="number">50000</span>              <span class="comment"># 每秒最多5万次请求</span></span><br><span class="line">            <span class="attr">grade:</span> <span class="string">QPS</span></span><br><span class="line">            <span class="attr">limitApp:</span> <span class="string">default</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="五、热点key检测与解决"><a href="#五、热点key检测与解决" class="headerlink" title="五、热点key检测与解决"></a>五、热点key检测与解决</h2><h3 id="5-1-热点key检测方案"><a href="#5-1-热点key检测方案" class="headerlink" title="5.1 热点key检测方案"></a>5.1 热点key检测方案</h3><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>原理</th>
+<th>优点</th>
+<th>缺点</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Redis MONITOR</strong></td>
+<td>实时抓取所有命令</td>
+<td>无侵入</td>
+<td>性能开销大，不适合生产长期开启</td>
+</tr>
+<tr>
+<td><strong>redis-faina</strong></td>
+<td>分析MONITOR输出</td>
+<td>Instagram出品，统计Top前缀</td>
+<td>依赖MONITOR</td>
+</tr>
+<tr>
+<td><strong>redis-cli –hotkeys</strong></td>
+<td>Redis 4.0+内置</td>
+<td>官方支持</td>
+<td>需开启maxmemory-policy为LRU</td>
+</tr>
+<tr>
+<td><strong>自定义计数器</strong></td>
+<td>应用层记录key访问频率</td>
+<td>精确可控</td>
+<td>需要开发成本</td>
+</tr>
+<tr>
+<td><strong>Redis Info stats</strong></td>
+<td>查看keyspace_hits&#x2F;misses</td>
+<td>简单</td>
+<td>只能看到全局，无法定位具体key</td>
+</tr>
+<tr>
+<td><strong>客户端代理</strong></td>
+<td>在Redis客户端SDK层统计</td>
+<td>无侵入Redis</td>
+<td>需要改造客户端</td>
+</tr>
+</tbody></table>
+<h3 id="5-2-基于redis-faina的热点key分析"><a href="#5-2-基于redis-faina的热点key分析" class="headerlink" title="5.2 基于redis-faina的热点key分析"></a>5.2 基于redis-faina的热点key分析</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1. 采集MONITOR输出（生产环境只开30秒）</span></span><br><span class="line">redis-cli -h &lt;host&gt; -p &lt;port&gt; MONITOR &gt; monitor.log &amp;</span><br><span class="line"><span class="built_in">sleep</span> 30 &amp;&amp; <span class="built_in">kill</span> %1</span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 使用redis-faina分析</span></span><br><span class="line">python redis-faina.py monitor.log</span><br><span class="line"></span><br><span class="line"><span class="comment"># 输出示例：</span></span><br><span class="line"><span class="comment"># Overall Stats</span></span><br><span class="line"><span class="comment"># =========================================</span></span><br><span class="line"><span class="comment"># Lines Processed   : 500000</span></span><br><span class="line"><span class="comment"># Top Keys Prefixes</span></span><br><span class="line"><span class="comment"># =========================================</span></span><br><span class="line"><span class="comment"># device:data:      180000  (36.0%)   ← 热点前缀</span></span><br><span class="line"><span class="comment"># workface:stats:   120000  (24.0%)</span></span><br><span class="line"><span class="comment"># alert:realtime:   80000   (16.0%)</span></span><br><span class="line"><span class="comment"># personnel:loc:    50000   (10.0%)</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="5-3-应用层热点key检测"><a href="#5-3-应用层热点key检测" class="headerlink" title="5.3 应用层热点key检测"></a>5.3 应用层热点key检测</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">HotKeyDetector</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/** 访问频率滑动窗口，每秒统计一次 */</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, LongAdder&gt; accessCounter = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line">    <span class="comment">/** 热点key阈值：每秒超过1000次访问 */</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">HOT_KEY_THRESHOLD</span> <span class="operator">=</span> <span class="number">1000</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 记录key访问</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">recordAccess</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        accessCounter.computeIfAbsent(key, k -&gt; <span class="keyword">new</span> <span class="title class_">LongAdder</span>()).increment();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 定时检测热点key</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(fixedRate = 1000)</span> <span class="comment">// 每秒执行</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">detectHotKeys</span><span class="params">()</span> &#123;</span><br><span class="line">        List&lt;String&gt; hotKeys = accessCounter.entrySet().stream()</span><br><span class="line">            .filter(e -&gt; e.getValue().sum() &gt; HOT_KEY_THRESHOLD)</span><br><span class="line">            .map(Map.Entry::getKey)</span><br><span class="line">            .collect(Collectors.toList());</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (!hotKeys.isEmpty()) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;检测到热点key: &#123;&#125;&quot;</span>, hotKeys);</span><br><span class="line">            <span class="comment">// 通知本地缓存加载热点key</span></span><br><span class="line">            notifyLocalCache(hotKeys);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 重置计数器</span></span><br><span class="line">        accessCounter.clear();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">notifyLocalCache</span><span class="params">(List&lt;String&gt; hotKeys)</span> &#123;</span><br><span class="line">        <span class="comment">// 发布热点key事件，各应用实例订阅后加载本地缓存</span></span><br><span class="line">        redisTemplate.convertAndSend(<span class="string">&quot;hotkey:notify&quot;</span>,</span><br><span class="line">            JSON.toJSONString(hotKeys));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-4-热点key解决方案"><a href="#5-4-热点key解决方案" class="headerlink" title="5.4 热点key解决方案"></a>5.4 热点key解决方案</h3><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>原理</th>
+<th>优点</th>
+<th>缺点</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>本地缓存</strong></td>
+<td>JVM内存缓存热点数据</td>
+<td>零网络开销</td>
+<td>数据一致性弱</td>
+</tr>
+<tr>
+<td><strong>key拆分</strong></td>
+<td>一个key拆成多个子key，分散到不同分片</td>
+<td>分散压力</td>
+<td>改造成本高</td>
+</tr>
+<tr>
+<td><strong>独立实例</strong></td>
+<td>热点key路由到专用Redis</td>
+<td>物理隔离</td>
+<td>资源浪费</td>
+</tr>
+<tr>
+<td><strong>限流</strong></td>
+<td>控制热点key访问频率</td>
+<td>保护Redis</td>
+<td>用户体验差</td>
+</tr>
+<tr>
+<td><strong>预计算</strong></td>
+<td>提前计算好结果缓存</td>
+<td>查询极快</td>
+<td>不适合实时数据</td>
+</tr>
+</tbody></table>
+<h3 id="5-5-本地缓存-分布式缓存双层架构"><a href="#5-5-本地缓存-分布式缓存双层架构" class="headerlink" title="5.5 本地缓存+分布式缓存双层架构"></a>5.5 本地缓存+分布式缓存双层架构</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DoubleCacheService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * L1本地缓存：Caffeine</span></span><br><span class="line"><span class="comment">     * - 最大容量5000个key</span></span><br><span class="line"><span class="comment">     * - 写入后5分钟过期</span></span><br><span class="line"><span class="comment">     * - 记录访问统计用于容量调优</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Cache&lt;String, String&gt; localCache = Caffeine.newBuilder()</span><br><span class="line">        .maximumSize(<span class="number">5000</span>)</span><br><span class="line">        .expireAfterWrite(<span class="number">5</span>, TimeUnit.MINUTES)</span><br><span class="line">        .recordStats()</span><br><span class="line">        .build();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * L2分布式缓存：Redis</span></span><br><span class="line"><span class="comment">     * L1 miss → L2 → DB</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">get</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 查本地缓存</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">value</span> <span class="operator">=</span> localCache.getIfPresent(key);</span><br><span class="line">        <span class="keyword">if</span> (value != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span> value;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 查Redis</span></span><br><span class="line">        value = redisTemplate.opsForValue().get(key);</span><br><span class="line">        <span class="keyword">if</span> (value != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="comment">// 回填本地缓存</span></span><br><span class="line">            localCache.put(key, value);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> value;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">set</span><span class="params">(String key, String value, <span class="type">long</span> expireSeconds)</span> &#123;</span><br><span class="line">        <span class="comment">// 双写：同时更新两层缓存</span></span><br><span class="line">        redisTemplate.opsForValue().set(key, value, expireSeconds, TimeUnit.SECONDS);</span><br><span class="line">        localCache.put(key, value);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">delete</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="comment">// 双删：同时删除两层缓存</span></span><br><span class="line">        redisTemplate.delete(key);</span><br><span class="line">        localCache.invalidate(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取本地缓存统计（用于监控）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> CacheStats <span class="title function_">getLocalCacheStats</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> localCache.stats();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-6-热点key拆分方案"><a href="#5-6-热点key拆分方案" class="headerlink" title="5.6 热点key拆分方案"></a>5.6 热点key拆分方案</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 热点key拆分：将一个key的数据分散到多个子key</span></span><br><span class="line"><span class="comment"> * 例如：workface:stats:1001 → workface:stats:1001:0 ~ workface:stats:1001:3</span></span><br><span class="line"><span class="comment"> * 读取时随机选一个子key，分散到不同Redis分片</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">KeySplittingService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">int</span> <span class="variable">SPLIT_COUNT</span> <span class="operator">=</span> <span class="number">4</span>; <span class="comment">// 拆分为4个子key</span></span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">ThreadLocalRandom</span> <span class="variable">random</span> <span class="operator">=</span> ThreadLocalRandom.current();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 读取拆分key（随机选一个子key读取）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">get</span><span class="params">(String keyPrefix, Object id)</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">shard</span> <span class="operator">=</span> random.nextInt(SPLIT_COUNT);</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> keyPrefix + <span class="string">&quot;:&quot;</span> + id + <span class="string">&quot;:&quot;</span> + shard;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForValue().get(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 写入拆分key（写入所有子key，保证任意子key都能读到）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">set</span><span class="params">(String keyPrefix, Object id, String value, <span class="type">long</span> expireSeconds)</span> &#123;</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; SPLIT_COUNT; i++) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> keyPrefix + <span class="string">&quot;:&quot;</span> + id + <span class="string">&quot;:&quot;</span> + i;</span><br><span class="line">            redisTemplate.opsForValue().set(key, value, expireSeconds, TimeUnit.SECONDS);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 删除拆分key</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">delete</span><span class="params">(String keyPrefix, Object id)</span> &#123;</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; SPLIT_COUNT; i++) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> keyPrefix + <span class="string">&quot;:&quot;</span> + id + <span class="string">&quot;:&quot;</span> + i;</span><br><span class="line">            redisTemplate.delete(key);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="5-7-热点key隔离到独立Redis实例"><a href="#5-7-热点key隔离到独立Redis实例" class="headerlink" title="5.7 热点key隔离到独立Redis实例"></a>5.7 热点key隔离到独立Redis实例</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 热点key路由到独立Redis实例，避免影响正常业务</span></span><br><span class="line"><span class="comment"> * 智慧矿山场景：主通风机状态、工作面实时产量等高频数据</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">HotKeyRedisConfig</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Bean(&quot;hotKeyRedisTemplate&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> StringRedisTemplate <span class="title function_">hotKeyRedisTemplate</span><span class="params">(</span></span><br><span class="line"><span class="params">            <span class="meta">@Value(&quot;$&#123;redis.hotkey.host&#125;&quot;)</span> String host,</span></span><br><span class="line"><span class="params">            <span class="meta">@Value(&quot;$&#123;redis.hotkey.port&#125;&quot;)</span> <span class="type">int</span> port)</span> &#123;</span><br><span class="line"></span><br><span class="line">        <span class="type">RedisStandaloneConfiguration</span> <span class="variable">config</span> <span class="operator">=</span></span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">RedisStandaloneConfiguration</span>(host, port);</span><br><span class="line">        <span class="type">LettuceClientConfiguration</span> <span class="variable">clientConfig</span> <span class="operator">=</span> LettuceClientConfiguration.builder()</span><br><span class="line">            .commandTimeout(Duration.ofMillis(<span class="number">100</span>))  <span class="comment">// 热点key超时要更短</span></span><br><span class="line">            .build();</span><br><span class="line">        <span class="type">LettuceConnectionFactory</span> <span class="variable">factory</span> <span class="operator">=</span></span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">LettuceConnectionFactory</span>(config, clientConfig);</span><br><span class="line">        factory.afterPropertiesSet();</span><br><span class="line"></span><br><span class="line">        <span class="type">StringRedisTemplate</span> <span class="variable">template</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">StringRedisTemplate</span>();</span><br><span class="line">        template.setConnectionFactory(factory);</span><br><span class="line">        template.afterPropertiesSet();</span><br><span class="line">        <span class="keyword">return</span> template;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Bean(&quot;normalRedisTemplate&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> StringRedisTemplate <span class="title function_">normalRedisTemplate</span><span class="params">(</span></span><br><span class="line"><span class="params">            <span class="meta">@Value(&quot;$&#123;redis.host&#125;&quot;)</span> String host,</span></span><br><span class="line"><span class="params">            <span class="meta">@Value(&quot;$&#123;redis.port&#125;&quot;)</span> <span class="type">int</span> port)</span> &#123;</span><br><span class="line">        <span class="comment">// 普通业务Redis</span></span><br><span class="line">        <span class="type">RedisStandaloneConfiguration</span> <span class="variable">config</span> <span class="operator">=</span></span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">RedisStandaloneConfiguration</span>(host, port);</span><br><span class="line">        <span class="type">LettuceConnectionFactory</span> <span class="variable">factory</span> <span class="operator">=</span></span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">LettuceConnectionFactory</span>(config);</span><br><span class="line">        factory.afterPropertiesSet();</span><br><span class="line"></span><br><span class="line">        <span class="type">StringRedisTemplate</span> <span class="variable">template</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">StringRedisTemplate</span>();</span><br><span class="line">        template.setConnectionFactory(factory);</span><br><span class="line">        template.afterPropertiesSet();</span><br><span class="line">        <span class="keyword">return</span> template;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="六、缓存一致性策略"><a href="#六、缓存一致性策略" class="headerlink" title="六、缓存一致性策略"></a>六、缓存一致性策略</h2><h3 id="6-1-缓存一致性策略对比"><a href="#6-1-缓存一致性策略对比" class="headerlink" title="6.1 缓存一致性策略对比"></a>6.1 缓存一致性策略对比</h3><table>
+<thead>
+<tr>
+<th>策略</th>
+<th>读流程</th>
+<th>写流程</th>
+<th>一致性</th>
+<th>性能</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Cache Aside</strong></td>
+<td>先读缓存，miss读DB后回写</td>
+<td>先更新DB，再删缓存</td>
+<td>最终一致</td>
+<td>高</td>
+<td>通用方案</td>
+</tr>
+<tr>
+<td><strong>Read Through</strong></td>
+<td>缓存层代理读DB</td>
+<td>同Cache Aside</td>
+<td>最终一致</td>
+<td>中</td>
+<td>读多写少</td>
+</tr>
+<tr>
+<td><strong>Write Through</strong></td>
+<td>同Read Through</td>
+<td>同步写缓存和DB</td>
+<td>强一致</td>
+<td>低</td>
+<td>一致性要求高</td>
+</tr>
+<tr>
+<td><strong>Write Behind</strong></td>
+<td>同Read Through</td>
+<td>先写缓存，异步批量写DB</td>
+<td>最终一致</td>
+<td>最高</td>
+<td>写密集场景</td>
+</tr>
+<tr>
+<td><strong>双删策略</strong></td>
+<td>同Cache Aside</td>
+<td>先删缓存→更新DB→延迟再删缓存</td>
+<td>最终一致</td>
+<td>中</td>
+<td>并发更新场景</td>
+</tr>
+</tbody></table>
+<h3 id="6-2-Cache-Aside模式（推荐）"><a href="#6-2-Cache-Aside模式（推荐）" class="headerlink" title="6.2 Cache Aside模式（推荐）"></a>6.2 Cache Aside模式（推荐）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CacheAsideService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> DeviceMapper deviceMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 读：先缓存后DB</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> Device <span class="title function_">getDevice</span><span class="params">(Long deviceId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:info:&quot;</span> + deviceId;</span><br><span class="line">        <span class="type">String</span> <span class="variable">value</span> <span class="operator">=</span> redisTemplate.opsForValue().get(key);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (value != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span> JSON.parseObject(value, Device.class);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 缓存miss，查DB</span></span><br><span class="line">        <span class="type">Device</span> <span class="variable">device</span> <span class="operator">=</span> deviceMapper.selectById(deviceId);</span><br><span class="line">        <span class="keyword">if</span> (device != <span class="literal">null</span>) &#123;</span><br><span class="line">            redisTemplate.opsForValue().set(key,</span><br><span class="line">                JSON.toJSONString(device), <span class="number">30</span>, TimeUnit.MINUTES);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> device;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 写：先更新DB，再删除缓存</span></span><br><span class="line"><span class="comment">     * 为什么删缓存而不是更新缓存？</span></span><br><span class="line"><span class="comment">     * - 并发写时更新缓存可能产生数据错乱</span></span><br><span class="line"><span class="comment">     * - 删除更简单，下次读取时自然会重建</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">updateDevice</span><span class="params">(Device device)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 先更新数据库</span></span><br><span class="line">        deviceMapper.updateById(device);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 再删除缓存</span></span><br><span class="line">        redisTemplate.delete(<span class="string">&quot;device:info:&quot;</span> + device.getId());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-3-延迟双删策略"><a href="#6-3-延迟双删策略" class="headerlink" title="6.3 延迟双删策略"></a>6.3 延迟双删策略</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DoubleDeleteService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> DeviceMapper deviceMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 延迟双删：解决并发读写导致缓存与DB不一致问题</span></span><br><span class="line"><span class="comment">     *</span></span><br><span class="line"><span class="comment">     * 场景：线程A更新DB后删缓存，线程B在A更新DB前读了旧值写入缓存</span></span><br><span class="line"><span class="comment">     * 解决：延迟再删一次，确保线程B写入的旧缓存被清除</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">updateWithDoubleDelete</span><span class="params">(Device device)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:info:&quot;</span> + device.getId();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 1. 先删除缓存</span></span><br><span class="line">        redisTemplate.delete(key);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 更新数据库</span></span><br><span class="line">        deviceMapper.updateById(device);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 延迟再删一次（延迟时间 &gt; 主从同步时间 + 读缓存写缓存时间）</span></span><br><span class="line">        CompletableFuture.delayedExecutor(<span class="number">500</span>, TimeUnit.MILLISECONDS)</span><br><span class="line">            .execute(() -&gt; &#123;</span><br><span class="line">                redisTemplate.delete(key);</span><br><span class="line">                log.info(<span class="string">&quot;延迟双删执行, key=&#123;&#125;&quot;</span>, key);</span><br><span class="line">            &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="6-4-基于Canal的缓存一致性"><a href="#6-4-基于Canal的缓存一致性" class="headerlink" title="6.4 基于Canal的缓存一致性"></a>6.4 基于Canal的缓存一致性</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 通过Canal监听MySQL binlog，异步更新缓存</span></span><br><span class="line"><span class="comment"> * 优势：与业务代码解耦，不依赖业务方正确删除缓存</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CanalCacheSync</span> <span class="keyword">implements</span> <span class="title class_">CanalEventListener</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> Map&lt;String, String&gt; TABLE_KEY_MAPPING = Map.of(</span><br><span class="line">        <span class="string">&quot;t_device&quot;</span>, <span class="string">&quot;device:info:&quot;</span>,</span><br><span class="line">        <span class="string">&quot;t_workface_stats&quot;</span>, <span class="string">&quot;workface:stats:&quot;</span>,</span><br><span class="line">        <span class="string">&quot;t_alert&quot;</span>, <span class="string">&quot;alert:info:&quot;</span></span><br><span class="line">    );</span><br><span class="line"></span><br><span class="line">    <span class="meta">@CanalEventListener(schema = &quot;smart_mine&quot;, table = &#123;&quot;t_device&quot;&#125;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">onDeviceChange</span><span class="params">(CanalEntry.EventType eventType,</span></span><br><span class="line"><span class="params">                               CanalEntry.RowData rowData)</span> &#123;</span><br><span class="line">        <span class="keyword">switch</span> (eventType) &#123;</span><br><span class="line">            <span class="keyword">case</span> INSERT:</span><br><span class="line">            <span class="keyword">case</span> UPDATE:</span><br><span class="line">                <span class="comment">// 获取主键</span></span><br><span class="line">                <span class="type">String</span> <span class="variable">id</span> <span class="operator">=</span> getColumnValue(rowData, <span class="string">&quot;id&quot;</span>);</span><br><span class="line">                <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:info:&quot;</span> + id;</span><br><span class="line">                <span class="comment">// 删除缓存，下次读取时重建</span></span><br><span class="line">                redisTemplate.delete(key);</span><br><span class="line">                log.info(<span class="string">&quot;Canal同步删除缓存, key=&#123;&#125;&quot;</span>, key);</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">            <span class="keyword">case</span> DELETE:</span><br><span class="line">                <span class="type">String</span> <span class="variable">deleteId</span> <span class="operator">=</span> getColumnValueBefore(rowData, <span class="string">&quot;id&quot;</span>);</span><br><span class="line">                redisTemplate.delete(<span class="string">&quot;device:info:&quot;</span> + deleteId);</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">            <span class="keyword">default</span>:</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> String <span class="title function_">getColumnValue</span><span class="params">(CanalEntry.RowData rowData, String column)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> rowData.getAfterColumnsList().stream()</span><br><span class="line">            .filter(c -&gt; column.equals(c.getName()))</span><br><span class="line">            .findFirst()</span><br><span class="line">            .map(CanalEntry.Column::getValue)</span><br><span class="line">            .orElse(<span class="literal">null</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> String <span class="title function_">getColumnValueBefore</span><span class="params">(CanalEntry.RowData rowData, String column)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> rowData.getBeforeColumnsList().stream()</span><br><span class="line">            .filter(c -&gt; column.equals(c.getName()))</span><br><span class="line">            .findFirst()</span><br><span class="line">            .map(CanalEntry.Column::getValue)</span><br><span class="line">            .orElse(<span class="literal">null</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="七、BigKey检测与解决"><a href="#七、BigKey检测与解决" class="headerlink" title="七、BigKey检测与解决"></a>七、BigKey检测与解决</h2><h3 id="7-1-BigKey定义"><a href="#7-1-BigKey定义" class="headerlink" title="7.1 BigKey定义"></a>7.1 BigKey定义</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">BigKey判定标准：</span><br><span class="line">- String类型：value &gt; 10KB</span><br><span class="line">- Hash类型：field数量 &gt; 5000</span><br><span class="line">- List/Set类型：元素数量 &gt; 5000</span><br><span class="line">- ZSet类型：成员数量 &gt; 5000</span><br><span class="line"></span><br><span class="line">实际项目中的典型BigKey：</span><br><span class="line">- alert:history:&#123;deviceId&#125;: 单设备告警历史列表，10万+元素</span><br><span class="line">- device:sensor:all: 全量传感器配置Hash，2万+ field</span><br><span class="line">- personnel:trace:&#123;date&#125;: 人员轨迹ZSet，5万+成员</span><br></pre></td></tr></table></figure>
+
+<h3 id="7-2-BigKey检测"><a href="#7-2-BigKey检测" class="headerlink" title="7.2 BigKey检测"></a>7.2 BigKey检测</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1. redis-cli --bigkeys 扫描</span></span><br><span class="line">redis-cli -h &lt;host&gt; -p &lt;port&gt; --bigkeys -i 0.1</span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 使用redis-rdb-tools分析RDB文件</span></span><br><span class="line">rdb -c memory dump.rdb &gt; memory.csv</span><br><span class="line"><span class="comment"># 按内存排序找出最大的key</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 手动检查特定key</span></span><br><span class="line">redis-cli MEMORY USAGE alert:<span class="built_in">history</span>:D001</span><br><span class="line">redis-cli HLEN device:sensor:all</span><br><span class="line">redis-cli LLEN alert:<span class="built_in">history</span>:D001</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * BigKey巡检任务</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BigKeyInspector</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">STRING_THRESHOLD_BYTES</span> <span class="operator">=</span> <span class="number">10240</span>; <span class="comment">// 10KB</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">long</span> <span class="variable">COLLECTION_THRESHOLD_SIZE</span> <span class="operator">=</span> <span class="number">5000</span>;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 3 * * ?&quot;)</span> <span class="comment">// 每天凌晨3点</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">inspectBigKeys</span><span class="params">()</span> &#123;</span><br><span class="line">        Set&lt;String&gt; keys = scanAllKeys();</span><br><span class="line">        List&lt;Map&lt;String, Object&gt;&gt; bigKeys = <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">for</span> (String key : keys) &#123;</span><br><span class="line">            <span class="type">Long</span> <span class="variable">memoryUsage</span> <span class="operator">=</span> redisTemplate.execute(</span><br><span class="line">                (RedisCallback&lt;Long&gt;) conn -&gt;</span><br><span class="line">                    conn.serverCommands().getMemoryUsage(key.getBytes())</span><br><span class="line">            );</span><br><span class="line"></span><br><span class="line">            <span class="keyword">if</span> (memoryUsage != <span class="literal">null</span> &amp;&amp; memoryUsage &gt; STRING_THRESHOLD_BYTES) &#123;</span><br><span class="line">                Map&lt;String, Object&gt; info = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line">                info.put(<span class="string">&quot;key&quot;</span>, key);</span><br><span class="line">                info.put(<span class="string">&quot;type&quot;</span>, redisTemplate.type(key));</span><br><span class="line">                info.put(<span class="string">&quot;memory&quot;</span>, memoryUsage);</span><br><span class="line">                info.put(<span class="string">&quot;ttl&quot;</span>, redisTemplate.getExpire(key, TimeUnit.SECONDS));</span><br><span class="line">                bigKeys.add(info);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (!bigKeys.isEmpty()) &#123;</span><br><span class="line">            log.warn(<span class="string">&quot;发现&#123;&#125;个BigKey: &#123;&#125;&quot;</span>, bigKeys.size(),</span><br><span class="line">                bigKeys.stream()</span><br><span class="line">                    .map(m -&gt; m.get(<span class="string">&quot;key&quot;</span>) + <span class="string">&quot;(&quot;</span> + formatBytes((Long)m.get(<span class="string">&quot;memory&quot;</span>)) + <span class="string">&quot;)&quot;</span>)</span><br><span class="line">                    .collect(Collectors.joining(<span class="string">&quot;, &quot;</span>)));</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> Set&lt;String&gt; <span class="title function_">scanAllKeys</span><span class="params">()</span> &#123;</span><br><span class="line">        Set&lt;String&gt; keys = <span class="keyword">new</span> <span class="title class_">HashSet</span>&lt;&gt;();</span><br><span class="line">        <span class="type">ScanOptions</span> <span class="variable">options</span> <span class="operator">=</span> ScanOptions.scanOptions().count(<span class="number">1000</span>).build();</span><br><span class="line">        Cursor&lt;String&gt; cursor = redisTemplate.scan(options);</span><br><span class="line">        <span class="keyword">while</span> (cursor.hasNext()) &#123;</span><br><span class="line">            keys.add(cursor.next());</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> keys;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> String <span class="title function_">formatBytes</span><span class="params">(<span class="type">long</span> bytes)</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (bytes &lt; <span class="number">1024</span>) <span class="keyword">return</span> bytes + <span class="string">&quot;B&quot;</span>;</span><br><span class="line">        <span class="keyword">if</span> (bytes &lt; <span class="number">1048576</span>) <span class="keyword">return</span> (bytes / <span class="number">1024</span>) + <span class="string">&quot;KB&quot;</span>;</span><br><span class="line">        <span class="keyword">return</span> (bytes / <span class="number">1048576</span>) + <span class="string">&quot;MB&quot;</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="7-3-BigKey解决方案"><a href="#7-3-BigKey解决方案" class="headerlink" title="7.3 BigKey解决方案"></a>7.3 BigKey解决方案</h3><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>原理</th>
+<th>实现</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>拆分</strong></td>
+<td>大key拆成多个小key</td>
+<td>Hash按field前缀分组</td>
+<td>Hash&#x2F;List&#x2F;Set类型</td>
+</tr>
+<tr>
+<td><strong>压缩</strong></td>
+<td>value压缩后存储</td>
+<td>GZIP&#x2F;Snappy压缩</td>
+<td>String大value</td>
+</tr>
+<tr>
+<td><strong>本地缓存</strong></td>
+<td>大value缓存在JVM内存</td>
+<td>Caffeine缓存</td>
+<td>读多写少</td>
+</tr>
+<tr>
+<td><strong>删除优化</strong></td>
+<td>UNLINK异步删除</td>
+<td>替代DEL命令</td>
+<td>删除大key</td>
+</tr>
+<tr>
+<td><strong>过期清理</strong></td>
+<td>设置TTL自动清理</td>
+<td>合理设置TTL</td>
+<td>时效性数据</td>
+</tr>
+</tbody></table>
+<h3 id="7-4-BigKey拆分实现"><a href="#7-4-BigKey拆分实现" class="headerlink" title="7.4 BigKey拆分实现"></a>7.4 BigKey拆分实现</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * BigKey拆分：将大Hash拆成多个小Hash</span></span><br><span class="line"><span class="comment"> * 例如：device:sensor:all → device:sensor:0, device:sensor:1, ...</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BigKeySplitService</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">int</span> <span class="variable">SHARD_SIZE</span> <span class="operator">=</span> <span class="number">500</span>; <span class="comment">// 每个小Hash最多500个field</span></span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 拆分写入Hash</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">hsetSharded</span><span class="params">(String keyPrefix, String field, String value)</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">shard</span> <span class="operator">=</span> Math.abs(field.hashCode()) % <span class="number">10</span>; <span class="comment">// 10个分片</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">shardedKey</span> <span class="operator">=</span> keyPrefix + <span class="string">&quot;:&quot;</span> + shard;</span><br><span class="line">        redisTemplate.opsForHash().put(shardedKey, field, value);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 拆分读取Hash</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">hgetSharded</span><span class="params">(String keyPrefix, String field)</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">shard</span> <span class="operator">=</span> Math.abs(field.hashCode()) % <span class="number">10</span>;</span><br><span class="line">        <span class="type">String</span> <span class="variable">shardedKey</span> <span class="operator">=</span> keyPrefix + <span class="string">&quot;:&quot;</span> + shard;</span><br><span class="line">        <span class="type">Object</span> <span class="variable">value</span> <span class="operator">=</span> redisTemplate.opsForHash().get(shardedKey, field);</span><br><span class="line">        <span class="keyword">return</span> value != <span class="literal">null</span> ? value.toString() : <span class="literal">null</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 安全删除大key（UNLINK异步删除）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">safeDelete</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="comment">// UNLINK是DEL的异步版本，不会阻塞Redis主线程</span></span><br><span class="line">        redisTemplate.execute((RedisCallback&lt;Long&gt;) conn -&gt;</span><br><span class="line">            conn.unlink(key.getBytes())</span><br><span class="line">        );</span><br><span class="line">        log.info(<span class="string">&quot;异步删除BigKey: &#123;&#125;&quot;</span>, key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 渐进式删除大Hash</span></span><br><span class="line"><span class="comment">     * 使用HSCAN + HDEL分批删除，避免一次性删除阻塞Redis</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">progressiveDelete</span><span class="params">(String key, <span class="type">int</span> batchSize)</span> &#123;</span><br><span class="line">        <span class="type">ScanOptions</span> <span class="variable">options</span> <span class="operator">=</span> ScanOptions.scanOptions()</span><br><span class="line">            .count(batchSize).build();</span><br><span class="line"></span><br><span class="line">        Cursor&lt;Map.Entry&lt;Object, Object&gt;&gt; cursor =</span><br><span class="line">            redisTemplate.opsForHash().scan(key, options);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">while</span> (cursor.hasNext()) &#123;</span><br><span class="line">            Map.Entry&lt;Object, Object&gt; entry = cursor.next();</span><br><span class="line">            redisTemplate.opsForHash().delete(key, entry.getKey());</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 删除空key</span></span><br><span class="line">        <span class="keyword">if</span> (redisTemplate.opsForHash().size(key) == <span class="number">0</span>) &#123;</span><br><span class="line">            redisTemplate.delete(key);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="八、Redis集群架构"><a href="#八、Redis集群架构" class="headerlink" title="八、Redis集群架构"></a>八、Redis集群架构</h2><h3 id="8-1-Redis-Cluster架构"><a href="#8-1-Redis-Cluster架构" class="headerlink" title="8.1 Redis Cluster架构"></a>8.1 Redis Cluster架构</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;Redis Cluster 6节点&quot;]</span><br><span class="line">    N2[&quot;Master1 Master2&quot;]</span><br><span class="line">    N3[&quot;Master3 Slot Slot&quot;]</span><br><span class="line">    N4[&quot;Slot 05460 5461&quot;]</span><br><span class="line">    N5[&quot;10923 10922 16383&quot;]</span><br><span class="line">    N6[&quot;Master1&quot;]</span><br><span class="line">    N7[&quot;Master2 Master3 Slot&quot;]</span><br><span class="line">    N8[&quot;Slot Slot 05460&quot;]</span><br><span class="line">    N9[&quot;5461 10923 10922&quot;]</span><br><span class="line">    N10[&quot;16383&quot;]</span><br><span class="line">    N11[&quot;Slave1 Slave2 Slave3&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N1 --&gt; N5</span><br><span class="line">    N6 --&gt; N2</span><br><span class="line">    N6 --&gt; N3</span><br><span class="line">    N6 --&gt; N4</span><br><span class="line">    N6 --&gt; N5</span><br><span class="line">    N7 --&gt; N2</span><br><span class="line">    N7 --&gt; N3</span><br><span class="line">    N7 --&gt; N4</span><br><span class="line">    N7 --&gt; N5</span><br><span class="line">    N8 --&gt; N2</span><br><span class="line">    N8 --&gt; N3</span><br><span class="line">    N8 --&gt; N4</span><br><span class="line">    N8 --&gt; N5</span><br><span class="line">    N9 --&gt; N2</span><br><span class="line">    N9 --&gt; N3</span><br><span class="line">    N9 --&gt; N4</span><br><span class="line">    N9 --&gt; N5</span><br><span class="line">    N10 --&gt; N2</span><br><span class="line">    N10 --&gt; N3</span><br><span class="line">    N10 --&gt; N4</span><br><span class="line">    N10 --&gt; N5</span><br><span class="line">    N2 --&gt; N11</span><br><span class="line">    N3 --&gt; N11</span><br><span class="line">    N4 --&gt; N11</span><br><span class="line">    N5 --&gt; N11</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<h3 id="8-2-集群配置"><a href="#8-2-集群配置" class="headerlink" title="8.2 集群配置"></a>8.2 集群配置</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># redis-cluster配置</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">redis:</span></span><br><span class="line">    <span class="attr">cluster:</span></span><br><span class="line">      <span class="attr">nodes:</span></span><br><span class="line">        <span class="bullet">-</span> <span class="number">10.0</span><span class="number">.1</span><span class="number">.1</span><span class="string">:6379</span></span><br><span class="line">        <span class="bullet">-</span> <span class="number">10.0</span><span class="number">.1</span><span class="number">.2</span><span class="string">:6379</span></span><br><span class="line">        <span class="bullet">-</span> <span class="number">10.0</span><span class="number">.1</span><span class="number">.3</span><span class="string">:6379</span></span><br><span class="line">        <span class="bullet">-</span> <span class="number">10.0</span><span class="number">.1</span><span class="number">.4</span><span class="string">:6379</span></span><br><span class="line">        <span class="bullet">-</span> <span class="number">10.0</span><span class="number">.1</span><span class="number">.5</span><span class="string">:6379</span></span><br><span class="line">        <span class="bullet">-</span> <span class="number">10.0</span><span class="number">.1</span><span class="number">.6</span><span class="string">:6379</span></span><br><span class="line">      <span class="attr">max-redirects:</span> <span class="number">3</span>  <span class="comment"># 最大重定向次数</span></span><br><span class="line">    <span class="attr">lettuce:</span></span><br><span class="line">      <span class="attr">pool:</span></span><br><span class="line">        <span class="attr">max-active:</span> <span class="number">200</span></span><br><span class="line">        <span class="attr">max-idle:</span> <span class="number">50</span></span><br><span class="line">        <span class="attr">min-idle:</span> <span class="number">10</span></span><br><span class="line">      <span class="attr">shutdown-timeout:</span> <span class="string">100ms</span></span><br><span class="line">    <span class="attr">timeout:</span> <span class="string">100ms</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="8-3-集群运维关键指标"><a href="#8-3-集群运维关键指标" class="headerlink" title="8.3 集群运维关键指标"></a>8.3 集群运维关键指标</h3><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>告警阈值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>cluster_state</td>
+<td>FAIL</td>
+<td>集群状态</td>
+</tr>
+<tr>
+<td>cluster_slots_ok</td>
+<td>&lt; 16384</td>
+<td>可用Slot数</td>
+</tr>
+<tr>
+<td>connected_clients</td>
+<td>&gt; 10000</td>
+<td>连接数</td>
+</tr>
+<tr>
+<td>used_memory</td>
+<td>&gt; maxmemory * 80%</td>
+<td>内存使用率</td>
+</tr>
+<tr>
+<td>keyspace_hits&#x2F;misses</td>
+<td>miss率 &gt; 10%</td>
+<td>缓存命中率</td>
+</tr>
+<tr>
+<td>master_repl_offset延迟</td>
+<td>&gt; 1MB</td>
+<td>主从同步延迟</td>
+</tr>
+<tr>
+<td>slowlog</td>
+<td>&gt; 10ms</td>
+<td>慢查询</td>
+</tr>
+</tbody></table>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 集群健康检查脚本</span></span><br><span class="line"><span class="comment">#!/bin/bash</span></span><br><span class="line">redis-cli -h 10.0.1.1 -p 6379 cluster info | grep -E <span class="string">&quot;cluster_state|cluster_slots_ok&quot;</span></span><br><span class="line">redis-cli -h 10.0.1.1 -p 6379 cluster nodes | grep -E <span class="string">&quot;fail|handshake&quot;</span></span><br><span class="line">redis-cli -h 10.0.1.1 -p 6379 info memory | grep used_memory_human</span><br><span class="line">redis-cli -h 10.0.1.1 -p 6379 info stats | grep -E <span class="string">&quot;keyspace_hits|keyspace_misses&quot;</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="九、架构优化效果"><a href="#九、架构优化效果" class="headerlink" title="九、架构优化效果"></a>九、架构优化效果</h2><h3 id="9-1-实际项目优化效果"><a href="#9-1-实际项目优化效果" class="headerlink" title="9.1 实际项目优化效果"></a>9.1 实际项目优化效果</h3><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>优化前</th>
+<th>优化后</th>
+<th>提升</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Redis CPU</td>
+<td>99%</td>
+<td>28%</td>
+<td>降低72%</td>
+</tr>
+<tr>
+<td>平均响应时间</td>
+<td>200ms+</td>
+<td>5ms</td>
+<td>提升40倍</td>
+</tr>
+<tr>
+<td>P99响应时间</td>
+<td>2000ms</td>
+<td>50ms</td>
+<td>提升40倍</td>
+</tr>
+<tr>
+<td>热点key QPS</td>
+<td>50万</td>
+<td>10万(本地缓存承担40万)</td>
+<td>分流80%</td>
+</tr>
+<tr>
+<td>缓存穿透率</td>
+<td>15%</td>
+<td>0.1%</td>
+<td>降低99%</td>
+</tr>
+<tr>
+<td>缓存命中率</td>
+<td>75%</td>
+<td>96%</td>
+<td>提升28%</td>
+</tr>
+<tr>
+<td>BigKey数量</td>
+<td>23个</td>
+<td>0个</td>
+<td>全部治理</td>
+</tr>
+<tr>
+<td>集群可用性</td>
+<td>99.9%</td>
+<td>99.99%</td>
+<td>提升一个9</td>
+</tr>
+</tbody></table>
+<h3 id="9-2-优化前后架构对比"><a href="#9-2-优化前后架构对比" class="headerlink" title="9.2 优化前后架构对比"></a>9.2 优化前后架构对比</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">优化前：</span><br><span class="line">  客户端 → Redis单节点 → MySQL</span><br><span class="line">  问题：单点故障、无热点隔离、无穿透防护、BigKey阻塞</span><br><span class="line"></span><br><span class="line">优化后：</span><br><span class="line">  客户端</span><br><span class="line">    → Nginx缓存(1~5s)</span><br><span class="line">    → Caffeine本地缓存(5~30min)</span><br><span class="line">    → Redis Cluster(30min~2h, 布隆过滤器前置)</span><br><span class="line">    → MySQL(Canal binlog同步缓存)</span><br><span class="line">  特点：多级缓存、热点隔离、穿透防护、异步一致性</span><br></pre></td></tr></table></figure>
+
+<h2 id="十、常见项目问题与解决方案"><a href="#十、常见项目问题与解决方案" class="headerlink" title="十、常见项目问题与解决方案"></a>十、常见项目问题与解决方案</h2><h2 id="十一、总结"><a href="#十一、总结" class="headerlink" title="十一、总结"></a>十一、总结</h2><p>Redis缓存架构优化是一个系统工程，需要从多个维度综合考虑：</p>
+<ol>
+<li><strong>缓存穿透</strong>：布隆过滤器前置拦截 + 缓存空值兜底，双层防线确保无效请求不穿透到数据库</li>
+<li><strong>缓存击穿</strong>：互斥锁适合一般场景，逻辑过期适合高可用场景，热点预热从源头避免击穿</li>
+<li><strong>缓存雪崩</strong>：随机TTL打散过期时间 + 多级缓存兜底 + 熔断降级保护数据库</li>
+<li><strong>热点key</strong>：本地缓存分流是性价比最高的方案，key拆分和独立实例用于极端场景</li>
+<li><strong>缓存一致性</strong>：Cache Aside是通用方案，延迟双删处理并发写，Canal监听binlog实现最终一致</li>
+<li><strong>BigKey治理</strong>：拆分是根本解决手段，UNLINK异步删除和渐进式删除用于应急</li>
+<li><strong>集群架构</strong>：Cluster模式保证高可用，合理分片和主从复制应对故障</li>
+</ol>
+<p>没有银弹可以解决所有问题，核心原则是：<strong>根据业务场景选择合适的策略组合，建立完善的监控告警体系，做最坏的打算做最好的准备</strong>。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2025/09/06/5084b9113ff8/">MySQL索引优化实战——从慢查询到毫秒级响应</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2025/10/25/08de3dcc1079/">分布式ID生成方案深度对比——从Snowflake到数据库自增</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/Redis/" class="tag" aria-label="标签: #Redis">#Redis</a>
+            
+                <a href="/tags/%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96/" class="tag" aria-label="标签: #性能优化">#性能优化</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(238)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2025/" aria-label="分类: 2025">
+                        2025
+                        <span>(29)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2025/Redis/" aria-label="分类: Redis">
+                        Redis
+                        <span>(1)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+<!-- 覆盖hexo-blog-encrypt插件样式 -->
+<style id="hbe-override-styles">
+    .hbe-container {
+        max-width: 280px !important;
+        margin: 80px auto !important;
+        padding: 25px !important;
+        background: transparent !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+
+    .hbe-input-field,
+    .hbe-input-field-default {
+        width: 100% !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        border: 1px solid rgba(0, 255, 255, 0.4) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        color: #ffffff !important;
+        outline: none !important;
+        float: none !important;
+        display: block !important;
+        opacity: 1 !important;
+    }
+
+    .hbe-input-field:focus,
+    .hbe-input-field-default:focus {
+        border-color: #00ffff !important;
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.3) !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖浏览器自动填充样式 */
+    .hbe-input-field:-webkit-autofill,
+    .hbe-input-field:-webkit-autofill:hover,
+    .hbe-input-field:-webkit-autofill:focus,
+    .hbe-input-field:-webkit-autofill:active,
+    .hbe-input-field-default:-webkit-autofill,
+    .hbe-input-field-default:-webkit-autofill:hover,
+    .hbe-input-field-default:-webkit-autofill:focus,
+    .hbe-input-field-default:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+        -webkit-text-fill-color: #ffffff !important;
+        transition: background-color 5000s ease-in-out 0s !important;
+        background: transparent !important;
+    }
+
+    /* 覆盖label背景 */
+    .hbe-input-label-default::before {
+        background: transparent !important;
+    }
+
+    .hbe-input-label-default::after {
+        background: transparent !important;
+    }
+
+    .hbe-button {
+        width: 100% !important;
+        margin-top: 12px !important;
+        padding: 10px 14px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        color: #0a0a1a !important;
+        background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important;
+        border: none !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        text-align: center !important;
+    }
+
+    .hbe-input-label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 12px !important;
+        width: 100% !important;
+        float: none !important;
+        padding: 0 !important;
+    }
+
+    .hbe-input-label-content {
+        text-align: center;
+        color: #e1e1ff !important;
+        font-size: 0.95rem !important;
+        position: static !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .hbe-input {
+        position: relative !important;
+        margin: 0 !important;
+        width: 100% !important;
+        min-width: auto !important;
+        display: block !important;
+    }
+
+    .hbe-form {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .hbe-content {
+        padding: 0 !important;
+    }
+</style>
+
+<script>
+(function() {
+    function applyHbeStyles() {
+        var inputs = document.querySelectorAll('.hbe-input-field');
+        inputs.forEach(function(input) {
+            input.setAttribute('style', 'width: 100% !important; padding: 10px 14px !important; font-size: 0.9rem !important; border: 1px solid rgba(0, 255, 255, 0.4) !important; border-radius: 6px !important; background: transparent !important; color: #ffffff !important; outline: none !important; float: none !important; display: block !important;');
+        });
+        
+        var containers = document.querySelectorAll('.hbe-container');
+        containers.forEach(function(container) {
+            container.setAttribute('style', 'max-width: 280px !important; margin: 80px auto !important; padding: 25px !important; background: transparent !important; border-radius: 12px !important; border: 1px solid rgba(0, 255, 255, 0.2) !important;');
+        });
+        
+        var buttons = document.querySelectorAll('.hbe-button');
+        buttons.forEach(function(button) {
+            button.setAttribute('style', 'width: 100% !important; margin-top: 12px !important; padding: 10px 14px !important; font-size: 0.9rem !important; font-weight: 600 !important; color: #0a0a1a !important; background: linear-gradient(135deg, rgba(0, 255, 255, 0.9), rgba(0, 200, 200, 0.9)) !important; border: none !important; border-radius: 6px !important; cursor: pointer !important; text-align: center !important;');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyHbeStyles);
+    } else {
+        applyHbeStyles();
+    }
+
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                for (var i = 0; i < mutation.addedNodes.length; i++) {
+                    var node = mutation.addedNodes[i];
+                    if (node.classList && (node.classList.contains('hbe-container') || 
+                        node.querySelector && node.querySelector('.hbe-container'))) {
+                        applyHbeStyles();
+                        return;
+                    }
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
+    <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

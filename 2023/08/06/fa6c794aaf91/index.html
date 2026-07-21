@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2023-08-06T02:07:48.000Z">
   <article class="post">
     <h1 class="post-title">OpenFeign与负载均衡——微服务调用最佳实践</h1>
 
@@ -208,9 +208,10 @@ article: http://ogp.me/ns/article#">
     <div class="post-content">
       <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>项目从单体拆分微服务后，服务间调用成了核心问题。最初用RestTemplate手动调用，代码又丑又难维护。2023年引入OpenFeign后，服务间调用像调用本地方法一样简单。在实际场景中，微服务架构下的服务调用更加复杂——设备服务、告警服务、人员服务、安全服务等之间频繁交互，任何调用失败都可能影响矿山安全。</p>
 <hr>
-<h2 id="一、微服务调用架构全貌"><a href="#一、微服务调用架构全貌" class="headerlink" title="一、微服务调用架构全貌"></a>一、微服务调用架构全貌</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">                微服务调用架构图</span><br><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│                    API Gateway                           │</span><br><span class="line">│                  (mine-gateway)                          │</span><br><span class="line">└──────────────┬────────────┬─────────────┬───────────────┘</span><br><span class="line">               │            │             │</span><br><span class="line">        ┌──────▼──┐  ┌─────▼───┐  ┌──────▼──┐</span><br><span class="line">        │  设备    │  │  告警    │  │  人员    │</span><br><span class="line">        │  服务    │  │  服务    │  │  服务    │</span><br><span class="line">        └──┬───┬──┘  └──┬───┬──┘  └──┬───┬──┘</span><br><span class="line">           │   │  OpenFeign + LoadBalancer  │</span><br><span class="line">        ┌──▼───▼────────▼───▼────────▼───▼──┐</span><br><span class="line">        │              服务注册中心             │</span><br><span class="line">        │           (Nacos/Consul)            │</span><br><span class="line">        └────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h2 id="一、微服务调用架构全貌"><a href="#一、微服务调用架构全貌" class="headerlink" title="一、微服务调用架构全貌"></a>一、微服务调用架构全貌</h2><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;API Gateway&quot;]</span><br><span class="line">    N2[&quot;设备 告警 人员 服务 服务 服务&quot;]</span><br><span class="line">    N3[&quot;(mine-gateway)&quot;]</span><br><span class="line">    N4[&quot;服务注册中心 (Nacos&quot;]</span><br><span class="line">    N5[&quot;Consul)&quot;]</span><br><span class="line">    N6[&quot;二&quot;]</span><br><span class="line">    N7[&quot;从RestTemplate到OpenFeign&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="二、从RestTemplate到OpenFeign"><a href="#二、从RestTemplate到OpenFeign" class="headerlink" title="二、从RestTemplate到OpenFeign"></a>二、从RestTemplate到OpenFeign</h2><h3 id="2-1-RestTemplate的问题"><a href="#2-1-RestTemplate的问题" class="headerlink" title="2.1 RestTemplate的问题"></a>2.1 RestTemplate的问题</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderService</span> &#123;</span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="meta">@LoadBalanced</span></span><br><span class="line">    <span class="keyword">private</span> RestTemplate restTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> User <span class="title function_">getUser</span><span class="params">(Long userId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> restTemplate.getForObject(</span><br><span class="line">            <span class="string">&quot;http://user-service/user/&quot;</span> + userId, User.class);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h3 id="2-1-RestTemplate的问题"><a href="#2-1-RestTemplate的问题" class="headerlink" title="2.1 RestTemplate的问题"></a>2.1 RestTemplate的问题</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderService</span> &#123;</span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="meta">@LoadBalanced</span></span><br><span class="line">    <span class="keyword">private</span> RestTemplate restTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> User <span class="title function_">getUser</span><span class="params">(Long userId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> restTemplate.getForObject(</span><br><span class="line">            <span class="string">&quot;http://user-service/user/&quot;</span> + userId, User.class);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="2-2-OpenFeign的优势"><a href="#2-2-OpenFeign的优势" class="headerlink" title="2.2 OpenFeign的优势"></a>2.2 OpenFeign的优势</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@FeignClient(name = &quot;user-service&quot;, fallback = UserClientFallback.class)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">UserClient</span> &#123;</span><br><span class="line">    <span class="meta">@GetMapping(&quot;/user/&#123;id&#125;&quot;)</span></span><br><span class="line">    User <span class="title function_">getById</span><span class="params">(<span class="meta">@PathVariable(&quot;id&quot;)</span> Long id)</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OrderService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> UserClient userClient;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> User <span class="title function_">getUser</span><span class="params">(Long userId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> userClient.getById(userId);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
@@ -269,15 +270,16 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="3-2-超时与日志配置"><a href="#3-2-超时与日志配置" class="headerlink" title="3.2 超时与日志配置"></a>3.2 超时与日志配置</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">feign:</span></span><br><span class="line">  <span class="attr">client:</span></span><br><span class="line">    <span class="attr">config:</span></span><br><span class="line">      <span class="attr">default:</span></span><br><span class="line">        <span class="attr">connect-timeout:</span> <span class="number">5000</span></span><br><span class="line">        <span class="attr">read-timeout:</span> <span class="number">10000</span></span><br><span class="line">        <span class="attr">logger-level:</span> <span class="string">BASIC</span></span><br><span class="line">      <span class="attr">user-service:</span></span><br><span class="line">        <span class="attr">connect-timeout:</span> <span class="number">3000</span></span><br><span class="line">        <span class="attr">read-timeout:</span> <span class="number">5000</span></span><br></pre></td></tr></table></figure>
 
-<h1 id="-1"><a href="#-1" class="headerlink" title=""></a></h1><h2 id="四、降级与熔断"><a href="#四、降级与熔断" class="headerlink" title="四、降级与熔断"></a>四、降级与熔断</h2><h3 id="4-1-Fallback降级"><a href="#4-1-Fallback降级" class="headerlink" title="4.1 Fallback降级"></a>4.1 Fallback降级</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@FeignClient(name = &quot;user-service&quot;, fallback = UserClientFallback.class)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">UserClient</span> &#123;</span><br><span class="line">    <span class="meta">@GetMapping(&quot;/user/&#123;id&#125;&quot;)</span></span><br><span class="line">    User <span class="title function_">getById</span><span class="params">(<span class="meta">@PathVariable(&quot;id&quot;)</span> Long id)</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">UserClientFallback</span> <span class="keyword">implements</span> <span class="title class_">UserClient</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> User <span class="title function_">getById</span><span class="params">(Long id)</span> &#123;</span><br><span class="line">        log.warn(<span class="string">&quot;用户服务降级: userId=&#123;&#125;&quot;</span>, id);</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">User</span>(id, <span class="string">&quot;服务暂不可用&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h1 id=""><a href="#" class="headerlink" title=""></a></h1><h2 id="四、降级与熔断"><a href="#四、降级与熔断" class="headerlink" title="四、降级与熔断"></a>四、降级与熔断</h2><h3 id="4-1-Fallback降级"><a href="#4-1-Fallback降级" class="headerlink" title="4.1 Fallback降级"></a>4.1 Fallback降级</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@FeignClient(name = &quot;user-service&quot;, fallback = UserClientFallback.class)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">UserClient</span> &#123;</span><br><span class="line">    <span class="meta">@GetMapping(&quot;/user/&#123;id&#125;&quot;)</span></span><br><span class="line">    User <span class="title function_">getById</span><span class="params">(<span class="meta">@PathVariable(&quot;id&quot;)</span> Long id)</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">UserClientFallback</span> <span class="keyword">implements</span> <span class="title class_">UserClient</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> User <span class="title function_">getById</span><span class="params">(Long id)</span> &#123;</span><br><span class="line">        log.warn(<span class="string">&quot;用户服务降级: userId=&#123;&#125;&quot;</span>, id);</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">User</span>(id, <span class="string">&quot;服务暂不可用&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="4-2-FallbackFactory（推荐，可获取异常信息）"><a href="#4-2-FallbackFactory（推荐，可获取异常信息）" class="headerlink" title="4.2 FallbackFactory（推荐，可获取异常信息）"></a>4.2 FallbackFactory（推荐，可获取异常信息）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@FeignClient(name = &quot;user-service&quot;, fallbackFactory = UserClientFallbackFactory.class)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">UserClient</span> &#123;</span><br><span class="line">    <span class="meta">@GetMapping(&quot;/user/&#123;id&#125;&quot;)</span></span><br><span class="line">    User <span class="title function_">getById</span><span class="params">(<span class="meta">@PathVariable(&quot;id&quot;)</span> Long id)</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">UserClientFallbackFactory</span> <span class="keyword">implements</span> <span class="title class_">FallbackFactory</span>&lt;UserClient&gt; &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> UserClient <span class="title function_">create</span><span class="params">(Throwable cause)</span> &#123;</span><br><span class="line">        log.error(<span class="string">&quot;用户服务调用失败: &#123;&#125;&quot;</span>, cause.getMessage());</span><br><span class="line">        <span class="keyword">return</span> id -&gt; <span class="keyword">new</span> <span class="title class_">User</span>(id, <span class="string">&quot;服务暂不可用&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h1 id="-2"><a href="#-2" class="headerlink" title=""></a></h1><h2 id="五、拦截器"><a href="#五、拦截器" class="headerlink" title="五、拦截器"></a>五、拦截器</h2><h3 id="5-1-传递认证Token"><a href="#5-1-传递认证Token" class="headerlink" title="5.1 传递认证Token"></a>5.1 传递认证Token</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">FeignAuthInterceptor</span> <span class="keyword">implements</span> <span class="title class_">RequestInterceptor</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">apply</span><span class="params">(RequestTemplate template)</span> &#123;</span><br><span class="line">        <span class="type">ServletRequestAttributes</span> <span class="variable">attrs</span> <span class="operator">=</span> (ServletRequestAttributes)</span><br><span class="line">            RequestContextHolder.getRequestAttributes();</span><br><span class="line">        <span class="keyword">if</span> (attrs != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="type">HttpServletRequest</span> <span class="variable">request</span> <span class="operator">=</span> attrs.getRequest();</span><br><span class="line">            <span class="type">String</span> <span class="variable">token</span> <span class="operator">=</span> request.getHeader(<span class="string">&quot;Authorization&quot;</span>);</span><br><span class="line">            <span class="keyword">if</span> (token != <span class="literal">null</span>) &#123;</span><br><span class="line">                template.header(<span class="string">&quot;Authorization&quot;</span>, token);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h1 id="-1"><a href="#-1" class="headerlink" title=""></a></h1><h2 id="五、拦截器"><a href="#五、拦截器" class="headerlink" title="五、拦截器"></a>五、拦截器</h2><h3 id="5-1-传递认证Token"><a href="#5-1-传递认证Token" class="headerlink" title="5.1 传递认证Token"></a>5.1 传递认证Token</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">FeignAuthInterceptor</span> <span class="keyword">implements</span> <span class="title class_">RequestInterceptor</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">apply</span><span class="params">(RequestTemplate template)</span> &#123;</span><br><span class="line">        <span class="type">ServletRequestAttributes</span> <span class="variable">attrs</span> <span class="operator">=</span> (ServletRequestAttributes)</span><br><span class="line">            RequestContextHolder.getRequestAttributes();</span><br><span class="line">        <span class="keyword">if</span> (attrs != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="type">HttpServletRequest</span> <span class="variable">request</span> <span class="operator">=</span> attrs.getRequest();</span><br><span class="line">            <span class="type">String</span> <span class="variable">token</span> <span class="operator">=</span> request.getHeader(<span class="string">&quot;Authorization&quot;</span>);</span><br><span class="line">            <span class="keyword">if</span> (token != <span class="literal">null</span>) &#123;</span><br><span class="line">                template.header(<span class="string">&quot;Authorization&quot;</span>, token);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="5-2-传递链路追踪ID"><a href="#5-2-传递链路追踪ID" class="headerlink" title="5.2 传递链路追踪ID"></a>5.2 传递链路追踪ID</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">FeignTraceInterceptor</span> <span class="keyword">implements</span> <span class="title class_">RequestInterceptor</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">apply</span><span class="params">(RequestTemplate template)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">traceId</span> <span class="operator">=</span> MDC.get(<span class="string">&quot;traceId&quot;</span>);</span><br><span class="line">        <span class="keyword">if</span> (traceId != <span class="literal">null</span>) &#123;</span><br><span class="line">            template.header(<span class="string">&quot;X-Trace-Id&quot;</span>, traceId);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h1 id="-3"><a href="#-3" class="headerlink" title=""></a></h1><h2 id="六、负载均衡"><a href="#六、负载均衡" class="headerlink" title="六、负载均衡"></a>六、负载均衡</h2><h3 id="6-1-负载均衡架构"><a href="#6-1-负载均衡架构" class="headerlink" title="6.1 负载均衡架构"></a>6.1 负载均衡架构</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">        负载均衡工作流程</span><br><span class="line">┌──────────┐     ┌──────────────┐     ┌──────────┐</span><br><span class="line">│ Feign    │────&gt;│ LoadBalancer │────&gt;│ 实例选择  │</span><br><span class="line">│ Client   │     │ Client       │     │          │</span><br><span class="line">└──────────┘     └──────┬───────┘     └──────────┘</span><br><span class="line">                        │</span><br><span class="line">                ┌───────▼───────┐</span><br><span class="line">                │ ServiceInst-  │</span><br><span class="line">                │ anceListSup-  │</span><br><span class="line">                │ plier         │</span><br><span class="line">                └───────┬───────┘</span><br><span class="line">            ┌───────────┼───────────┐</span><br><span class="line">            │           │           │</span><br><span class="line">       ┌────▼───┐  ┌───▼────┐  ┌──▼─────┐</span><br><span class="line">       │ Nacos  │  │ Consul │  │ Eureka │</span><br><span class="line">       └────────┘  └────────┘  └────────┘</span><br></pre></td></tr></table></figure>
+<h1 id="-2"><a href="#-2" class="headerlink" title=""></a></h1><h2 id="六、负载均衡"><a href="#六、负载均衡" class="headerlink" title="六、负载均衡"></a>六、负载均衡</h2><h3 id="6-1-负载均衡架构"><a href="#6-1-负载均衡架构" class="headerlink" title="6.1 负载均衡架构"></a>6.1 负载均衡架构</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;Feign&quot;]</span><br><span class="line">    N2[&quot;ServiceInst-&quot;]</span><br><span class="line">    N3[&quot;anceListSup- plier&quot;]</span><br><span class="line">    N4[&quot;LoadBalancer&quot;]</span><br><span class="line">    N5[&quot;实例选择 Client Client&quot;]</span><br><span class="line">    N6[&quot;Nacos Consul Eureka&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N4 --&gt; N2</span><br><span class="line">    N4 --&gt; N3</span><br><span class="line">    N5 --&gt; N2</span><br><span class="line">    N5 --&gt; N3</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="负载均衡策略对比表"><a href="#负载均衡策略对比表" class="headerlink" title="负载均衡策略对比表"></a>负载均衡策略对比表</h3><table>
 <thead>
@@ -320,7 +322,8 @@ article: http://ogp.me/ns/article#">
 </tbody></table>
 <h3 id="6-2-同集群优先"><a href="#6-2-同集群优先" class="headerlink" title="6.2 同集群优先"></a>6.2 同集群优先</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SameClusterPriorityConfig</span> &#123;</span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;spring.cloud.nacos.discovery.cluster-name&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> String currentCluster;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Bean</span></span><br><span class="line">    <span class="keyword">public</span> ServiceInstanceListSupplier <span class="title function_">sameClusterPriority</span><span class="params">(</span></span><br><span class="line"><span class="params">            ConfigurableApplicationContext context)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> ServiceInstanceListSupplier.builder()</span><br><span class="line">            .withDiscoveryClient()</span><br><span class="line">            .withHealthChecks()</span><br><span class="line">            .withCaching()</span><br><span class="line">            .build(context);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h1 id="-4"><a href="#-4" class="headerlink" title=""></a></h1><h2 id="七、OpenFeign源码分析"><a href="#七、OpenFeign源码分析" class="headerlink" title="七、OpenFeign源码分析"></a>七、OpenFeign源码分析</h2><h3 id="7-1-Feign工作原理"><a href="#7-1-Feign工作原理" class="headerlink" title="7.1 Feign工作原理"></a>7.1 Feign工作原理</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">    OpenFeign请求处理流程</span><br><span class="line">┌──────────┐</span><br><span class="line">│ 业务代码  │</span><br><span class="line">└─────┬────┘</span><br><span class="line">      │</span><br><span class="line">┌─────▼────────┐</span><br><span class="line">│ 动态代理      │  ReflectiveFeign.FeignInvocationHandler</span><br><span class="line">│ (JDK Proxy)  │</span><br><span class="line">└─────┬────────┘</span><br><span class="line">      │</span><br><span class="line">┌─────▼────────┐</span><br><span class="line">│ Synchronous- │  1. 编码Request</span><br><span class="line">│ MethodHandler│  2. 拦截器处理</span><br><span class="line">│              │  3. 负载均衡选择实例</span><br><span class="line">└─────┬────────┘  4. 发送HTTP请求</span><br><span class="line">      │           5. 解码Response</span><br><span class="line">┌─────▼────────┐</span><br><span class="line">│ LoadBalancer │  选择服务实例</span><br><span class="line">│ Client       │</span><br><span class="line">└─────┬────────┘</span><br><span class="line">      │</span><br><span class="line">┌─────▼────────┐</span><br><span class="line">│ HTTP Client  │  底层HTTP客户端</span><br><span class="line">│ (默认/OkHttp)│</span><br><span class="line">└──────────────┘</span><br></pre></td></tr></table></figure>
+<h1 id="-3"><a href="#-3" class="headerlink" title=""></a></h1><h2 id="七、OpenFeign源码分析"><a href="#七、OpenFeign源码分析" class="headerlink" title="七、OpenFeign源码分析"></a>七、OpenFeign源码分析</h2><h3 id="7-1-Feign工作原理"><a href="#7-1-Feign工作原理" class="headerlink" title="7.1 Feign工作原理"></a>7.1 Feign工作原理</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;业务代码&quot;]</span><br><span class="line">    N2[&quot;动态代理&quot;]</span><br><span class="line">    N3[&quot;ReflectiveFeign.FeignInvocationHandler&quot;]</span><br><span class="line">    N4[&quot;(JDK Proxy)&quot;]</span><br><span class="line">    N5[&quot;Synchronous- 1.&quot;]</span><br><span class="line">    N6[&quot;编码Request&quot;]</span><br><span class="line">    N7[&quot;MethodHandler 2.&quot;]</span><br><span class="line">    N8[&quot;拦截器处理 3. 负载均衡选择实例&quot;]</span><br><span class="line">    N9[&quot;LoadBalancer 选择服务实例&quot;]</span><br><span class="line">    N10[&quot;Client&quot;]</span><br><span class="line">    N11[&quot;HTTP Client 底层HTTP客户端 (默认&quot;]</span><br><span class="line">    N12[&quot;OkHttp)&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N2 --&gt; N7</span><br><span class="line">    N2 --&gt; N8</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N3 --&gt; N7</span><br><span class="line">    N3 --&gt; N8</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N4 --&gt; N8</span><br><span class="line">    N5 --&gt; N9</span><br><span class="line">    N5 --&gt; N10</span><br><span class="line">    N6 --&gt; N9</span><br><span class="line">    N6 --&gt; N10</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line">    N7 --&gt; N10</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line">    N8 --&gt; N10</span><br><span class="line">    N9 --&gt; N11</span><br><span class="line">    N9 --&gt; N12</span><br><span class="line">    N10 --&gt; N11</span><br><span class="line">    N10 --&gt; N12</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="7-2-Feign核心源码"><a href="#7-2-Feign核心源码" class="headerlink" title="7.2 Feign核心源码"></a>7.2 Feign核心源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// FeignClientsRegistrar - 扫描@FeignClient接口注册为Bean</span></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">FeignClientsRegistrar</span> <span class="keyword">implements</span> <span class="title class_">ImportBeanDefinitionRegistrar</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">registerBeanDefinitions</span><span class="params">(AnnotationMetadata metadata,</span></span><br><span class="line"><span class="params">            BeanDefinitionRegistry registry)</span> &#123;</span><br><span class="line">        registerDefaultConfiguration(metadata, registry);</span><br><span class="line">        registerFeignClients(metadata, registry);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// FeignClientFactoryBean - 创建Feign动态代理</span></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">FeignClientFactoryBean</span> <span class="keyword">implements</span> <span class="title class_">FactoryBean</span>&lt;Object&gt; &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">getObject</span><span class="params">()</span> <span class="keyword">throws</span> Exception &#123;</span><br><span class="line">        <span class="type">FeignContext</span> <span class="variable">context</span> <span class="operator">=</span> applicationContext.getBean(FeignContext.class);</span><br><span class="line">        Feign.<span class="type">Builder</span> <span class="variable">builder</span> <span class="operator">=</span> feign(context);</span><br><span class="line">        <span class="keyword">return</span> builder.target(target);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// SynchronousMethodHandler - 执行请求</span></span><br><span class="line"><span class="keyword">class</span> <span class="title class_">SynchronousMethodHandler</span> <span class="keyword">implements</span> <span class="title class_">MethodHandler</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">invoke</span><span class="params">(Object[] argv)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="type">RequestTemplate</span> <span class="variable">template</span> <span class="operator">=</span> buildTemplateFromArgs.create(argv);</span><br><span class="line">        <span class="type">Options</span> <span class="variable">options</span> <span class="operator">=</span> findOptions(argv);</span><br><span class="line">        <span class="type">Retryer</span> <span class="variable">retryer</span> <span class="operator">=</span> <span class="built_in">this</span>.retryer.clone();</span><br><span class="line">        <span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                <span class="keyword">return</span> executeAndDecode(template, options);</span><br><span class="line">            &#125; <span class="keyword">catch</span> (RetryableException e) &#123;</span><br><span class="line">                retryer.continueOrPropagate(e);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
@@ -442,9 +445,26 @@ article: http://ogp.me/ns/article#">
 </tbody></table>
 <h2 id="十、Feign接口设计规范"><a href="#十、Feign接口设计规范" class="headerlink" title="十、Feign接口设计规范"></a>十、Feign接口设计规范</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 反例：接口过于通用</span></span><br><span class="line"><span class="meta">@FeignClient(name = &quot;mine-service&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">MineClient</span> &#123;</span><br><span class="line">    <span class="meta">@GetMapping(&quot;/api/get&quot;)</span></span><br><span class="line">    Object <span class="title function_">getData</span><span class="params">(<span class="meta">@RequestParam</span> String type, <span class="meta">@RequestParam</span> String id)</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 正例：接口职责单一，返回值明确</span></span><br><span class="line"><span class="meta">@FeignClient(name = &quot;mine-device&quot;, fallbackFactory = DeviceClientFallbackFactory.class)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">DeviceClient</span> &#123;</span><br><span class="line">    <span class="meta">@GetMapping(&quot;/device/&#123;deviceId&#125;/status&quot;)</span></span><br><span class="line">    Result&lt;DeviceStatus&gt; <span class="title function_">getDeviceStatus</span><span class="params">(<span class="meta">@PathVariable(&quot;deviceId&quot;)</span> String deviceId)</span>;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@GetMapping(&quot;/device/list&quot;)</span></span><br><span class="line">    Result&lt;List&lt;DeviceVO&gt;&gt; <span class="title function_">listDevicesByArea</span><span class="params">(<span class="meta">@RequestParam(&quot;areaId&quot;)</span> String areaId)</span>;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@PostMapping(&quot;/device/&#123;deviceId&#125;/command&quot;)</span></span><br><span class="line">    Result&lt;Void&gt; <span class="title function_">sendCommand</span><span class="params">(<span class="meta">@PathVariable(&quot;deviceId&quot;)</span> String deviceId,</span></span><br><span class="line"><span class="params">                             <span class="meta">@RequestBody</span> DeviceCommand command)</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h1 id="-5"><a href="#-5" class="headerlink" title=""></a></h1><h2 id="十一、Feign调用监控"><a href="#十一、Feign调用监控" class="headerlink" title="十一、Feign调用监控"></a>十一、Feign调用监控</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">    Feign监控指标体系</span><br><span class="line">┌──────────────────────────────────────────┐</span><br><span class="line">│            Feign监控指标                  │</span><br><span class="line">├──────────────────────────────────────────┤</span><br><span class="line">│  调用次数 (Counter)                       │</span><br><span class="line">│  ├── 按服务统计                           │</span><br><span class="line">│  └── 按接口统计                           │</span><br><span class="line">│                                          │</span><br><span class="line">│  响应时间 (Histogram)                     │</span><br><span class="line">│  ├── P50 / P95 / P99                     │</span><br><span class="line">│  └── 按服务分组                           │</span><br><span class="line">│                                          │</span><br><span class="line">│  错误率 (Gauge)                           │</span><br><span class="line">│  ├── 4xx错误                             │</span><br><span class="line">│  └── 5xx错误                             │</span><br><span class="line">│                                          │</span><br><span class="line">│  熔断状态 (State)                         │</span><br><span class="line">│  ├── CLOSED / OPEN / HALF_OPEN           │</span><br><span class="line">│  └── 按服务分组                           │</span><br><span class="line">│                                          │</span><br><span class="line">│  降级次数 (Counter)                       │</span><br><span class="line">│  └── 按服务+接口统计                      │</span><br><span class="line">└──────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h1 id="-6"><a href="#-6" class="headerlink" title=""></a></h1><h2 id="十二、面试高频问题"><a href="#十二、面试高频问题" class="headerlink" title="十二、面试高频问题"></a>十二、面试高频问题</h2><h3 id="1-OpenFeign和RestTemplate的区别？"><a href="#1-OpenFeign和RestTemplate的区别？" class="headerlink" title="1. OpenFeign和RestTemplate的区别？"></a>1. OpenFeign和RestTemplate的区别？</h3><p>OpenFeign是声明式调用，通过接口+注解定义远程调用；RestTemplate是编程式调用，需要手动拼接URL。OpenFeign更优雅，内置负载均衡和降级机制。</p>
+<h1 id="-4"><a href="#-4" class="headerlink" title=""></a></h1><h2 id="十一、Feign调用监控"><a href="#十一、Feign调用监控" class="headerlink" title="十一、Feign调用监控"></a>十一、Feign调用监控</h2><p><strong>Feign监控指标</strong>：</p>
+<p><strong>调用次数 (Counter)</strong>：</p>
+<p><strong>└── 按接口统计</strong>：</p>
+<ul>
+<li>响应时间 (Histogram)</li>
+</ul>
+<p><strong>└── 按服务分组</strong>：</p>
+<ul>
+<li>错误率 (Gauge)</li>
+</ul>
+<p><strong>└── 5xx错误</strong>：</p>
+<ul>
+<li>熔断状态 (State)</li>
+</ul>
+<p><strong>└── 按服务分组</strong>：</p>
+<ul>
+<li>降级次数 (Counter)</li>
+<li>└── 按服务+接口统计</li>
+</ul>
+<h1 id="-5"><a href="#-5" class="headerlink" title=""></a></h1><h2 id="十二、面试高频问题"><a href="#十二、面试高频问题" class="headerlink" title="十二、面试高频问题"></a>十二、面试高频问题</h2><h3 id="1-OpenFeign和RestTemplate的区别？"><a href="#1-OpenFeign和RestTemplate的区别？" class="headerlink" title="1. OpenFeign和RestTemplate的区别？"></a>1. OpenFeign和RestTemplate的区别？</h3><p>OpenFeign是声明式调用，通过接口+注解定义远程调用；RestTemplate是编程式调用，需要手动拼接URL。OpenFeign更优雅，内置负载均衡和降级机制。</p>
 <h3 id="2-Fallback和FallbackFactory的区别？"><a href="#2-Fallback和FallbackFactory的区别？" class="headerlink" title="2. Fallback和FallbackFactory的区别？"></a>2. Fallback和FallbackFactory的区别？</h3><p>Fallback无法获取异常信息，FallbackFactory可以获取异常原因，推荐使用FallbackFactory。</p>
 <h3 id="3-如何传递认证Token？"><a href="#3-如何传递认证Token？" class="headerlink" title="3. 如何传递认证Token？"></a>3. 如何传递认证Token？</h3><p>通过RequestInterceptor，从RequestContextHolder获取当前请求的Token，设置到Feign请求头中。</p>
 <h3 id="4-Sentinel熔断的三个状态？"><a href="#4-Sentinel熔断的三个状态？" class="headerlink" title="4. Sentinel熔断的三个状态？"></a>4. Sentinel熔断的三个状态？</h3><p>CLOSED（正常放行）-&gt; OPEN（熔断拒绝）-&gt; HALF_OPEN（半开放行探测请求）。</p>
@@ -578,11 +598,12 @@ article: http://ogp.me/ns/article#">
 </tr>
 </tbody></table>
 <h2 id="十五、总结"><a href="#十五、总结" class="headerlink" title="十五、总结"></a>十五、总结</h2><p>OpenFeign让微服务调用变得简单优雅。实战后，核心认知是：<strong>声明式调用比RestTemplate更优雅，FallbackFactory比Fallback更实用，RequestInterceptor解决上下文传递</strong>。在实际场景中，微服务调用的三个关键更加突出：超时配置要区分服务级别，降级熔断要区分安全等级，链路传递要确保完整。安全服务的调用绝对不能降级，这是底线。</p>
-<h2 id="十六、Feign调用链路追踪"><a href="#十六、Feign调用链路追踪" class="headerlink" title="十六、Feign调用链路追踪"></a>十六、Feign调用链路追踪</h2><h3 id="分布式链路追踪架构"><a href="#分布式链路追踪架构" class="headerlink" title="分布式链路追踪架构"></a>分布式链路追踪架构</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────┐</span><br><span class="line">│              分布式链路追踪架构                     │</span><br><span class="line">│                                                  │</span><br><span class="line">│  Gateway ──► ServiceA ──► ServiceB ──► ServiceC  │</span><br><span class="line">│     │          │           │           │          │</span><br><span class="line">│     ▼          ▼           ▼           ▼          │</span><br><span class="line">│  ┌─────────────────────────────────────────┐     │</span><br><span class="line">│  │           SkyWalking / Zipkin            │     │</span><br><span class="line">│  │           链路追踪采集中心                 │     │</span><br><span class="line">│  └─────────────────────────────────────────┘     │</span><br><span class="line">│                                                  │</span><br><span class="line">│  关键Header：                                     │</span><br><span class="line">│  X-Trace-Id: 全局唯一追踪ID                       │</span><br><span class="line">│  X-Span-Id: 当前跨度ID                           │</span><br><span class="line">│  X-Parent-Span-Id: 父跨度ID                      │</span><br><span class="line">└──────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h2 id="十六、Feign调用链路追踪"><a href="#十六、Feign调用链路追踪" class="headerlink" title="十六、Feign调用链路追踪"></a>十六、Feign调用链路追踪</h2><h3 id="分布式链路追踪架构"><a href="#分布式链路追踪架构" class="headerlink" title="分布式链路追踪架构"></a>分布式链路追踪架构</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;SkyWalking&quot;]</span><br><span class="line">    N2[&quot;Zipkin 链路追踪采集中心&quot;]</span><br><span class="line">    N3[&quot;十七&quot;]</span><br><span class="line">    N4[&quot;Feign与Spring Cloud Gateway集成&quot;]</span><br><span class="line">    N2 --&gt; N1</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h1 id="-7"><a href="#-7" class="headerlink" title=""></a></h1><h2 id="十七、Feign与Spring-Cloud-Gateway集成"><a href="#十七、Feign与Spring-Cloud-Gateway集成" class="headerlink" title="十七、Feign与Spring Cloud Gateway集成"></a>十七、Feign与Spring Cloud Gateway集成</h2><h3 id="Gateway-Feign调用链路"><a href="#Gateway-Feign调用链路" class="headerlink" title="Gateway + Feign调用链路"></a>Gateway + Feign调用链路</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">客户端请求流程：</span><br><span class="line"></span><br><span class="line">Client ──► Gateway ──► ServiceA (Feign) ──► ServiceB</span><br><span class="line"></span><br><span class="line">Gateway职责：</span><br><span class="line">1. 路由转发</span><br><span class="line">2. 认证鉴权</span><br><span class="line">3. 限流熔断</span><br><span class="line">4. 链路追踪</span><br><span class="line">5. 日志记录</span><br><span class="line"></span><br><span class="line">Feign职责：</span><br><span class="line">1. 服务间声明式调用</span><br><span class="line">2. 负载均衡</span><br><span class="line">3. 降级熔断</span><br><span class="line">4. 重试机制</span><br></pre></td></tr></table></figure>
+<h3 id="Gateway-Feign调用链路"><a href="#Gateway-Feign调用链路" class="headerlink" title="Gateway + Feign调用链路"></a>Gateway + Feign调用链路</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">客户端请求流程：</span><br><span class="line"></span><br><span class="line">Client ──► Gateway ──► ServiceA (Feign) ──► ServiceB</span><br><span class="line"></span><br><span class="line">Gateway职责：</span><br><span class="line">1. 路由转发</span><br><span class="line">2. 认证鉴权</span><br><span class="line">3. 限流熔断</span><br><span class="line">4. 链路追踪</span><br><span class="line">5. 日志记录</span><br><span class="line"></span><br><span class="line">Feign职责：</span><br><span class="line">1. 服务间声明式调用</span><br><span class="line">2. 负载均衡</span><br><span class="line">3. 降级熔断</span><br><span class="line">4. 重试机制</span><br></pre></td></tr></table></figure>
 
-<h1 id="-8"><a href="#-8" class="headerlink" title=""></a></h1><h2 id="十八、Feign安全最佳实践"><a href="#十八、Feign安全最佳实践" class="headerlink" title="十八、Feign安全最佳实践"></a>十八、Feign安全最佳实践</h2><h3 id="服务间认证"><a href="#服务间认证" class="headerlink" title="服务间认证"></a>服务间认证</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">服务间认证方案：</span><br><span class="line"></span><br><span class="line">方案1：Token传递（当前方案）</span><br><span class="line">Gateway签发Token -&gt; 各服务传递Token -&gt; 下游验证Token</span><br><span class="line"></span><br><span class="line">方案2：内部OAuth2</span><br><span class="line">服务间使用client_credentials模式获取Token</span><br><span class="line"></span><br><span class="line">方案3：mTLS（双向TLS）</span><br><span class="line">服务间通信使用证书认证</span><br><span class="line"></span><br><span class="line">智慧矿山选择：方案1（Token传递）</span><br><span class="line">原因：实现简单，满足当前安全需求</span><br></pre></td></tr></table></figure>
+<h1 id="-6"><a href="#-6" class="headerlink" title=""></a></h1><h2 id="十八、Feign安全最佳实践"><a href="#十八、Feign安全最佳实践" class="headerlink" title="十八、Feign安全最佳实践"></a>十八、Feign安全最佳实践</h2><h3 id="服务间认证"><a href="#服务间认证" class="headerlink" title="服务间认证"></a>服务间认证</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">服务间认证方案：</span><br><span class="line"></span><br><span class="line">方案1：Token传递（当前方案）</span><br><span class="line">Gateway签发Token -&gt; 各服务传递Token -&gt; 下游验证Token</span><br><span class="line"></span><br><span class="line">方案2：内部OAuth2</span><br><span class="line">服务间使用client_credentials模式获取Token</span><br><span class="line"></span><br><span class="line">方案3：mTLS（双向TLS）</span><br><span class="line">服务间通信使用证书认证</span><br><span class="line"></span><br><span class="line">智慧矿山选择：方案1（Token传递）</span><br><span class="line">原因：实现简单，满足当前安全需求</span><br></pre></td></tr></table></figure>
 
 <h3 id="敏感数据保护"><a href="#敏感数据保护" class="headerlink" title="敏感数据保护"></a>敏感数据保护</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Feign日志脱敏</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">FeignLogInterceptor</span> <span class="keyword">implements</span> <span class="title class_">RequestInterceptor</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">apply</span><span class="params">(RequestTemplate template)</span> &#123;</span><br><span class="line">        <span class="comment">// 日志中脱敏敏感Header</span></span><br><span class="line">        template.headers().remove(<span class="string">&quot;Authorization&quot;</span>);</span><br><span class="line">        template.header(<span class="string">&quot;X-Auth-Masked&quot;</span>, <span class="string">&quot;****&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
@@ -784,14 +805,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
                         2023
-                        <span>(68)</span>
+                        <span>(61)</span>
                     </a>
                 </div>
             
@@ -957,7 +978,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

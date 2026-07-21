@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2023-09-17T09:17:00.000Z">
   <article class="post">
     <h1 class="post-title">Nacos集群部署与数据持久化——生产环境高可用</h1>
 
@@ -208,7 +208,8 @@ article: http://ogp.me/ns/article#">
     <div class="post-content">
       <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>在实际场景中，开发环境单机Nacos够用，但生产环境必须集群部署。2023年从单机迁移到3节点集群，踩了不少坑：数据持久化、节点间通信、VIP配置、gRPC端口遗漏等。特别是矿井恶劣的网络环境下，集群稳定性面临更大挑战。本文系统梳理Nacos集群部署和数据持久化的完整方案。</p>
 <hr>
-<h2 id="Nacos集群架构"><a href="#Nacos集群架构" class="headerlink" title="Nacos集群架构"></a>Nacos集群架构</h2><h3 id="集群架构全景图"><a href="#集群架构全景图" class="headerlink" title="集群架构全景图"></a>集群架构全景图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                     智慧矿山生产环境 Nacos 集群                    │</span><br><span class="line">├──────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                  │</span><br><span class="line">│                     ┌── Nginx (VIP) ──┐                         │</span><br><span class="line">│                     │   192.168.1.200  │                         │</span><br><span class="line">│                     └────────┬─────────┘                         │</span><br><span class="line">│                              │                                   │</span><br><span class="line">│            ┌─────────────────┼─────────────────┐                │</span><br><span class="line">│            ▼                 ▼                 ▼                │</span><br><span class="line">│      ┌────────────┐  ┌────────────┐  ┌────────────┐            │</span><br><span class="line">│      │  Nacos-1   │  │  Nacos-2   │  │  Nacos-3   │            │</span><br><span class="line">│      │ 192.168.1  │  │ 192.168.2  │  │ 192.168.3  │            │</span><br><span class="line">│      │  :8848     │  │  :8848     │  │  :8848     │            │</span><br><span class="line">│      │  :9848     │  │  :9848     │  │  :9848     │            │</span><br><span class="line">│      │  :9849     │  │  :9849     │  │  :9849     │            │</span><br><span class="line">│      └─────┬──────┘  └─────┬──────┘  └─────┬──────┘            │</span><br><span class="line">│            │               │               │                    │</span><br><span class="line">│            │    Raft选举+数据复制            │                    │</span><br><span class="line">│            └───────────────┼───────────────┘                    │</span><br><span class="line">│                            ▼                                    │</span><br><span class="line">│                    ┌──────────────┐                             │</span><br><span class="line">│                    │  MySQL 主从   │                             │</span><br><span class="line">│                    │ .1.200:3306  │                             │</span><br><span class="line">│                    └──────────────┘                             │</span><br><span class="line">│                                                                  │</span><br><span class="line">│  客户端服务：                                                     │</span><br><span class="line">│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │</span><br><span class="line">│  │矿车调度   │  │设备监控   │  │瓦斯预警   │  │人员定位   │      │</span><br><span class="line">│  │  服务     │  │  服务     │  │  服务     │  │  服务     │      │</span><br><span class="line">│  └──────────┘  └──────────┘  └──────────┘  └──────────┘      │</span><br><span class="line">│                                                                  │</span><br><span class="line">└──────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h2 id="Nacos集群架构"><a href="#Nacos集群架构" class="headerlink" title="Nacos集群架构"></a>Nacos集群架构</h2><h3 id="集群架构全景图"><a href="#集群架构全景图" class="headerlink" title="集群架构全景图"></a>集群架构全景图</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;智慧矿山生产环境 Nacos 集群&quot;]</span><br><span class="line">    N2[&quot;192.168.1.200&quot;]</span><br><span class="line">    N3[&quot;8848&quot;]</span><br><span class="line">    N4[&quot;9848&quot;]</span><br><span class="line">    N5[&quot;9849&quot;]</span><br><span class="line">    N6[&quot;MySQL 主从 .1.200&quot;]</span><br><span class="line">    N7[&quot;3306&quot;]</span><br><span class="line">    N8[&quot;矿车调度 设备监控 瓦斯预警 人员定位&quot;]</span><br><span class="line">    N9[&quot;服务 服务 服务 服务&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N4 --&gt; N3</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N5 --&gt; N3</span><br><span class="line">    N5 --&gt; N4</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N3 --&gt; N7</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N6 --&gt; N9</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="端口规划"><a href="#端口规划" class="headerlink" title="端口规划"></a>端口规划</h3><table>
 <thead>
@@ -238,11 +239,29 @@ article: http://ogp.me/ns/article#">
 <td>8848+1001，2.x新增</td>
 </tr>
 </tbody></table>
-<h3 id="集群节点角色"><a href="#集群节点角色" class="headerlink" title="集群节点角色"></a>集群节点角色</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">┌────────────────────────────────────────────────┐</span><br><span class="line">│            Raft 协议节点角色                     │</span><br><span class="line">├──────────┬─────────────────────────────────────┤</span><br><span class="line">│ Leader   │ 处理写请求，复制数据到Follower        │</span><br><span class="line">│ Follower │ 接受Leader数据复制，处理读请求        │</span><br><span class="line">│ Candidate│ 选举过程中的候选人                    │</span><br><span class="line">└──────────┴─────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">选举流程：</span><br><span class="line">1. 节点启动 → 进入FOLLOWER状态</span><br><span class="line">2. 超时未收到心跳 → 转为CANDIDATE</span><br><span class="line">3. 发起投票 → 获得多数票 → 成为LEADER</span><br><span class="line">4. LEADER处理写请求 → 复制到FOLLOWER</span><br><span class="line"></span><br><span class="line">读写规则：</span><br><span class="line">- 写请求：只有Leader处理 → 复制到多数节点 → 返回成功</span><br><span class="line">- 读请求：任意节点处理（可能读到旧数据）</span><br><span class="line"></span><br><span class="line">节点数量建议：3个或5个（奇数）</span><br></pre></td></tr></table></figure>
-
-<h3 id="单机-vs-集群架构对比"><a href="#单机-vs-集群架构对比" class="headerlink" title="单机 vs 集群架构对比"></a>单机 vs 集群架构对比</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    单机 vs 集群架构对比                            │</span><br><span class="line">├─────────────────────┬──────────────────────────────────────────┤</span><br><span class="line">│      单机模式        │              集群模式                    │</span><br><span class="line">├─────────────────────┼──────────────────────────────────────────┤</span><br><span class="line">│ 1个Nacos节点         │ 3个以上Nacos节点                        │</span><br><span class="line">│ 内嵌Derby存储        │ 外置MySQL存储                           │</span><br><span class="line">│ 无选举机制           │ Raft选举Leader                          │</span><br><span class="line">│ 单点故障风险         │ 任意节点宕机不影响                      │</span><br><span class="line">│ 适合开发/测试        │ 适合生产环境                            │</span><br><span class="line">│ 零配置启动           │ 需配置cluster.conf/MySQL               │</span><br><span class="line">│ 性能有限             │ 负载均衡分散压力                        │</span><br><span class="line">│ 无数据备份           │ MySQL主从+磁盘备份                      │</span><br><span class="line">└─────────────────────┴──────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">实际项目架构演进：</span><br><span class="line">开发阶段：单机Nacos → 满足开发调试需求</span><br><span class="line">测试阶段：单机Nacos → 偶尔重启影响测试</span><br><span class="line">预发阶段：2节点Nacos → 验证集群部署方案</span><br><span class="line">生产阶段：3节点Nacos + MySQL主从 + Nginx → 高可用</span><br><span class="line"></span><br><span class="line">**## 集群部署步骤**</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">### 2. Nacos配置</span><br><span class="line"></span><br><span class="line">```properties</span><br><span class="line"># application.properties</span><br><span class="line">server.port=8848</span><br><span class="line">spring.datasource.platform=mysql</span><br><span class="line">db.num=1</span><br><span class="line">db.url.0=jdbc:mysql://192.168.1.200:3306/nacos_config?characterEncoding=utf8&amp;connectTimeout=1000&amp;socketTimeout=3000&amp;autoReconnect=true&amp;useSSL=false</span><br><span class="line">db.user.0=nacos</span><br><span class="line">db.password.0=nacos_pwd</span><br><span class="line"></span><br><span class="line">nacos.naming.empty-service.auto-clean=true</span><br><span class="line">nacos.naming.empty-service.clean.initial-delay-ms=50000</span><br><span class="line">nacos.naming.empty-service.clean.period-ms=30000</span><br><span class="line"></span><br><span class="line"># 鉴权配置（生产必须开启）</span><br><span class="line">nacos.core.auth.enabled=true</span><br><span class="line">nacos.core.auth.plugin.nacos.token.secret.key=SecretKey012345678901234567890123456789012345678901234567890123456789</span><br><span class="line">nacos.core.auth.server.identity.key=serverIdentity</span><br><span class="line">nacos.core.auth.server.identity.value=security</span><br><span class="line"></span><br><span class="line"># 鉴权原理：</span><br><span class="line"># 1. 用户名密码登录 → 获取accessToken</span><br><span class="line"># 2. 后续请求携带accessToken</span><br><span class="line"># 3. Server端拦截器校验token</span><br><span class="line"># 4. Server间内部通信使用serverIdentity验证</span><br></pre></td></tr></table></figure>
-
-<h3 id="3-集群配置"><a href="#3-集群配置" class="headerlink" title="3. 集群配置"></a>3. 集群配置</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># cluster.conf（每个节点都要配置）</span></span><br><span class="line">192.168.1.100:8848</span><br><span class="line">192.168.1.101:8848</span><br><span class="line">192.168.1.102:8848</span><br><span class="line"></span><br><span class="line"><span class="comment"># 注意：不能使用127.0.0.1或localhost</span></span><br><span class="line"><span class="comment"># 必须使用实际IP地址</span></span><br><span class="line"><span class="comment"># 确保节点间网络互通</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># cluster.conf加载原理</span></span><br><span class="line"><span class="comment"># 1. Nacos启动时读取cluster.conf</span></span><br><span class="line"><span class="comment"># 2. 解析为Member列表</span></span><br><span class="line"><span class="comment"># 3. 与其他节点建立gRPC连接</span></span><br><span class="line"><span class="comment"># 4. 如果cluster.conf为空，以单机模式启动</span></span><br></pre></td></tr></table></figure>
+<h3 id="集群节点角色"><a href="#集群节点角色" class="headerlink" title="集群节点角色"></a>集群节点角色</h3><p><strong>Raft 协议节点角色</strong>：</p>
+<p><strong>Leader    处理写请求，复制数据到Follower</strong>：</p>
+<ul>
+<li>Follower  接受Leader数据复制，处理读请求</li>
+<li>Candidate 选举过程中的候选人</li>
+</ul>
+<h3 id="单机-vs-集群架构对比"><a href="#单机-vs-集群架构对比" class="headerlink" title="单机 vs 集群架构对比"></a>单机 vs 集群架构对比</h3><p><strong>单机 vs 集群架构对比</strong>：</p>
+<p><strong>单机模式                      集群模式</strong>：</p>
+<p><strong>1个Nacos节点          3个以上Nacos节点</strong>：</p>
+<ul>
+<li>内嵌Derby存储         外置MySQL存储</li>
+<li>无选举机制            Raft选举Leader</li>
+<li>单点故障风险          任意节点宕机不影响</li>
+<li>适合开发&#x2F;测试         适合生产环境</li>
+<li>零配置启动            需配置cluster.conf&#x2F;MySQL</li>
+<li>性能有限              负载均衡分散压力</li>
+<li>无数据备份            MySQL主从+磁盘备份</li>
+</ul>
+<p>properties</p>
+<h1 id="application-properties"><a href="#application-properties" class="headerlink" title="application.properties"></a>application.properties</h1><p>server.port&#x3D;8848<br>spring.datasource.platform&#x3D;mysql<br>db.num&#x3D;1<br>db.url.0&#x3D;jdbc:mysql:&#x2F;&#x2F;192.168.1.200:3306&#x2F;nacos_config?characterEncoding&#x3D;utf8&amp;connectTimeout&#x3D;1000&amp;socketTimeout&#x3D;3000&amp;autoReconnect&#x3D;true&amp;useSSL&#x3D;false<br>db.user.0&#x3D;nacos<br>db.password.0&#x3D;nacos_pwd</p>
+<p>nacos.naming.empty-service.auto-clean&#x3D;true<br>nacos.naming.empty-service.clean.initial-delay-ms&#x3D;50000<br>nacos.naming.empty-service.clean.period-ms&#x3D;30000</p>
+<h1 id="鉴权配置（生产必须开启）"><a href="#鉴权配置（生产必须开启）" class="headerlink" title="鉴权配置（生产必须开启）"></a>鉴权配置（生产必须开启）</h1><p>nacos.core.auth.enabled&#x3D;true<br>nacos.core.auth.plugin.nacos.token.secret.key&#x3D;SecretKey012345678901234567890123456789012345678901234567890123456789<br>nacos.core.auth.server.identity.key&#x3D;serverIdentity<br>nacos.core.auth.server.identity.value&#x3D;security</p>
+<h1 id="鉴权原理："><a href="#鉴权原理：" class="headerlink" title="鉴权原理："></a>鉴权原理：</h1><h1 id="1-用户名密码登录-→-获取accessToken"><a href="#1-用户名密码登录-→-获取accessToken" class="headerlink" title="1. 用户名密码登录 → 获取accessToken"></a>1. 用户名密码登录 → 获取accessToken</h1><h1 id="2-后续请求携带accessToken"><a href="#2-后续请求携带accessToken" class="headerlink" title="2. 后续请求携带accessToken"></a>2. 后续请求携带accessToken</h1><h1 id="3-Server端拦截器校验token"><a href="#3-Server端拦截器校验token" class="headerlink" title="3. Server端拦截器校验token"></a>3. Server端拦截器校验token</h1><h1 id="4-Server间内部通信使用serverIdentity验证"><a href="#4-Server间内部通信使用serverIdentity验证" class="headerlink" title="4. Server间内部通信使用serverIdentity验证"></a>4. Server间内部通信使用serverIdentity验证</h1><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">### 3. 集群配置</span><br><span class="line"></span><br><span class="line">```bash</span><br><span class="line"># cluster.conf（每个节点都要配置）</span><br><span class="line">192.168.1.100:8848</span><br><span class="line">192.168.1.101:8848</span><br><span class="line">192.168.1.102:8848</span><br><span class="line"></span><br><span class="line"># 注意：不能使用127.0.0.1或localhost</span><br><span class="line"># 必须使用实际IP地址</span><br><span class="line"># 确保节点间网络互通</span><br><span class="line"></span><br><span class="line"># cluster.conf加载原理</span><br><span class="line"># 1. Nacos启动时读取cluster.conf</span><br><span class="line"># 2. 解析为Member列表</span><br><span class="line"># 3. 与其他节点建立gRPC连接</span><br><span class="line"># 4. 如果cluster.conf为空，以单机模式启动</span><br></pre></td></tr></table></figure>
 
 <h3 id="4-JVM参数"><a href="#4-JVM参数" class="headerlink" title="4. JVM参数"></a>4. JVM参数</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 启动脚本中修改</span></span><br><span class="line"><span class="comment"># 实际项目：3个服务约200个实例，JVM参数如下</span></span><br><span class="line">JAVA_OPT=<span class="string">&quot;<span class="variable">$&#123;JAVA_OPT&#125;</span> -server -Xms2g -Xmx2g -Xmn1g&quot;</span></span><br><span class="line">JAVA_OPT=<span class="string">&quot;<span class="variable">$&#123;JAVA_OPT&#125;</span> -XX:+UseG1GC -XX:MaxGCPauseMillis=200&quot;</span></span><br><span class="line">JAVA_OPT=<span class="string">&quot;<span class="variable">$&#123;JAVA_OPT&#125;</span> -XX:+HeapDumpOnOutOfMemoryError&quot;</span></span><br><span class="line">JAVA_OPT=<span class="string">&quot;<span class="variable">$&#123;JAVA_OPT&#125;</span> -XX:HeapDumpPath=/data/nacos/logs/java_heapdump.hprof&quot;</span></span><br><span class="line">JAVA_OPT=<span class="string">&quot;<span class="variable">$&#123;JAVA_OPT&#125;</span> -Dnacos.standalone=false&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># JVM参数调优说明</span></span><br><span class="line"><span class="comment"># -Xms2g -Xmx2g: 堆内存2G，避免动态扩缩容</span></span><br><span class="line"><span class="comment"># -Xmn1g: 年轻代1G，减少Minor GC频率</span></span><br><span class="line"><span class="comment"># -XX:+UseG1GC: G1收集器，适合大堆</span></span><br><span class="line"><span class="comment"># -XX:MaxGCPauseMillis=200: 目标GC停顿200ms</span></span><br><span class="line"><span class="comment"># 不同规模推荐：</span></span><br><span class="line"><span class="comment"># 小型（&lt;100实例）：1G堆</span></span><br><span class="line"><span class="comment"># 中型（100-500实例）：2G堆</span></span><br><span class="line"><span class="comment"># 大型（&gt;500实例）：4G堆</span></span><br></pre></td></tr></table></figure>
 
@@ -409,7 +428,7 @@ article: http://ogp.me/ns/article#">
     
       <div class="post-next">
         <span class="nav-label">下一篇</span>
-        <a href="/2023/09/24/2812cb93f17e/">消息队列选型指南——RabbitMQ vs RocketMQ vs Kafka</a>
+        <a href="/2023/10/08/d762d168fb9e/">MySQL Online DDL——大表加字段的正确姿势</a>
       </div>
     
   </nav>
@@ -505,14 +524,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
                         2023
-                        <span>(68)</span>
+                        <span>(61)</span>
                     </a>
                 </div>
             
@@ -678,7 +697,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

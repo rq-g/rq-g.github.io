@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2023-02-12T04:20:05.000Z">
   <article class="post">
     <h1 class="post-title">MyBatis源码分析——SqlSession执行流程全解析</h1>
 
@@ -209,8 +209,29 @@ article: http://ogp.me/ns/article#">
       <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
 <p>实际项目有一次线上事故：设备巡检接口偶发返回空数据，排查了两天都没定位到根因。最终通过深入MyBatis源码，逐行追踪SQL执行链路，才发现是TypeHandler在处理Date类型时因时区问题导致查询条件不匹配。这次经历让我意识到，只停留在”写Mapper接口+XML”的层面是不够的——必须深入MyBatis源码，理解SQL执行的完整链路，遇到问题才能快速定位。</p>
 <p>深入阅读MyBatis源码，从SqlSessionFactory创建到Mapper代理调用，从Executor缓存机制到StatementHandler SQL执行，从ParameterHandler参数映射到ResultSetHandler结果映射，每一步都有明确的设计意图。本文是实际项目实战与源码分析的完整总结。</p>
-<h2 id="MyBatis核心组件"><a href="#MyBatis核心组件" class="headerlink" title="MyBatis核心组件"></a>MyBatis核心组件</h2><h3 id="组件关系总览"><a href="#组件关系总览" class="headerlink" title="组件关系总览"></a>组件关系总览</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│                MyBatis 核心组件关系图                           │</span><br><span class="line">│                                                               │</span><br><span class="line">│  SqlSessionFactory                                           │</span><br><span class="line">│    └── SqlSession                                             │</span><br><span class="line">│          ├── MapperProxy (JDK动态代理)                        │</span><br><span class="line">│          │     └── MapperMethod                               │</span><br><span class="line">│          │           └── SqlSession.selectXxx()               │</span><br><span class="line">│          ├── Executor (SQL执行器)                             │</span><br><span class="line">│          │     ├── CachingExecutor (二级缓存装饰器)            │</span><br><span class="line">│          │     │     └── BaseExecutor (一级缓存)              │</span><br><span class="line">│          │     │           ├── SimpleExecutor                 │</span><br><span class="line">│          │     │           ├── ReuseExecutor                  │</span><br><span class="line">│          │     │           └── BatchExecutor                  │</span><br><span class="line">│          │     └── StatementHandler                           │</span><br><span class="line">│          │           ├── PreparedStatementHandler             │</span><br><span class="line">│          │           ├── SimpleStatementHandler               │</span><br><span class="line">│          │           └── CallableStatementHandler             │</span><br><span class="line">│          │                 ├── ParameterHandler               │</span><br><span class="line">│          │                 │     └── TypeHandler              │</span><br><span class="line">│          │                 └── ResultSetHandler               │</span><br><span class="line">│          │                       └── TypeHandler              │</span><br><span class="line">│          └── Transaction (事务)                               │</span><br><span class="line">│                                                               │</span><br><span class="line">│  Configuration (全局配置，贯穿所有组件)                         │</span><br><span class="line">│    ├── MappedStatement (每条SQL的完整描述)                     │</span><br><span class="line">│    ├── TypeHandlerRegistry (类型处理器注册表)                  │</span><br><span class="line">│    ├── TypeAliasRegistry (类型别名注册表)                      │</span><br><span class="line">│    ├── InterceptorChain (插件链)                              │</span><br><span class="line">│    └── MapperRegistry (Mapper接口注册表)                      │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="MyBatis核心组件"><a href="#MyBatis核心组件" class="headerlink" title="MyBatis核心组件"></a>MyBatis核心组件</h2><h3 id="组件关系总览"><a href="#组件关系总览" class="headerlink" title="组件关系总览"></a>组件关系总览</h3><p><strong>MyBatis 核心组件关系图</strong>：</p>
+<ul>
+<li>SqlSessionFactory</li>
+<li>└── SqlSession</li>
+</ul>
+<p><strong>└── MapperMethod</strong>：</p>
+<ul>
+<li>└── SqlSession.selectXxx()</li>
+</ul>
+<p><strong>└── BaseExecutor (一级缓存)</strong>：</p>
+<p><strong>└── BatchExecutor</strong>：</p>
+<ul>
+<li>└── StatementHandler</li>
+</ul>
+<p><strong>└── CallableStatementHandler</strong>：</p>
+<p><strong>└── TypeHandler</strong>：</p>
+<ul>
+<li>└── ResultSetHandler</li>
+<li>└── TypeHandler</li>
+<li>└── Transaction (事务)</li>
+<li>Configuration (全局配置，贯穿所有组件)</li>
+</ul>
+<p><strong>└── MapperRegistry (Mapper接口注册表)</strong>：</p>
 <h3 id="核心组件对照表"><a href="#核心组件对照表" class="headerlink" title="核心组件对照表"></a>核心组件对照表</h3><table>
 <thead>
 <tr>
@@ -271,16 +292,85 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="Mapper-XML解析源码"><a href="#Mapper-XML解析源码" class="headerlink" title="Mapper XML解析源码"></a>Mapper XML解析源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// XMLMapperBuilder.parse()</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">parse</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (!configuration.isResourceLoaded(resource)) &#123;</span><br><span class="line">        configurationElement(parser.evalNode(<span class="string">&quot;/mapper&quot;</span>));  <span class="comment">// 解析&lt;mapper&gt;</span></span><br><span class="line">        configuration.addLoadedResource(resource);</span><br><span class="line">        bindMapperForNamespace();  <span class="comment">// 绑定Mapper接口</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 解析待处理的节点（可能是因为引用了未解析的namespace）</span></span><br><span class="line">    parsePendingResultMaps();</span><br><span class="line">    parsePendingCacheRefs();</span><br><span class="line">    parsePendingStatements();</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">configurationElement</span><span class="params">(XNode context)</span> &#123;</span><br><span class="line">    <span class="type">String</span> <span class="variable">namespace</span> <span class="operator">=</span> context.getStringAttribute(<span class="string">&quot;namespace&quot;</span>);</span><br><span class="line">    <span class="keyword">if</span> (namespace == <span class="literal">null</span> || namespace.isEmpty()) &#123;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BuilderException</span>(<span class="string">&quot;Mapper&#x27;s namespace cannot be empty&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">    builderAssistant.setCurrentNamespace(namespace);</span><br><span class="line">    </span><br><span class="line">    cacheElement(context.evalNode(<span class="string">&quot;cache&quot;</span>));        <span class="comment">// &lt;cache&gt;</span></span><br><span class="line">    cacheRefElement(context.evalNode(<span class="string">&quot;cache-ref&quot;</span>)); <span class="comment">// &lt;cache-ref&gt;</span></span><br><span class="line">    resultMapElements(context.evalNodes(<span class="string">&quot;resultMap&quot;</span>)); <span class="comment">// &lt;resultMap&gt;</span></span><br><span class="line">    parameterMapElement(context.evalNodes(<span class="string">&quot;parameterMap&quot;</span>)); <span class="comment">// &lt;parameterMap&gt;</span></span><br><span class="line">    sqlElement(context.evalNodes(<span class="string">&quot;sql&quot;</span>));           <span class="comment">// &lt;sql&gt;</span></span><br><span class="line">    <span class="comment">// 核心：解析select/insert/update/delete</span></span><br><span class="line">    buildStatementFromContext(context.evalNodes(<span class="string">&quot;select|insert|update|delete&quot;</span>));</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 每个SQL标签被解析为MappedStatement</span></span><br><span class="line"><span class="comment">// MappedStatement = 一条SQL语句的完整描述</span></span><br><span class="line"><span class="comment">// 包含：ID、SQL文本(SqlSource)、参数映射、结果映射、缓存配置等</span></span><br></pre></td></tr></table></figure>
 
-<h3 id="MappedStatement构建过程"><a href="#MappedStatement构建过程" class="headerlink" title="MappedStatement构建过程"></a>MappedStatement构建过程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│            MappedStatement 构建过程                            │</span><br><span class="line">│                                                               │</span><br><span class="line">│  XML: &lt;select id=&quot;selectById&quot; resultType=&quot;Device&quot;&gt;           │</span><br><span class="line">│         SELECT * FROM device WHERE id = #&#123;id&#125;                │</span><br><span class="line">│       &lt;/select&gt;                                               │</span><br><span class="line">│                        ↓                                      │</span><br><span class="line">│  XMLStatementBuilder.parseStatementNode()                     │</span><br><span class="line">│    ├─ id = &quot;selectById&quot;                                       │</span><br><span class="line">│    ├─ parameterType = null (自动推断)                          │</span><br><span class="line">│    ├─ resultType = &quot;Device&quot; (通过别名解析为com.mine.entity.Device)│</span><br><span class="line">│    ├─ sqlCommandType = SELECT                                 │</span><br><span class="line">│    └─ SqlSource = RawSqlSource (无动态标签)                    │</span><br><span class="line">│                        ↓                                      │</span><br><span class="line">│  MapperBuilderAssistant.addMappedStatement()                  │</span><br><span class="line">│    → 创建 MappedStatement 对象                                │</span><br><span class="line">│    → 注册到 Configuration.mappedStatements                   │</span><br><span class="line">│                        ↓                                      │</span><br><span class="line">│  Configuration.mappedStatements:                              │</span><br><span class="line">│  &#123;                                                            │</span><br><span class="line">│    &quot;com.mine.mapper.DeviceMapper.selectById&quot; → MappedStatement│</span><br><span class="line">│  &#125;                                                            │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="MappedStatement构建过程"><a href="#MappedStatement构建过程" class="headerlink" title="MappedStatement构建过程"></a>MappedStatement构建过程</h3><p><strong>MappedStatement 构建过程</strong>：</p>
+<ul>
+<li>XML: <select id="selectById" resultType="Device"></li>
+<li>SELECT * FROM device WHERE id &#x3D; #{id}</li>
+<li></select></li>
+<li>↓</li>
+<li>XMLStatementBuilder.parseStatementNode()</li>
+</ul>
+<p><strong>└─ SqlSource &#x3D; RawSqlSource (无动态标签)</strong>：</p>
+<ul>
+<li>↓</li>
+<li>MapperBuilderAssistant.addMappedStatement()</li>
+<li>→ 创建 MappedStatement 对象</li>
+<li>→ 注册到 Configuration.mappedStatements</li>
+<li>↓</li>
+<li>Configuration.mappedStatements:</li>
+<li>{</li>
+<li>“com.mine.mapper.DeviceMapper.selectById” → MappedStatement</li>
+<li>}</li>
+</ul>
 <h2 id="Mapper接口的代理创建"><a href="#Mapper接口的代理创建" class="headerlink" title="Mapper接口的代理创建"></a>Mapper接口的代理创建</h2><h3 id="MapperProxyFactory源码"><a href="#MapperProxyFactory源码" class="headerlink" title="MapperProxyFactory源码"></a>MapperProxyFactory源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// MapperProxyFactory — Mapper接口代理工厂</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MapperProxyFactory</span>&lt;T&gt; &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Class&lt;T&gt; mapperInterface;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;Method, MapperMethodInvoker&gt; methodCache = <span class="keyword">new</span> <span class="title class_">ConcurrentHashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> T <span class="title function_">newInstance</span><span class="params">(SqlSession sqlSession)</span> &#123;</span><br><span class="line">        MapperProxy&lt;T&gt; mapperProxy = <span class="keyword">new</span> <span class="title class_">MapperProxy</span>&lt;&gt;(sqlSession, mapperInterface, methodCache);</span><br><span class="line">        <span class="keyword">return</span> newInstance(mapperProxy);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">protected</span> T <span class="title function_">newInstance</span><span class="params">(MapperProxy&lt;T&gt; mapperProxy)</span> &#123;</span><br><span class="line">        <span class="comment">// JDK动态代理创建Mapper接口的代理对象</span></span><br><span class="line">        <span class="keyword">return</span> (T) Proxy.newProxyInstance(</span><br><span class="line">            mapperInterface.getClassLoader(),</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">Class</span>[]&#123;mapperInterface&#125;,</span><br><span class="line">            mapperProxy</span><br><span class="line">        );</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="MapperProxy-invoke-源码"><a href="#MapperProxy-invoke-源码" class="headerlink" title="MapperProxy.invoke()源码"></a>MapperProxy.invoke()源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// MapperProxy — Mapper接口的动态代理</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MapperProxy</span>&lt;T&gt; <span class="keyword">implements</span> <span class="title class_">InvocationHandler</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlSession sqlSession;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Class&lt;T&gt; mapperInterface;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;Method, MapperMethodInvoker&gt; methodCache;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">invoke</span><span class="params">(Object proxy, Method method, Object[] args)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="comment">// Object类的方法直接执行</span></span><br><span class="line">        <span class="keyword">if</span> (Object.class.equals(method.getDeclaringClass())) &#123;</span><br><span class="line">            <span class="keyword">return</span> method.invoke(<span class="built_in">this</span>, args);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 获取MapperMethodInvoker（带缓存）</span></span><br><span class="line">        <span class="type">MapperMethodInvoker</span> <span class="variable">invoker</span> <span class="operator">=</span> cachedInvoker(method);</span><br><span class="line">        <span class="comment">// 执行</span></span><br><span class="line">        <span class="keyword">return</span> invoker.invoke(proxy, method, args, sqlSession);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> MapperMethodInvoker <span class="title function_">cachedInvoker</span><span class="params">(Method method)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> methodCache.computeIfAbsent(method, m -&gt; &#123;</span><br><span class="line">            <span class="keyword">if</span> (m.isDefault()) &#123;</span><br><span class="line">                <span class="comment">// Java8 default方法</span></span><br><span class="line">                <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">DefaultMethodInvokder</span>(m);</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">PlainMethodInvoker</span>(</span><br><span class="line">                    <span class="keyword">new</span> <span class="title class_">MapperMethod</span>(mapperInterface, method, sqlSession.getConfiguration()));</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="MapperMethod源码"><a href="#MapperMethod源码" class="headerlink" title="MapperMethod源码"></a>MapperMethod源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// MapperMethod — 封装Mapper接口方法与SQL类型的映射</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MapperMethod</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlCommand command;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> MethodSignature method;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="title function_">MapperMethod</span><span class="params">(Class&lt;?&gt; mapperInterface, Method method, Configuration config)</span> &#123;</span><br><span class="line">        <span class="built_in">this</span>.command = <span class="keyword">new</span> <span class="title class_">SqlCommand</span>(config, mapperInterface, method);</span><br><span class="line">        <span class="built_in">this</span>.method = <span class="keyword">new</span> <span class="title class_">MethodSignature</span>(config, mapperInterface, method);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> Object <span class="title function_">execute</span><span class="params">(SqlSession sqlSession, Object[] args)</span> &#123;</span><br><span class="line">        <span class="keyword">switch</span> (command.getType()) &#123;</span><br><span class="line">            <span class="keyword">case</span> INSERT: &#123;</span><br><span class="line">                <span class="type">Object</span> <span class="variable">param</span> <span class="operator">=</span> method.convertArgsToSqlCommandParam(args);</span><br><span class="line">                result = rowCountResult(sqlSession.insert(command.getName(), param));</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">case</span> UPDATE: &#123;</span><br><span class="line">                <span class="type">Object</span> <span class="variable">param</span> <span class="operator">=</span> method.convertArgsToSqlCommandParam(args);</span><br><span class="line">                result = rowCountResult(sqlSession.update(command.getName(), param));</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">case</span> DELETE: &#123;</span><br><span class="line">                <span class="type">Object</span> <span class="variable">param</span> <span class="operator">=</span> method.convertArgsToSqlCommandParam(args);</span><br><span class="line">                result = rowCountResult(sqlSession.delete(command.getName(), param));</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">            &#125;</span><br><span class="line">            <span class="keyword">case</span> SELECT:</span><br><span class="line">                <span class="keyword">if</span> (method.returnsVoid() &amp;&amp; method.hasResultHandler()) &#123;</span><br><span class="line">                    executeWithResultHandler(sqlSession, args);</span><br><span class="line">                &#125; <span class="keyword">else</span> <span class="keyword">if</span> (method.returnsMany()) &#123;</span><br><span class="line">                    result = executeForMany(sqlSession, args);</span><br><span class="line">                &#125; <span class="keyword">else</span> <span class="keyword">if</span> (method.returnsMap()) &#123;</span><br><span class="line">                    result = executeForMap(sqlSession, args);</span><br><span class="line">                &#125; <span class="keyword">else</span> <span class="keyword">if</span> (method.returnsCursor()) &#123;</span><br><span class="line">                    result = executeForCursor(sqlSession, args);</span><br><span class="line">                &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                    <span class="comment">// 单条查询</span></span><br><span class="line">                    <span class="type">Object</span> <span class="variable">param</span> <span class="operator">=</span> method.convertArgsToSqlCommandParam(args);</span><br><span class="line">                    result = sqlSession.selectOne(command.getName(), param);</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">            <span class="keyword">case</span> FLUSH:</span><br><span class="line">                result = sqlSession.flushStatements();</span><br><span class="line">                <span class="keyword">break</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// SqlCommand — 封装SQL命令信息</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">class</span> <span class="title class_">SqlCommand</span> &#123;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> String name;          <span class="comment">// MappedStatement ID</span></span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> SqlCommandType type;  <span class="comment">// INSERT/UPDATE/DELETE/SELECT</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// MethodSignature — 封装方法签名信息</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">class</span> <span class="title class_">MethodSignature</span> &#123;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">boolean</span> returnsMany;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">boolean</span> returnsMap;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">boolean</span> returnsVoid;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">boolean</span> returnsCursor;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> Class&lt;?&gt; returnType;</span><br><span class="line">        <span class="keyword">private</span> <span class="keyword">final</span> String mapKey;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h2 id="SQL执行全流程"><a href="#SQL执行全流程" class="headerlink" title="SQL执行全流程"></a>SQL执行全流程</h2><h3 id="完整调用链路图"><a href="#完整调用链路图" class="headerlink" title="完整调用链路图"></a>完整调用链路图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              MyBatis SQL执行完整链路                            │</span><br><span class="line">│                                                               │</span><br><span class="line">│  1. Mapper.method(args)                                       │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  2. MapperProxy.invoke(proxy, method, args)                  │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  3. MapperMethod.execute(sqlSession, args)                   │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  4. SqlSession.selectList(statement, parameter)              │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  5. CachingExecutor.query()（二级缓存入口）                   │</span><br><span class="line">│     ├─ 检查二级缓存 → 命中返回                                │</span><br><span class="line">│     └─ 未命中 ↓                                               │</span><br><span class="line">│  6. BaseExecutor.query()（一级缓存入口）                      │</span><br><span class="line">│     ├─ 检查一级缓存 → 命中返回                                │</span><br><span class="line">│     └─ 未命中 ↓                                               │</span><br><span class="line">│  7. SimpleExecutor.doQuery()                                  │</span><br><span class="line">│     ├─ 创建StatementHandler                                  │</span><br><span class="line">│     ├─ 创建Statement (PreparedStatement)                     │</span><br><span class="line">│     ├─ ParameterHandler.setParameters()                      │</span><br><span class="line">│     ├─ StatementHandler.query() → JDBC执行                   │</span><br><span class="line">│     └─ ResultSetHandler.handleResultSets()                   │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  8. 结果写入一级缓存                                          │</span><br><span class="line">│  9. 结果返回                                                  │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="SQL执行全流程"><a href="#SQL执行全流程" class="headerlink" title="SQL执行全流程"></a>SQL执行全流程</h2><h3 id="完整调用链路图"><a href="#完整调用链路图" class="headerlink" title="完整调用链路图"></a>完整调用链路图</h3><p><strong>MyBatis SQL执行完整链路</strong>：</p>
+<ul>
+<li><ol>
+<li>Mapper.method(args)</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="2">
+<li>MapperProxy.invoke(proxy, method, args)</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="3">
+<li>MapperMethod.execute(sqlSession, args)</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="4">
+<li>SqlSession.selectList(statement, parameter)</li>
+</ol>
+</li>
+<li>↓</li>
+<li><ol start="5">
+<li>CachingExecutor.query()（二级缓存入口）</li>
+</ol>
+</li>
+</ul>
+<p><strong>└─ 未命中 ↓</strong>：</p>
+<ul>
+<li><ol start="6">
+<li>BaseExecutor.query()（一级缓存入口）</li>
+</ol>
+</li>
+</ul>
+<p><strong>└─ 未命中 ↓</strong>：</p>
+<ul>
+<li><ol start="7">
+<li>SimpleExecutor.doQuery()</li>
+</ol>
+</li>
+</ul>
+<p><strong>└─ ResultSetHandler.handleResultSets()</strong>：</p>
+<ul>
+<li>↓</li>
+<li><ol start="8">
+<li>结果写入一级缓存</li>
+</ol>
+</li>
+<li><ol start="9">
+<li>结果返回</li>
+</ol>
+</li>
+</ul>
 <h3 id="SqlSession-selectList"><a href="#SqlSession-selectList" class="headerlink" title="SqlSession.selectList()"></a>SqlSession.selectList()</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// DefaultSqlSession.selectList()</span></span><br><span class="line"><span class="keyword">public</span> &lt;E&gt; List&lt;E&gt; <span class="title function_">selectList</span><span class="params">(String statement, Object parameter, RowBounds rowBounds)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 获取MappedStatement</span></span><br><span class="line">    <span class="type">MappedStatement</span> <span class="variable">ms</span> <span class="operator">=</span> configuration.getMappedStatement(statement);</span><br><span class="line">    <span class="comment">// 2. 委托给Executor执行</span></span><br><span class="line">    <span class="keyword">return</span> executor.query(ms, wrapCollection(parameter), rowBounds, Executor.NO_RESULT_HANDLER);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> Object <span class="title function_">wrapCollection</span><span class="params">(<span class="keyword">final</span> Object object)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (object <span class="keyword">instanceof</span> Collection) &#123;</span><br><span class="line">        StrictMap&lt;Object&gt; map = <span class="keyword">new</span> <span class="title class_">StrictMap</span>&lt;&gt;();</span><br><span class="line">        map.put(<span class="string">&quot;collection&quot;</span>, object);</span><br><span class="line">        <span class="keyword">if</span> (object <span class="keyword">instanceof</span> List) &#123;</span><br><span class="line">            map.put(<span class="string">&quot;list&quot;</span>, object);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> map;</span><br><span class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (object != <span class="literal">null</span> &amp;&amp; object.getClass().isArray()) &#123;</span><br><span class="line">        StrictMap&lt;Object&gt; map = <span class="keyword">new</span> <span class="title class_">StrictMap</span>&lt;&gt;();</span><br><span class="line">        map.put(<span class="string">&quot;array&quot;</span>, object);</span><br><span class="line">        <span class="keyword">return</span> map;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> object;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="CachingExecutor-query"><a href="#CachingExecutor-query" class="headerlink" title="CachingExecutor.query()"></a>CachingExecutor.query()</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// CachingExecutor — 二级缓存入口</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CachingExecutor</span> <span class="keyword">implements</span> <span class="title class_">Executor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Executor delegate;  <span class="comment">// 委托给BaseExecutor</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> TransactionalCacheManager tcm;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> &lt;E&gt; List&lt;E&gt; <span class="title function_">query</span><span class="params">(MappedStatement ms, Object parameterObject, </span></span><br><span class="line"><span class="params">            RowBounds rowBounds, ResultHandler resultHandler)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">        <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> ms.getBoundSql(parameterObject);</span><br><span class="line">        <span class="comment">// 创建CacheKey</span></span><br><span class="line">        <span class="type">CacheKey</span> <span class="variable">key</span> <span class="operator">=</span> createCacheKey(ms, parameterObject, rowBounds, boundSql);</span><br><span class="line">        <span class="keyword">return</span> query(ms, parameterObject, rowBounds, resultHandler, key, boundSql);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> &lt;E&gt; List&lt;E&gt; <span class="title function_">query</span><span class="params">(MappedStatement ms, Object parameterObject,</span></span><br><span class="line"><span class="params">            RowBounds rowBounds, ResultHandler resultHandler, </span></span><br><span class="line"><span class="params">            CacheKey key, BoundSql boundSql)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">        <span class="comment">// 1. 检查二级缓存</span></span><br><span class="line">        <span class="type">Cache</span> <span class="variable">cache</span> <span class="operator">=</span> ms.getCache();</span><br><span class="line">        <span class="keyword">if</span> (cache != <span class="literal">null</span>) &#123;</span><br><span class="line">            flushCacheIfRequired(ms);</span><br><span class="line">            <span class="keyword">if</span> (ms.isUseCache() &amp;&amp; resultHandler == <span class="literal">null</span>) &#123;</span><br><span class="line">                List&lt;E&gt; list = (List&lt;E&gt;) tcm.getObject(cache, key);</span><br><span class="line">                <span class="keyword">if</span> (list == <span class="literal">null</span>) &#123;</span><br><span class="line">                    <span class="comment">// 2. 缓存未命中，委托给BaseExecutor</span></span><br><span class="line">                    list = delegate.query(ms, parameterObject, rowBounds, </span><br><span class="line">                        resultHandler, key, boundSql);</span><br><span class="line">                    <span class="comment">// 3. 写入TransactionalCache（待提交）</span></span><br><span class="line">                    tcm.putObject(cache, key, list);</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="keyword">return</span> list;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> delegate.query(ms, parameterObject, rowBounds, </span><br><span class="line">            resultHandler, key, boundSql);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -295,12 +385,73 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="ResultSetHandler源码"><a href="#ResultSetHandler源码" class="headerlink" title="ResultSetHandler源码"></a>ResultSetHandler源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// DefaultResultSetHandler.handleResultSets() — 结果映射核心</span></span><br><span class="line"><span class="keyword">public</span> List&lt;Object&gt; <span class="title function_">handleResultSets</span><span class="params">(Statement stmt)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">    <span class="keyword">final</span> List&lt;Object&gt; multipleResults = <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    <span class="type">int</span> <span class="variable">resultSetCount</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">    <span class="comment">// 获取第一个ResultSet</span></span><br><span class="line">    <span class="type">ResultSetWrapper</span> <span class="variable">rsw</span> <span class="operator">=</span> getFirstResultSet(stmt);</span><br><span class="line">    <span class="comment">// 获取ResultMap列表</span></span><br><span class="line">    List&lt;ResultMap&gt; resultMaps = mappedStatement.getResultMaps();</span><br><span class="line">    <span class="type">int</span> <span class="variable">resultMapCount</span> <span class="operator">=</span> resultMaps.size();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">while</span> (rsw != <span class="literal">null</span> &amp;&amp; resultMapCount &gt; resultSetCount) &#123;</span><br><span class="line">        <span class="type">ResultMap</span> <span class="variable">resultMap</span> <span class="operator">=</span> resultMaps.get(resultSetCount);</span><br><span class="line">        <span class="comment">// 处理当前ResultSet</span></span><br><span class="line">        handleResultSet(rsw, resultMap, multipleResults, <span class="literal">null</span>);</span><br><span class="line">        rsw = getNextResultSet(stmt);</span><br><span class="line">        resultSetCount++;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 合并结果</span></span><br><span class="line">    <span class="keyword">return</span> collapseSingleResultList(multipleResults);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">handleResultSet</span><span class="params">(ResultSetWrapper rsw, ResultMap resultMap,</span></span><br><span class="line"><span class="params">        List&lt;Object&gt; multipleResults, ResultMapping parentMapping)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (parentMapping != <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="comment">// 嵌套结果映射</span></span><br><span class="line">        handleRowValues(rsw, resultMap, <span class="literal">null</span>, RowBounds.DEFAULT, parentMapping);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">// 普通结果映射</span></span><br><span class="line">        <span class="type">DefaultResultHandler</span> <span class="variable">resultHandler</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">DefaultResultHandler</span>(objectFactory);</span><br><span class="line">        handleRowValues(rsw, resultMap, resultHandler, rowBounds, <span class="literal">null</span>);</span><br><span class="line">        multipleResults.add(resultHandler.getResultList());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">handleRowValues</span><span class="params">(ResultSetWrapper rsw, ResultMap resultMap,</span></span><br><span class="line"><span class="params">        ResultHandler resultHandler, RowBounds rowBounds, </span></span><br><span class="line"><span class="params">        ResultMapping parentMapping)</span> &#123;</span><br><span class="line">    <span class="comment">// 处理分页</span></span><br><span class="line">    <span class="keyword">if</span> (rowBounds != <span class="literal">null</span> &amp;&amp; rowBounds.getLimit() &lt; RowBounds.NO_ROW_LIMIT) &#123;</span><br><span class="line">        skipRows(rsw.getResultSet(), rowBounds);</span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// 逐行处理</span></span><br><span class="line">    <span class="keyword">while</span> (shouldProcessMoreRows(rsw.getResultSet(), rowBounds)) &#123;</span><br><span class="line">        <span class="comment">// 处理鉴别器</span></span><br><span class="line">        <span class="type">ResultMap</span> <span class="variable">discriminatedResultMap</span> <span class="operator">=</span> resolveDiscriminatedResultMap(</span><br><span class="line">            rsw, resultMap, <span class="literal">null</span>);</span><br><span class="line">        <span class="comment">// 创建结果对象</span></span><br><span class="line">        <span class="type">Object</span> <span class="variable">rowValue</span> <span class="operator">=</span> getRowValue(rsw, discriminatedResultMap, <span class="literal">null</span>);</span><br><span class="line">        <span class="comment">// 添加到结果列表</span></span><br><span class="line">        storeObject(resultHandler, rowValue, parentMapping, rsw.getResultSet());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> Object <span class="title function_">getRowValue</span><span class="params">(ResultSetWrapper rsw, ResultMap resultMap, String columnPrefix)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 创建结果对象</span></span><br><span class="line">    <span class="type">Object</span> <span class="variable">resultObject</span> <span class="operator">=</span> createResultObject(rsw, resultMap, columnPrefix);</span><br><span class="line">    <span class="comment">// 2. 应用属性映射</span></span><br><span class="line">    applyPropertyMappings(rsw, resultMap, resultObject, columnPrefix);</span><br><span class="line">    <span class="comment">// 3. 应用自动映射</span></span><br><span class="line">    applyAutomaticMappings(rsw, resultMap, resultObject, columnPrefix);</span><br><span class="line">    <span class="keyword">return</span> resultObject;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="结果映射流程图"><a href="#结果映射流程图" class="headerlink" title="结果映射流程图"></a>结果映射流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              结果映射完整流程                                    │</span><br><span class="line">│                                                               │</span><br><span class="line">│  ResultSet                                                    │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  handleResultSets()                                           │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  遍历 ResultMap 列表                                          │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  handleRowValues()                                            │</span><br><span class="line">│    ├─ 处理 RowBounds（跳过offset行）                          │</span><br><span class="line">│    ├─ while(rs.next()) 逐行处理                               │</span><br><span class="line">│    │   ├─ resolveDiscriminatedResultMap() → 鉴别器            │</span><br><span class="line">│    │   ├─ createResultObject() → 创建Java对象                 │</span><br><span class="line">│    │   │   ├─ 有构造器映射 → 用构造器创建                      │</span><br><span class="line">│    │   │   └─ 无构造器映射 → 用默认构造器+反射设置属性          │</span><br><span class="line">│    │   ├─ applyPropertyMappings() → 显式属性映射              │</span><br><span class="line">│    │   │   ├─ 简单映射 → TypeHandler.getResult()              │</span><br><span class="line">│    │   │   ├─ 嵌套结果 → 递归handleRowValues()               │</span><br><span class="line">│    │   │   └─ 嵌套查询 → 执行新的SQL查询                      │</span><br><span class="line">│    │   └─ applyAutomaticMappings() → 自动映射(下划线转驼峰)   │</span><br><span class="line">│    └─ storeObject() → 添加到结果列表                          │</span><br><span class="line">│    ↓                                                          │</span><br><span class="line">│  返回 List&lt;Object&gt;                                            │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h2 id="三种Executor对比"><a href="#三种Executor对比" class="headerlink" title="三种Executor对比"></a>三种Executor对比</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              三种 Executor 对比                                 │</span><br><span class="line">├──────────────┬───────────────────────────────────────────────┤</span><br><span class="line">│  Executor     │ 特点                                          │</span><br><span class="line">├──────────────┼───────────────────────────────────────────────┤</span><br><span class="line">│              │ 每次执行都创建新的Statement                     │</span><br><span class="line">│  Simple      │ 最简单的实现，默认选择                          │</span><br><span class="line">│  Executor     │ 适用于大多数场景                               │</span><br><span class="line">│              │ 每次执行完关闭Statement                         │</span><br><span class="line">├──────────────┼───────────────────────────────────────────────┤</span><br><span class="line">│              │ 复用相同SQL的Statement                          │</span><br><span class="line">│  Reuse       │ 以SQL为key缓存Statement                       │</span><br><span class="line">│  Executor     │ 减少Statement创建开销                          │</span><br><span class="line">│              │ 需要手动关闭或依赖SqlSession关闭                 │</span><br><span class="line">├──────────────┼───────────────────────────────────────────────┤</span><br><span class="line">│              │ 使用JDBC的addBatch/executeBatch                │</span><br><span class="line">│  Batch       │ SQL相同则复用Statement并addBatch               │</span><br><span class="line">│  Executor     │ flushStatements()时一次性执行                  │</span><br><span class="line">│              │ 只适用于INSERT/UPDATE/DELETE                   │</span><br><span class="line">│              │ 返回BATCH_UPDATE_RETURN_VALUE                  │</span><br><span class="line">└──────────────┴───────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">选择策略：</span><br><span class="line">  日常查询 → SimpleExecutor（默认）</span><br><span class="line">  批量导入 → BatchExecutor</span><br><span class="line">  高频相同SQL → ReuseExecutor（通常不需要，SimpleExecutor够用）</span><br></pre></td></tr></table></figure>
-
-<h2 id="Spring整合MyBatis的SqlSession管理"><a href="#Spring整合MyBatis的SqlSession管理" class="headerlink" title="Spring整合MyBatis的SqlSession管理"></a>Spring整合MyBatis的SqlSession管理</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│        Spring 整合 MyBatis 的 SqlSession 管理                  │</span><br><span class="line">│                                                               │</span><br><span class="line">│  SqlSessionTemplate（Spring提供）                              │</span><br><span class="line">│    ├── 实现了SqlSession接口                                    │</span><br><span class="line">│    ├── 内部持有SqlSessionFactory                              │</span><br><span class="line">│    ├── 每个方法调用创建新的SqlSession                          │</span><br><span class="line">│    └── 通过SqlSessionInterceptor（JDK动态代理）实现            │</span><br><span class="line">│                                                               │</span><br><span class="line">│  SqlSessionInterceptor.invoke()                               │</span><br><span class="line">│    ├── 获取真实的SqlSession                                    │</span><br><span class="line">│    │   ├── 无事务 → 每次创建新的SqlSession                    │</span><br><span class="line">│    │   └── 有事务 → 从TransactionSynchronizationManager获取   │</span><br><span class="line">│    ├── 执行目标方法                                            │</span><br><span class="line">│    └── 关闭SqlSession（非事务模式下）                          │</span><br><span class="line">│                                                               │</span><br><span class="line">│  关键影响：                                                    │</span><br><span class="line">│  1. 无事务时，每次查询创建新SqlSession → 一级缓存不命中        │</span><br><span class="line">│  2. 有事务时，同一事务复用SqlSession → 一级缓存命中            │</span><br><span class="line">│  3. Spring管理事务，MyBatis的commit/rollback由Spring控制       │</span><br><span class="line">│                                                               │</span><br><span class="line">│  @Transactional 下的SqlSession生命周期：                      │</span><br><span class="line">│  事务开始 → 创建SqlSession → 多次查询复用 → 事务提交/回滚     │</span><br><span class="line">│  → 关闭SqlSession                                             │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="结果映射流程图"><a href="#结果映射流程图" class="headerlink" title="结果映射流程图"></a>结果映射流程图</h3><p><strong>结果映射完整流程</strong>：</p>
+<ul>
+<li>ResultSet</li>
+<li>↓</li>
+<li>handleResultSets()</li>
+<li>↓</li>
+<li>遍历 ResultMap 列表</li>
+<li>↓</li>
+<li>handleRowValues()</li>
+</ul>
+<p><strong>└─ 无构造器映射 → 用默认构造器+反射设置属性</strong>：</p>
+<p><strong>└─ 嵌套查询 → 执行新的SQL查询</strong>：</p>
+<ul>
+<li>└─ applyAutomaticMappings() → 自动映射(下划线转驼峰)</li>
+<li>└─ storeObject() → 添加到结果列表</li>
+<li>↓</li>
+<li>返回 List<Object></li>
+</ul>
+<h2 id="三种Executor对比"><a href="#三种Executor对比" class="headerlink" title="三种Executor对比"></a>三种Executor对比</h2><p><strong>三种 Executor 对比</strong>：</p>
+<p><strong>Executor      特点</strong>：</p>
+<p><strong>每次执行都创建新的Statement</strong>：</p>
+<ul>
+<li>Simple       最简单的实现，默认选择</li>
+<li>Executor      适用于大多数场景</li>
+<li>每次执行完关闭Statement</li>
+</ul>
+<p><strong>复用相同SQL的Statement</strong>：</p>
+<ul>
+<li>Reuse        以SQL为key缓存Statement</li>
+<li>Executor      减少Statement创建开销</li>
+<li>需要手动关闭或依赖SqlSession关闭</li>
+</ul>
+<p><strong>使用JDBC的addBatch&#x2F;executeBatch</strong>：</p>
+<ul>
+<li>Batch        SQL相同则复用Statement并addBatch</li>
+<li>Executor      flushStatements()时一次性执行</li>
+<li>只适用于INSERT&#x2F;UPDATE&#x2F;DELETE</li>
+<li>返回BATCH_UPDATE_RETURN_VALUE</li>
+</ul>
+<h2 id="Spring整合MyBatis的SqlSession管理"><a href="#Spring整合MyBatis的SqlSession管理" class="headerlink" title="Spring整合MyBatis的SqlSession管理"></a>Spring整合MyBatis的SqlSession管理</h2><p><strong>Spring 整合 MyBatis 的 SqlSession 管理</strong>：</p>
+<ul>
+<li>SqlSessionTemplate（Spring提供）</li>
+</ul>
+<p><strong>└── 通过SqlSessionInterceptor（JDK动态代理）实现</strong>：</p>
+<ul>
+<li>SqlSessionInterceptor.invoke()</li>
+</ul>
+<p><strong>└── 有事务 → 从TransactionSynchronizationManager获取</strong>：</p>
+<p><strong>└── 关闭SqlSession（非事务模式下）</strong>：</p>
+<ul>
+<li>关键影响：</li>
+<li><ol>
+<li>无事务时，每次查询创建新SqlSession → 一级缓存不命中</li>
+</ol>
+</li>
+<li><ol start="2">
+<li>有事务时，同一事务复用SqlSession → 一级缓存命中</li>
+</ol>
+</li>
+<li><ol start="3">
+<li>Spring管理事务，MyBatis的commit&#x2F;rollback由Spring控制</li>
+</ol>
+</li>
+<li>@Transactional 下的SqlSession生命周期：</li>
+<li>事务开始 → 创建SqlSession → 多次查询复用 → 事务提交&#x2F;回滚</li>
+<li>→ 关闭SqlSession</li>
+</ul>
 <h2 id="线上问题排查案例"><a href="#线上问题排查案例" class="headerlink" title="线上问题排查案例"></a>线上问题排查案例</h2><h3 id="案例1：TypeHandler时区问题"><a href="#案例1：TypeHandler时区问题" class="headerlink" title="案例1：TypeHandler时区问题"></a>案例1：TypeHandler时区问题</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：设备巡检接口偶发返回空数据</span></span><br><span class="line"><span class="comment">// 排查过程：</span></span><br><span class="line"><span class="comment">// 1. 检查SQL → SQL正确</span></span><br><span class="line"><span class="comment">// 2. 检查参数 → 参数值正确</span></span><br><span class="line"><span class="comment">// 3. 检查数据库 → 数据库有数据</span></span><br><span class="line"><span class="comment">// 4. 最终发现：DateTypeHandler时区转换导致查询条件不匹配</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 问题代码：</span></span><br><span class="line"><span class="comment">// Java: new Date(2023, 2, 1)  → 2023-03-01 00:00:00 CST</span></span><br><span class="line"><span class="comment">// 数据库: 2023-02-28 16:00:00 UTC (差8小时)</span></span><br><span class="line"><span class="comment">// 查询条件: WHERE check_date &gt;= #&#123;startDate&#125;</span></span><br><span class="line"><span class="comment">// 实际查询: WHERE check_date &gt;= &#x27;2023-02-28 16:00:00&#x27;</span></span><br><span class="line"><span class="comment">// 数据库存储: &#x27;2023-03-01 00:00:00&#x27; (CST)</span></span><br><span class="line"><span class="comment">// 结果: 匹配不上，返回空</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 解决：自定义UtcDateTypeHandler统一时区</span></span><br></pre></td></tr></table></figure>
 
 <h3 id="案例2：一级缓存导致数据不一致"><a href="#案例2：一级缓存导致数据不一致" class="headerlink" title="案例2：一级缓存导致数据不一致"></a>案例2：一级缓存导致数据不一致</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：设备状态查询</span></span><br><span class="line"><span class="meta">@Transactional</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">checkAndUpdateDevice</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">Device</span> <span class="variable">device</span> <span class="operator">=</span> deviceMapper.selectById(<span class="number">1L</span>);  <span class="comment">// status=ONLINE</span></span><br><span class="line">    <span class="comment">// 另一个事务修改了数据库 status=OFFLINE</span></span><br><span class="line">    <span class="type">Device</span> <span class="variable">device2</span> <span class="operator">=</span> deviceMapper.selectById(<span class="number">1L</span>);  <span class="comment">// 命中一级缓存！status=ONLINE</span></span><br><span class="line">    <span class="comment">// 基于device2做判断 → 判断错误！</span></span><br><span class="line">    </span><br><span class="line">    <span class="comment">// 解决：清空一级缓存或scope=statement</span></span><br><span class="line">    <span class="comment">// sqlSession.clearCache();  // 方式1</span></span><br><span class="line">    <span class="comment">// mybatis.configuration.local-cache-scope=statement  // 方式2</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -361,10 +512,87 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="自增主键配置"><a href="#自增主键配置" class="headerlink" title="自增主键配置"></a>自增主键配置</h3><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">&lt;!-- XML方式 --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">insert</span> <span class="attr">id</span>=<span class="string">&quot;insert&quot;</span> <span class="attr">useGeneratedKeys</span>=<span class="string">&quot;true&quot;</span> <span class="attr">keyProperty</span>=<span class="string">&quot;id&quot;</span>&gt;</span></span><br><span class="line">    INSERT INTO device(device_name, device_type, status)</span><br><span class="line">    VALUES(#&#123;deviceName&#125;, #&#123;deviceType&#125;, #&#123;status&#125;)</span><br><span class="line"><span class="tag">&lt;/<span class="name">insert</span>&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">&lt;!-- 注解方式 --&gt;</span></span><br><span class="line">@Insert(&quot;INSERT INTO device(device_name, device_type, status) &quot; +</span><br><span class="line">        &quot;VALUES(#&#123;deviceName&#125;, #&#123;deviceType&#125;, #&#123;status&#125;)&quot;)</span><br><span class="line">@Options(useGeneratedKeys = true, keyProperty = &quot;id&quot;)</span><br><span class="line">int insert(Device device);</span><br><span class="line"></span><br><span class="line"><span class="comment">&lt;!-- 使用后：device.getId() 可获取自增ID --&gt;</span></span><br></pre></td></tr></table></figure>
 
-<h2 id="事务管理源码"><a href="#事务管理源码" class="headerlink" title="事务管理源码"></a>事务管理源码</h2><h3 id="MyBatis事务体系"><a href="#MyBatis事务体系" class="headerlink" title="MyBatis事务体系"></a>MyBatis事务体系</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│              MyBatis 事务体系                                   │</span><br><span class="line">│                                                               │</span><br><span class="line">│  Transaction（接口）                                           │</span><br><span class="line">│    ├── JdbcTransaction      → JDBC事务（默认）                 │</span><br><span class="line">│    │   → conn.setAutoCommit(false)                            │</span><br><span class="line">│    │   → conn.commit() / conn.rollback()                     │</span><br><span class="line">│    │                                                          │</span><br><span class="line">│    └── ManagedTransaction   → 容器管理事务                    │</span><br><span class="line">│        → 不做commit/rollback，交给容器（如Spring）管理         │</span><br><span class="line">│                                                               │</span><br><span class="line">│  Spring整合后：                                                │</span><br><span class="line">│  ┌────────────────────────────────────────────────────────┐  │</span><br><span class="line">│  │ SpringTransactionFactory                               │  │</span><br><span class="line">│  │   → 创建SpringManagedTransaction                       │  │</span><br><span class="line">│  │   → 从DataSourceUtils.getConnection()获取连接          │  │</span><br><span class="line">│  │   → 由Spring的PlatformTransactionManager管理事务       │  │</span><br><span class="line">│  │   → MyBatis的commit/rollback变为空操作                  │  │</span><br><span class="line">│  └────────────────────────────────────────────────────────┘  │</span><br><span class="line">│                                                               │</span><br><span class="line">│  事务传播行为：                                                │</span><br><span class="line">│  @Transactional → Spring创建事务 → 绑定到当前线程             │</span><br><span class="line">│  → SqlSession使用事务中的Connection                           │</span><br><span class="line">│  → 方法结束 → Spring提交/回滚事务                             │</span><br><span class="line">│  → 关闭SqlSession                                             │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h2 id="事务管理源码"><a href="#事务管理源码" class="headerlink" title="事务管理源码"></a>事务管理源码</h2><h3 id="MyBatis事务体系"><a href="#MyBatis事务体系" class="headerlink" title="MyBatis事务体系"></a>MyBatis事务体系</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;MyBatis 事务体系&quot;]</span><br><span class="line">    N2[&quot;SpringTransactionFactory&quot;]</span><br><span class="line">    N3[&quot;Transaction接口&quot;]</span><br><span class="line">    N4[&quot;创建SpringManagedTransaction&quot;]</span><br><span class="line">    N5[&quot;从DataSourceUtils.getConnection()获取连接&quot;]</span><br><span class="line">    N6[&quot;由Spring的PlatformTransactionManager管理事务&quot;]</span><br><span class="line">    N7[&quot;MyBatis的commit&quot;]</span><br><span class="line">    N8[&quot;rollback变为空操作&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<h2 id="完整执行链路时序图"><a href="#完整执行链路时序图" class="headerlink" title="完整执行链路时序图"></a>完整执行链路时序图</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│     实际项目 deviceMapper.selectById(1L) 完整执行链路      │</span><br><span class="line">│                                                               │</span><br><span class="line">│  1. deviceMapper.selectById(1L)                               │</span><br><span class="line">│     │  JDK动态代理                                            │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  2. MapperProxy.invoke()                                      │</span><br><span class="line">│     │  获取MapperMethod                                       │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  3. MapperMethod.execute()                                    │</span><br><span class="line">│     │  SELECT → sqlSession.selectOne()                       │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  4. DefaultSqlSession.selectOne()                             │</span><br><span class="line">│     │  → selectList() 取第一个                                │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  5. CachingExecutor.query()                                   │</span><br><span class="line">│     │  获取BoundSql: SELECT * FROM device WHERE id = ?       │</span><br><span class="line">│     │  创建CacheKey: [DeviceMapper.selectById, 0, 2147483647 │</span><br><span class="line">│     │    SELECT * FROM device WHERE id = ?, 1, mine]        │</span><br><span class="line">│     │  检查二级缓存 → 未命中                                  │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  6. BaseExecutor.query()                                      │</span><br><span class="line">│     │  检查一级缓存 → 未命中                                  │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  7. SimpleExecutor.doQuery()                                  │</span><br><span class="line">│     │  创建StatementHandler → RoutingStatementHandler        │</span><br><span class="line">│     │    → PreparedStatementHandler                           │</span><br><span class="line">│     │  创建PreparedStatement                                  │</span><br><span class="line">│     │  设置参数: ps.setLong(1, 1L)                            │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  8. PreparedStatementHandler.query()                          │</span><br><span class="line">│     │  ps.executeQuery() → ResultSet                         │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  9. DefaultResultSetHandler.handleResultSets()               │</span><br><span class="line">│     │  获取ResultMap: Device                                  │</span><br><span class="line">│     │  rs.next() → 逐行处理                                  │</span><br><span class="line">│     │  创建Device对象                                         │</span><br><span class="line">│     │  自动映射: id=1, deviceName=传感器01, status=ONLINE    │</span><br><span class="line">│     │  TypeHandler: LongTypeHandler, StringTypeHandler       │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  10. 返回 Device(id=1, deviceName=传感器01, status=ONLINE)   │</span><br><span class="line">│     │  写入一级缓存                                           │</span><br><span class="line">│     │  写入二级缓存待提交区                                   │</span><br><span class="line">│     ↓                                                         │</span><br><span class="line">│  11. 返回给调用方                                             │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="完整执行链路时序图"><a href="#完整执行链路时序图" class="headerlink" title="完整执行链路时序图"></a>完整执行链路时序图</h2><p><strong>实际项目 deviceMapper.selectById(1L) 完整执行链路</strong>：</p>
+<ul>
+<li><ol>
+<li>deviceMapper.selectById(1L)</li>
+</ol>
+</li>
+<li>JDK动态代理</li>
+<li>↓</li>
+<li><ol start="2">
+<li>MapperProxy.invoke()</li>
+</ol>
+</li>
+<li>获取MapperMethod</li>
+<li>↓</li>
+<li><ol start="3">
+<li>MapperMethod.execute()</li>
+</ol>
+</li>
+<li>SELECT → sqlSession.selectOne()</li>
+<li>↓</li>
+<li><ol start="4">
+<li>DefaultSqlSession.selectOne()</li>
+</ol>
+</li>
+<li>→ selectList() 取第一个</li>
+<li>↓</li>
+<li><ol start="5">
+<li>CachingExecutor.query()</li>
+</ol>
+</li>
+<li>获取BoundSql: SELECT * FROM device WHERE id &#x3D; ?</li>
+<li>创建CacheKey: [DeviceMapper.selectById, 0, 2147483647</li>
+<li>SELECT * FROM device WHERE id &#x3D; ?, 1, mine]</li>
+<li>检查二级缓存 → 未命中</li>
+<li>↓</li>
+<li><ol start="6">
+<li>BaseExecutor.query()</li>
+</ol>
+</li>
+<li>检查一级缓存 → 未命中</li>
+<li>↓</li>
+<li><ol start="7">
+<li>SimpleExecutor.doQuery()</li>
+</ol>
+</li>
+<li>创建StatementHandler → RoutingStatementHandler</li>
+<li>→ PreparedStatementHandler</li>
+<li>创建PreparedStatement</li>
+<li>设置参数: ps.setLong(1, 1L)</li>
+<li>↓</li>
+<li><ol start="8">
+<li>PreparedStatementHandler.query()</li>
+</ol>
+</li>
+<li>ps.executeQuery() → ResultSet</li>
+<li>↓</li>
+<li><ol start="9">
+<li>DefaultResultSetHandler.handleResultSets()</li>
+</ol>
+</li>
+<li>获取ResultMap: Device</li>
+<li>rs.next() → 逐行处理</li>
+<li>创建Device对象</li>
+<li>自动映射: id&#x3D;1, deviceName&#x3D;传感器01, status&#x3D;ONLINE</li>
+<li>TypeHandler: LongTypeHandler, StringTypeHandler</li>
+<li>↓</li>
+<li><ol start="10">
+<li>返回 Device(id&#x3D;1, deviceName&#x3D;传感器01, status&#x3D;ONLINE)</li>
+</ol>
+</li>
+<li>写入一级缓存</li>
+<li>写入二级缓存待提交区</li>
+<li>↓</li>
+<li><ol start="11">
+<li>返回给调用方</li>
+</ol>
+</li>
+</ul>
 <h1 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h1><hr>
 <p>深入MyBatis源码后，最大的收获是理解了SQL执行的完整链路。从MapperProxy动态代理到Executor缓存机制，从ParameterHandler参数映射到ResultSetHandler结果映射，每一步都有明确的设计意图。实际项目的线上问题排查经历让我深刻认识到：只有理解源码，才能在遇到问题时快速定位——是参数映射问题（TypeHandler）、缓存问题（一级缓存脏读）、还是结果映射问题（ResultMap配置）。MyBatis的设计精髓在于：四大对象（Executor、StatementHandler、ParameterHandler、ResultSetHandler）各司其职，插件机制通过动态代理统一增强，Configuration作为全局配置贯穿始终。理解了这个架构，MyBatis不再是黑盒。</p>
 
@@ -476,14 +704,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
                         2023
-                        <span>(68)</span>
+                        <span>(61)</span>
                     </a>
                 </div>
             
@@ -649,7 +877,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

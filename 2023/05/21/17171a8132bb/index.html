@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2023-05-21T15:53:20.000Z">
   <article class="post">
     <h1 class="post-title">JVM命令行工具实战——jps、jstack、jmap、jstat排查指南</h1>
 
@@ -209,8 +209,11 @@ article: http://ogp.me/ns/article#">
       <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>线上CPU飙高、内存溢出、线程死锁，这些问题每个Java开发者都会遇到。但很多人只会重启服务，不知道怎么排查根因。2023年在实际场景中，我系统学习了JVM命令行工具，从”重启大法”进化到”精准定位”，再也不怕线上问题了。这篇文章结合实际项目的真实生产场景，全面深入讲解jps、jstack、jmap、jstat四大核心工具的实战用法。</p>
 <hr>
 <h2 id="一、排查思路总览"><a href="#一、排查思路总览" class="headerlink" title="一、排查思路总览"></a>一、排查思路总览</h2><h3 id="1-1-排查通用流程"><a href="#1-1-排查通用流程" class="headerlink" title="1.1 排查通用流程"></a>1.1 排查通用流程</h3><p>线上问题排查遵循”定位进程→分析线程→分析内存→监控GC→综合定因”五步法：</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐</span><br><span class="line">│  ① 定位  │────▶│  ② 分析  │────▶│  ③ 分析  │────▶│  ④ 监控  │────▶│  ⑤ 综合  │</span><br><span class="line">│  进程    │     │  线程    │     │  内存    │     │  GC     │     │  定因    │</span><br><span class="line">│  jps     │     │  jstack  │     │  jmap    │     │  jstat  │     │  修复    │</span><br><span class="line">└──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘</span><br><span class="line">     │                │                │                │                │</span><br><span class="line">     ▼                ▼                ▼                ▼                ▼</span><br><span class="line">  找到目标PID     CPU飙高/死锁      OOM/内存泄漏     GC频繁/STW长     根因定位</span><br><span class="line">  jps -lv         top -Hp +         jmap -histo      jstat -gcutil    代码修复</span><br><span class="line">  确认服务进程     jstack -l         jmap -dump       jstat -gccause   参数调优</span><br><span class="line">                  Arthas thread     MAT/Arthas       GC日志分析        复盘沉淀</span><br></pre></td></tr></table></figure>
-
+<p><strong>① 定位  ────▶  ② 分析  ────▶  ③ 分析  ────▶  ④ 监控  ────▶  ⑤ 综合</strong>：</p>
+<ul>
+<li>进程           线程           内存           GC            定因</li>
+<li>jps            jstack         jmap           jstat         修复</li>
+</ul>
 <h3 id="1-2-问题类型与工具映射"><a href="#1-2-问题类型与工具映射" class="headerlink" title="1.2 问题类型与工具映射"></a>1.2 问题类型与工具映射</h3><table>
 <thead>
 <tr>
@@ -258,14 +261,14 @@ article: http://ogp.me/ns/article#">
 </tr>
 </tbody></table>
 <h3 id="1-3-实际项目服务架构"><a href="#1-3-实际项目服务架构" class="headerlink" title="1.3 实际项目服务架构"></a>1.3 实际项目服务架构</h3><p>在深入工具实战之前，先了解实际项目的服务架构，后续案例均基于此架构：</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">                         ┌─────────────────────────────┐</span><br><span class="line">                         │      Nginx / Gateway        │</span><br><span class="line">                         │   smart-mine-gateway:8080    │</span><br><span class="line">                         └──────────┬──────────────────┘</span><br><span class="line">                                    │</span><br><span class="line">              ┌─────────────────────┼─────────────────────┐</span><br><span class="line">              │                     │                     │</span><br><span class="line">              ▼                     ▼                     ▼</span><br><span class="line">    ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐</span><br><span class="line">    │  device-data     │  │  alert-service   │  │  safety-service  │</span><br><span class="line">    │  -service        │  │                  │  │                  │</span><br><span class="line">    │  :8081           │  │  :8082           │  │  :8083           │</span><br><span class="line">    └────────┬────────┘  └────────┬────────┘  └────────┬────────┘</span><br><span class="line">             │                    │                     │</span><br><span class="line">     ┌───────┴───────┐   ┌───────┴───────┐    ┌───────┴───────┐</span><br><span class="line">     │               │   │               │    │               │</span><br><span class="line">     ▼               ▼   ▼               ▼    ▼               ▼</span><br><span class="line">┌─────────┐  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐</span><br><span class="line">│ MySQL   │  │ Redis   │ │ Kafka   │ │ MySQL   │ │ Redis   │ │ MySQL   │</span><br><span class="line">│设备数据 │  │实时缓存 │ │告警消息 │ │告警配置 │ │规则缓存 │ │安全规则 │</span><br><span class="line">└─────────┘  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘</span><br></pre></td></tr></table></figure>
-
+<p>-service</p>
 <p><strong>核心服务JVM参数配置：</strong></p>
 <figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># device-data-service（4C8G容器，G1GC）</span></span><br><span class="line">JAVA_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -Xms4g -Xmx4g</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=200</span></span><br><span class="line"><span class="string">  -XX:InitiatingHeapOccupancyPercent=45</span></span><br><span class="line"><span class="string">  -XX:G1HeapRegionSize=8m</span></span><br><span class="line"><span class="string">  -XX:MaxMetaspaceSize=256m</span></span><br><span class="line"><span class="string">  -XX:+HeapDumpOnOutOfMemoryError</span></span><br><span class="line"><span class="string">  -XX:HeapDumpPath=/data/logs/heapdump.hprof</span></span><br><span class="line"><span class="string">  -Xloggc:/data/logs/gc.log</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDetails</span></span><br><span class="line"><span class="string">  -XX:+PrintGCDateStamps</span></span><br><span class="line"><span class="string">  -XX:+PrintGCTimeStamps</span></span><br><span class="line"><span class="string">  -XX:+PrintGCApplicationStoppedTime</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># alert-service（2C4G容器，G1GC）</span></span><br><span class="line">JAVA_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -Xms2g -Xmx2g</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=100</span></span><br><span class="line"><span class="string">  -XX:MaxMetaspaceSize=256m</span></span><br><span class="line"><span class="string">  -XX:+HeapDumpOnOutOfMemoryError</span></span><br><span class="line"><span class="string">  -XX:HeapDumpPath=/data/logs/heapdump.hprof</span></span><br><span class="line"><span class="string">&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># safety-service（2C4G容器，G1GC）</span></span><br><span class="line">JAVA_OPTS=<span class="string">&quot;</span></span><br><span class="line"><span class="string">  -XX:+UseG1GC</span></span><br><span class="line"><span class="string">  -Xms2g -Xmx2g</span></span><br><span class="line"><span class="string">  -XX:MaxGCPauseMillis=100</span></span><br><span class="line"><span class="string">  -XX:MaxMetaspaceSize=256m</span></span><br><span class="line"><span class="string">  -XX:+HeapDumpOnOutOfMemoryError</span></span><br><span class="line"><span class="string">  -XX:HeapDumpPath=/data/logs/heapdump.hprof</span></span><br><span class="line"><span class="string">&quot;</span></span><br></pre></td></tr></table></figure>
 
 <hr>
 <h2 id="二、jps——查看Java进程"><a href="#二、jps——查看Java进程" class="headerlink" title="二、jps——查看Java进程"></a>二、jps——查看Java进程</h2><h3 id="2-1-jps命令详解"><a href="#2-1-jps命令详解" class="headerlink" title="2.1 jps命令详解"></a>2.1 jps命令详解</h3><p>jps（JVM Process Status Tool）是排查一切JVM问题的第一步，用来定位目标Java进程的PID。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">                  jps命令体系</span><br><span class="line">                       │</span><br><span class="line">       ┌───────────────┼───────────────┐</span><br><span class="line">       │               │               │</span><br><span class="line">       ▼               ▼               ▼</span><br><span class="line">┌────────────┐  ┌────────────┐  ┌────────────┐</span><br><span class="line">│  jps       │  │  jps -l    │  │  jps -v    │</span><br><span class="line">│  基本列表   │  │  完整类名   │  │  JVM参数   │</span><br><span class="line">└────────────┘  └────────────┘  └────────────┘</span><br><span class="line">       │               │               │</span><br><span class="line">       ▼               ▼               ▼</span><br><span class="line">PID + 主类短名    PID + 全限定类名  PID + 启动参数</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;jps jps -l jps -v&quot;]</span><br><span class="line">    N2[&quot;基本列表 完整类名 JVM参数&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N1</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ========== 基本用法：列出所有Java进程 ==========</span></span><br><span class="line">jps</span><br><span class="line"><span class="comment"># 输出：</span></span><br><span class="line"><span class="comment"># 12345 order-service.jar</span></span><br><span class="line"><span class="comment"># 12346 user-service.jar</span></span><br><span class="line"><span class="comment"># 12347 Jps</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 显示完整主类名（推荐） ==========</span></span><br><span class="line">jps -l</span><br><span class="line"><span class="comment"># 12345 com.smartmine.DeviceDataApplication</span></span><br><span class="line"><span class="comment"># 12346 com.smartmine.AlertApplication</span></span><br><span class="line"><span class="comment"># 12347 com.smartmine.SafetyApplication</span></span><br><span class="line"><span class="comment"># 12348 sun.tools.jps.Jps</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 显示JVM参数 ==========</span></span><br><span class="line">jps -v</span><br><span class="line"><span class="comment"># 12345 DeviceDataApplication -Xms4g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200</span></span><br><span class="line"><span class="comment"># 12346 AlertApplication -Xms2g -Xmx2g -XX:+UseG1GC</span></span><br><span class="line"><span class="comment"># 12347 SafetyApplication -Xms2g -Xmx2g -XX:+UseG1GC</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 显示传递给main方法的参数 ==========</span></span><br><span class="line">jps -m</span><br><span class="line"><span class="comment"># 12345 DeviceDataApplication --spring.profiles.active=prod</span></span><br><span class="line"><span class="comment"># 12346 AlertApplication --spring.profiles.active=prod</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 组合使用（最常用） ==========</span></span><br><span class="line">jps -lv</span><br><span class="line"><span class="comment"># 12345 com.smartmine.DeviceDataApplication -Xms4g -Xmx4g -XX:+UseG1GC ...</span></span><br><span class="line"><span class="comment"># 12346 com.smartmine.AlertApplication -Xms2g -Xmx2g -XX:+UseG1GC ...</span></span><br></pre></td></tr></table></figure>
 
@@ -342,8 +345,7 @@ article: http://ogp.me/ns/article#">
 </tbody></table>
 <hr>
 <h2 id="三、jstat——GC统计监控"><a href="#三、jstat——GC统计监控" class="headerlink" title="三、jstat——GC统计监控"></a>三、jstat——GC统计监控</h2><h3 id="3-1-jstat命令详解"><a href="#3-1-jstat命令详解" class="headerlink" title="3.1 jstat命令详解"></a>3.1 jstat命令详解</h3><p>jstat（JVM Statistics Monitoring Tool）用于实时监控JVM的GC和内存统计信息，是发现GC异常的第一工具。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">                      jstat命令体系</span><br><span class="line">                           │</span><br><span class="line">       ┌───────────────────┼───────────────────┐</span><br><span class="line">       │                   │                   │</span><br><span class="line">       ▼                   ▼                   ▼</span><br><span class="line">┌────────────┐     ┌────────────┐     ┌────────────┐</span><br><span class="line">│  -gc       │     │  -gcutil   │     │  -gccause  │</span><br><span class="line">│  各区KB值  │     │  各区百分比 │     │  GC原因    │</span><br><span class="line">└────────────┘     └────────────┘     └────────────┘</span><br><span class="line">       │                   │                   │</span><br><span class="line">       ▼                   ▼                   ▼</span><br><span class="line">精确字节数           直观百分比            定位GC触发原因</span><br><span class="line">适合深度分析         适合快速判断          适合根因分析</span><br></pre></td></tr></table></figure>
-
+<p>-gc              -gcutil          -gccause</p>
 <figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ========== 查看GC概况（KB单位） ==========</span></span><br><span class="line">jstat -gc 12345 1000 10</span><br><span class="line"><span class="comment"># 每1秒打印1次，共打印10次</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 输出解读：</span></span><br><span class="line"><span class="comment">#  S0C    S1C    S0U    S1U      EC       EU        OC         OU       MC     MU    CCSC   CCSU   YGC   YGCT    FGC    FGCT     GCT</span></span><br><span class="line"><span class="comment"># 10240  10240   0      5120   81920    40960    204800     102400   51200  48000  6400   6000   125   1.234    5     0.567   1.801</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 查看GC汇总信息（百分比，推荐） ==========</span></span><br><span class="line">jstat -gcutil 12345 1000 10</span><br><span class="line"><span class="comment"># 输出百分比形式，更直观</span></span><br><span class="line"><span class="comment">#  S0     S1     E      O      M     CCS    YGC   YGCT    FGC    FGCT     GCT</span></span><br><span class="line"><span class="comment">#  0.00  50.00  50.00  50.00  93.75  93.75  125   1.234    5    0.567   1.801</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 查看GC原因 ==========</span></span><br><span class="line">jstat -gccause 12345</span><br><span class="line"><span class="comment">#  S0     S1     E      O      M     CCS    YGC   YGCT    FGC    FGCT     GCT    LGCC                 GCC</span></span><br><span class="line"><span class="comment">#  0.00  50.00  50.00  50.00  93.75  93.75  125   1.234    5    0.567   1.801  Allocation Failure   No GC</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 查看新生代详细信息 ==========</span></span><br><span class="line">jstat -gcnew 12345</span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 查看老年代详细信息 ==========</span></span><br><span class="line">jstat -gcold 12345</span><br></pre></td></tr></table></figure>
 
 <h3 id="3-2-jstat输出字段详解"><a href="#3-2-jstat输出字段详解" class="headerlink" title="3.2 jstat输出字段详解"></a>3.2 jstat输出字段详解</h3><h4 id="gc输出字段含义（KB单位）"><a href="#gc输出字段含义（KB单位）" class="headerlink" title="-gc输出字段含义（KB单位）"></a>-gc输出字段含义（KB单位）</h4><table>
@@ -521,11 +523,22 @@ article: http://ogp.me/ns/article#">
 <td>&gt;5%应用时间</td>
 </tr>
 </tbody></table>
-<h3 id="3-3-GC异常判断标准"><a href="#3-3-GC异常判断标准" class="headerlink" title="3.3 GC异常判断标准"></a>3.3 GC异常判断标准</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">┌───────────────────────────────────────────────────────────┐</span><br><span class="line">│                    GC健康度判断矩阵                        │</span><br><span class="line">├─────────────────┬──────────────────┬──────────────────────┤</span><br><span class="line">│     指标        │    正常范围       │    异常（需排查）     │</span><br><span class="line">├─────────────────┼──────────────────┼──────────────────────┤</span><br><span class="line">│ Young GC频率    │ 几秒~几十秒一次  │ &lt; 1秒一次            │</span><br><span class="line">│ Young GC单次耗时│ &lt; 100ms          │ &gt; 500ms              │</span><br><span class="line">│ Full GC频率     │ 几小时~几天一次  │ &lt; 1分钟一次          │</span><br><span class="line">│ Full GC单次耗时 │ &lt; 1s             │ &gt; 5s                 │</span><br><span class="line">│ 老年代使用率    │ &lt; 70%            │ &gt; 80%且持续增长       │</span><br><span class="line">│ Metaspace使用率 │ &lt; 80%且稳定      │ &gt; 90%且持续增长       │</span><br><span class="line">│ FGCT/GCT占比   │ &lt; 20%            │ &gt; 50%                │</span><br><span class="line">│ GC总耗时占比   │ &lt; 2%应用运行时间 │ &gt; 5%应用运行时间      │</span><br><span class="line">└─────────────────┴──────────────────┴──────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="3-3-GC异常判断标准"><a href="#3-3-GC异常判断标准" class="headerlink" title="3.3 GC异常判断标准"></a>3.3 GC异常判断标准</h3><p><strong>GC健康度判断矩阵</strong>：</p>
+<p><strong>指标            正常范围           异常（需排查）</strong>：</p>
+<p><strong>Young GC频率     几秒~几十秒一次   &lt; 1秒一次</strong>：</p>
+<ul>
+<li>Young GC单次耗时 &lt; 100ms           &gt; 500ms</li>
+<li>Full GC频率      几小时~几天一次   &lt; 1分钟一次</li>
+<li>Full GC单次耗时  &lt; 1s              &gt; 5s</li>
+<li>老年代使用率     &lt; 70%             &gt; 80%且持续增长</li>
+<li>Metaspace使用率  &lt; 80%且稳定       &gt; 90%且持续增长</li>
+<li>FGCT&#x2F;GCT占比    &lt; 20%             &gt; 50%</li>
+<li>GC总耗时占比    &lt; 2%应用运行时间  &gt; 5%应用运行时间</li>
+</ul>
 <h3 id="3-4-实际项目实战：GC异常排查"><a href="#3-4-实际项目实战：GC异常排查" class="headerlink" title="3.4 实际项目实战：GC异常排查"></a>3.4 实际项目实战：GC异常排查</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 场景：device-data-service接口偶发超时，怀疑GC问题</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 1: 实时监控GC状况</span></span><br><span class="line">jstat -gcutil 12345 1000 20</span><br><span class="line"><span class="comment"># 每秒打印1次，连续观察20秒</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 输出示例（异常情况）：</span></span><br><span class="line"><span class="comment">#  S0     S1     E      O      M     CCS    YGC   YGCT    FGC    FGCT     GCT</span></span><br><span class="line"><span class="comment">#  0.00  85.32  92.15  82.34  93.75  91.56  5234  52.34   15     12.21   64.55</span></span><br><span class="line"><span class="comment">#  0.00  85.32  95.67  82.41  93.75  91.56  5235  52.36   15     12.21   64.57</span></span><br><span class="line"><span class="comment">#  0.00  85.32  98.23  82.48  93.75  91.56  5236  52.39   15     12.21   64.60</span></span><br><span class="line"><span class="comment">#  85.12  0.00  12.45  82.55  93.75  91.56  5237  52.42   15     12.21   64.63</span></span><br><span class="line"><span class="comment">#                                                                 ↑</span></span><br><span class="line"><span class="comment">#                                              YGC从5234涨到5237，3秒内3次YGC！</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 2: 查看GC原因</span></span><br><span class="line">jstat -gccause 12345</span><br><span class="line"><span class="comment"># LGCC: Allocation Failure    ← Eden区分配失败触发YGC</span></span><br><span class="line"><span class="comment"># GCC: No GC</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 3: 分析结论</span></span><br><span class="line"><span class="comment"># 1. YGC频率：每秒1次，远超正常值</span></span><br><span class="line"><span class="comment"># 2. YGC单次耗时：(52.42-52.34)/(5237-5234) ≈ 27ms/次，单次耗时正常</span></span><br><span class="line"><span class="comment"># 3. 老年代O=82.34%，持续增长，接近危险线</span></span><br><span class="line"><span class="comment"># 4. FGC=15次，FGCT/GCT = 12.21/64.55 = 18.9%，Full GC耗时占比偏高</span></span><br><span class="line"><span class="comment"># 结论：Eden区过小导致YGC频繁，老年代有缓慢增长趋势，可能有内存泄漏</span></span><br></pre></td></tr></table></figure>
 
-<h3 id="3-5-GC异常排查决策树"><a href="#3-5-GC异常排查决策树" class="headerlink" title="3.5 GC异常排查决策树"></a>3.5 GC异常排查决策树</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line">                  GC异常排查决策树</span><br><span class="line">                       │</span><br><span class="line">                       ▼</span><br><span class="line">            ┌─────────────────────┐</span><br><span class="line">            │  jstat -gcutil确认   │</span><br><span class="line">            │  GC频率和内存使用率  │</span><br><span class="line">            └──────────┬──────────┘</span><br><span class="line">                       │</span><br><span class="line">           ┌───────────┴───────────┐</span><br><span class="line">           │                       │</span><br><span class="line">           ▼                       ▼</span><br><span class="line">  ┌──────────────┐       ┌──────────────┐</span><br><span class="line">  │  YGC频繁      │       │  FGC频繁      │</span><br><span class="line">  │  (Eden区太小) │       │  (老年代不足) │</span><br><span class="line">  └──────┬───────┘       └──────┬───────┘</span><br><span class="line">         │                       │</span><br><span class="line">         ▼                       ▼</span><br><span class="line">┌────────────────┐     ┌────────────────────┐</span><br><span class="line">│ 增大新生代      │     │ jmap -histo:live   │</span><br><span class="line">│ 或Survivor区   │     │ 查看大对象分布      │</span><br><span class="line">└────────────────┘     └────────┬───────────┘</span><br><span class="line">                                │</span><br><span class="line">                    ┌───────────┴───────────┐</span><br><span class="line">                    │                       │</span><br><span class="line">                    ▼                       ▼</span><br><span class="line">           ┌──────────────┐       ┌──────────────┐</span><br><span class="line">           │ 大对象直接    │       │ 内存泄漏导致  │</span><br><span class="line">           │ 进入老年代    │       │ 老年代增长    │</span><br><span class="line">           └──────┬───────┘       └──────┬───────┘</span><br><span class="line">                  │                       │</span><br><span class="line">                  ▼                       ▼</span><br><span class="line">         ┌─────────────────┐    ┌──────────────────┐</span><br><span class="line">         │ 增大-XX:        │    │ jmap -dump导出    │</span><br><span class="line">         │ PretenureSize   │    │ MAT分析泄漏根因   │</span><br><span class="line">         │ Threshold       │    │ 或Arthas heapdump │</span><br><span class="line">         └─────────────────┘    └──────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="3-5-GC异常排查决策树"><a href="#3-5-GC异常排查决策树" class="headerlink" title="3.5 GC异常排查决策树"></a>3.5 GC异常排查决策树</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;jstat -gcutil确认&quot;]</span><br><span class="line">    N2[&quot;YGC频繁 FGC频繁&quot;]</span><br><span class="line">    N3[&quot;(Eden区太小) (老年代不足)&quot;]</span><br><span class="line">    N4[&quot;GC频率和内存使用率&quot;]</span><br><span class="line">    N5[&quot;增大新生代 jmap -histo&quot;]</span><br><span class="line">    N6[&quot;live 或Survivor区 查看大对象分布&quot;]</span><br><span class="line">    N7[&quot;大对象直接 内存泄漏导致 进入老年代&quot;]</span><br><span class="line">    N8[&quot;老年代增长&quot;]</span><br><span class="line">    N9[&quot;增大-XX&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N4 --&gt; N2</span><br><span class="line">    N4 --&gt; N3</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N5 --&gt; N8</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N8 --&gt; N7</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line">    N8 --&gt; N9</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="3-6-jstat常用命令速查"><a href="#3-6-jstat常用命令速查" class="headerlink" title="3.6 jstat常用命令速查"></a>3.6 jstat常用命令速查</h3><table>
 <thead>
@@ -573,12 +586,14 @@ article: http://ogp.me/ns/article#">
 </tbody></table>
 <hr>
 <h2 id="四、jstack——线程堆栈分析"><a href="#四、jstack——线程堆栈分析" class="headerlink" title="四、jstack——线程堆栈分析"></a>四、jstack——线程堆栈分析</h2><h3 id="4-1-jstack命令详解"><a href="#4-1-jstack命令详解" class="headerlink" title="4.1 jstack命令详解"></a>4.1 jstack命令详解</h3><p>jstack（JVM Stack Trace Tool）用于查看线程堆栈信息，是CPU飙高和死锁排查的核心工具。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">                    jstack命令体系</span><br><span class="line">                         │</span><br><span class="line">       ┌─────────────────┼─────────────────┐</span><br><span class="line">       │                 │                 │</span><br><span class="line">       ▼                 ▼                 ▼</span><br><span class="line">┌────────────┐   ┌────────────┐   ┌────────────┐</span><br><span class="line">│  jstack    │   │  jstack -l │   │  jstack -F │</span><br><span class="line">│  基本堆栈  │   │  +锁信息   │   │  强制打印  │</span><br><span class="line">└────────────┘   └────────────┘   └────────────┘</span><br><span class="line">       │                 │                 │</span><br><span class="line">       ▼                 ▼                 ▼</span><br><span class="line">线程名+状态       额外显示锁持有      进程无响应时</span><br><span class="line">调用栈            和等待信息          使用（谨慎）</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;jstack jstack -l jstack -F 基本堆栈&quot;]</span><br><span class="line">    N2[&quot;锁信息 强制打印&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N1</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ========== 基本用法：打印线程堆栈 ==========</span></span><br><span class="line">jstack 12345</span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 打印线程堆栈+锁信息（推荐） ==========</span></span><br><span class="line">jstack -l 12345</span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 强制打印（进程无响应时） ==========</span></span><br><span class="line">jstack -F 12345</span><br><span class="line"><span class="comment"># 注意：-F模式使用Linux的ptrace，可能影响进程，谨慎使用</span></span><br></pre></td></tr></table></figure>
 
 <h3 id="4-2-场景一：CPU飙高排查"><a href="#4-2-场景一：CPU飙高排查" class="headerlink" title="4.2 场景一：CPU飙高排查"></a>4.2 场景一：CPU飙高排查</h3><p>CPU飙高是最常见的线上问题，排查遵循”top→top -Hp→printf→jstack”四步法：</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">      CPU飙高排查四步法</span><br><span class="line">           │</span><br><span class="line">           ▼</span><br><span class="line">┌─────────────────────┐</span><br><span class="line">│ Step 1: top -c      │</span><br><span class="line">│ 找到CPU高的Java进程 │</span><br><span class="line">│ PID=12345, CPU=98%  │</span><br><span class="line">└──────────┬──────────┘</span><br><span class="line">           │</span><br><span class="line">           ▼</span><br><span class="line">┌─────────────────────┐</span><br><span class="line">│ Step 2: top -Hp     │</span><br><span class="line">│ 找到CPU高的线程     │</span><br><span class="line">│ TID=12350, CPU=95%  │</span><br><span class="line">└──────────┬──────────┘</span><br><span class="line">           │</span><br><span class="line">           ▼</span><br><span class="line">┌─────────────────────┐</span><br><span class="line">│ Step 3: printf &quot;%x&quot; │</span><br><span class="line">│ 线程ID转十六进制    │</span><br><span class="line">│ 12350 → 0x303e     │</span><br><span class="line">└──────────┬──────────┘</span><br><span class="line">           │</span><br><span class="line">           ▼</span><br><span class="line">┌─────────────────────┐</span><br><span class="line">│ Step 4: jstack      │</span><br><span class="line">│ 查看线程堆栈        │</span><br><span class="line">│ 定位到具体代码行    │</span><br><span class="line">└─────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;Step 1&quot;]</span><br><span class="line">    N2[&quot;Step 2&quot;]</span><br><span class="line">    N3[&quot;top -Hp 找到CPU高的线程 TID12350, CPU95&quot;]</span><br><span class="line">    N4[&quot;top -c 找到CPU高的Java进程 PID12345, CPU98&quot;]</span><br><span class="line">    N5[&quot;Step 3&quot;]</span><br><span class="line">    N6[&quot;printf x 线程ID转十六进制 12350&quot;]</span><br><span class="line">    N7[&quot;0x303e&quot;]</span><br><span class="line">    N8[&quot;Step 4&quot;]</span><br><span class="line">    N9[&quot;jstack 查看线程堆栈 定位到具体代码行&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N4 --&gt; N2</span><br><span class="line">    N4 --&gt; N3</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N3 --&gt; N5</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <p><strong>实际项目实战：CPU飙高排查全流程</strong></p>
 <figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ========== Step 1: 找到CPU高的Java进程 ==========</span></span><br><span class="line">top -c</span><br><span class="line"><span class="comment"># PID  USER  PR  NI  VIRT   RES   SHR  S  %CPU %MEM  COMMAND</span></span><br><span class="line"><span class="comment"># 12345 root  20   0  4.2g  1.5g  120m S  98.7  4.8  java -jar device-data-service.jar</span></span><br><span class="line"><span class="comment">#                                       ↑</span></span><br><span class="line"><span class="comment">#                              CPU 98.7%，确认是Java进程PID=12345</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== Step 2: 找到进程中CPU高的线程 ==========</span></span><br><span class="line">top -Hp 12345</span><br><span class="line"><span class="comment"># PID    USER  PR  NI  VIRT   RES   SHR  S  %CPU %MEM  COMMAND</span></span><br><span class="line"><span class="comment"># 12350  root  20   0  4.2g  1.5g  120m R  95.2  4.8  java -jar device-data-service.jar</span></span><br><span class="line"><span class="comment"># 12351  root  20   0  4.2g  1.5g  120m S   2.1  4.8  java -jar device-data-service.jar</span></span><br><span class="line"><span class="comment"># 12352  root  20   0  4.2g  1.5g  120m S   0.3  4.8  java -jar device-data-service.jar</span></span><br><span class="line"><span class="comment">#                                   ↑</span></span><br><span class="line"><span class="comment">#                          线程TID=12350，CPU=95.2%</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== Step 3: 线程ID转十六进制 ==========</span></span><br><span class="line"><span class="built_in">printf</span> <span class="string">&quot;%x\n&quot;</span> 12350</span><br><span class="line"><span class="comment"># 303e</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== Step 4: 查看线程堆栈 ==========</span></span><br><span class="line">jstack -l 12345 | grep 303e -A 30</span><br><span class="line"><span class="comment"># &quot;http-nio-8081-exec-5&quot; #50 prio=5 os_prio=0 tid=0x00007f8c40239000 nid=0x303e runnable [0x00007f8c0e3fe000]</span></span><br><span class="line"><span class="comment">#    java.lang.Thread.State: RUNNABLE</span></span><br><span class="line"><span class="comment">#      at com.smartmine.service.DeviceAlertRuleEngine.evaluateRule(DeviceAlertRuleEngine.java:128)</span></span><br><span class="line"><span class="comment">#      at com.smartmine.service.DeviceAlertRuleEngine.matchAlert(DeviceAlertRuleEngine.java:56)</span></span><br><span class="line"><span class="comment">#      at com.smartmine.service.DeviceAlertService.checkAlert(DeviceAlertService.java:42)</span></span><br><span class="line"><span class="comment">#      at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)</span></span><br><span class="line"><span class="comment">#      ...</span></span><br><span class="line"><span class="comment">#                                                             ↑</span></span><br><span class="line"><span class="comment">#                                          定位到具体代码行：DeviceAlertRuleEngine.java:128</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== Step 5: 查看源码，确认问题 ==========</span></span><br><span class="line"><span class="comment"># DeviceAlertRuleEngine.java:128 发现正则表达式回溯陷阱</span></span><br><span class="line"><span class="comment"># Pattern.compile(&quot;(.*)+(\\d+)+(.*)+&quot;);  // 贪婪量词+回溯陷阱</span></span><br></pre></td></tr></table></figure>
@@ -587,7 +602,8 @@ article: http://ogp.me/ns/article#">
 <figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 直接使用jstack检测死锁</span></span><br><span class="line">jstack -l 12345</span><br><span class="line"></span><br><span class="line"><span class="comment"># 输出末尾会显示死锁信息（实际项目实际案例）：</span></span><br><span class="line"><span class="comment"># Found one Java-level deadlock:</span></span><br><span class="line"><span class="comment"># =============================</span></span><br><span class="line"><span class="comment"># &quot;alert-push-thread-1&quot;:</span></span><br><span class="line"><span class="comment">#   waiting to lock monitor 0x00007f8c4002e818 (object 0x000000076b0a0c90, a java.lang.Object),</span></span><br><span class="line"><span class="comment">#   which is held by &quot;alert-push-thread-2&quot;</span></span><br><span class="line"><span class="comment"># &quot;alert-push-thread-2&quot;:</span></span><br><span class="line"><span class="comment">#   waiting to lock monitor 0x00007f8c4002e6f8 (object 0x000000076b0a0ca0, a java.lang.Object),</span></span><br><span class="line"><span class="comment">#   which is held by &quot;alert-push-thread-1&quot;</span></span><br><span class="line"><span class="comment">#</span></span><br><span class="line"><span class="comment"># Java stack information for the threads listed above:</span></span><br><span class="line"><span class="comment"># ===================================================</span></span><br><span class="line"><span class="comment"># &quot;alert-push-thread-1&quot;:</span></span><br><span class="line"><span class="comment">#   at com.smartmine.service.AlertPushService.pushSafetyAlert(AlertPushService.java:25)</span></span><br><span class="line"><span class="comment">#   - waiting to lock &lt;0x000000076b0a0ca0&gt; (a java.lang.Object)</span></span><br><span class="line"><span class="comment">#   - locked &lt;0x000000076b0a0c90&gt; (a java.lang.Object)</span></span><br><span class="line"><span class="comment"># &quot;alert-push-thread-2&quot;:</span></span><br><span class="line"><span class="comment">#   at com.smartmine.service.AlertPushService.pushDeviceAlert(AlertPushService.java:45)</span></span><br><span class="line"><span class="comment">#   - waiting to lock &lt;0x000000076b0a0c90&gt; (a java.lang.Object)</span></span><br><span class="line"><span class="comment">#   - locked &lt;0x000000076b0a0ca0&gt; (a java.lang.Object)</span></span><br></pre></td></tr></table></figure>
 
 <p><strong>死锁根因分析：</strong></p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">                 死锁形成过程</span><br><span class="line">                      │</span><br><span class="line">       ┌──────────────┼──────────────┐</span><br><span class="line">       │                             │</span><br><span class="line">       ▼                             ▼</span><br><span class="line">┌────────────┐               ┌────────────┐</span><br><span class="line">│ thread-1   │               │ thread-2   │</span><br><span class="line">│ 获取lockA  │               │ 获取lockB  │</span><br><span class="line">│ ✓          │               │ ✓          │</span><br><span class="line">└─────┬──────┘               └──────┬──────┘</span><br><span class="line">      │                             │</span><br><span class="line">      ▼                             ▼</span><br><span class="line">┌────────────┐               ┌────────────┐</span><br><span class="line">│ 等待lockB  │               │ 等待lockA  │</span><br><span class="line">│ ✗ (被t2持有)│◄─────────────►│ ✗ (被t1持有)│</span><br><span class="line">└────────────┘  互相等待      └────────────┘</span><br><span class="line">                永久阻塞</span><br></pre></td></tr></table></figure>
+<p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;thread-1 thread-2&quot;]</span><br><span class="line">    N2[&quot;获取lockA 获取lockB&quot;]</span><br><span class="line">    N3[&quot;等待lockB 等待lockA&quot;]</span><br><span class="line">    N4[&quot;(被t2持有)&quot;]</span><br><span class="line">    N5[&quot;(被t1持有)&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N2 --&gt; N1</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N1 --&gt; N5</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <p><strong>死锁修复方案：</strong></p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ========== 问题代码：锁获取顺序不一致 ==========</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlertPushService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">Object</span> <span class="variable">lockA</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Object</span>(); <span class="comment">// 安全告警锁</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">Object</span> <span class="variable">lockB</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Object</span>(); <span class="comment">// 设备告警锁</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// thread-1: 先获取lockA，再获取lockB</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">pushSafetyAlert</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">synchronized</span> (lockA) &#123;           <span class="comment">// ① 获取lockA</span></span><br><span class="line">            <span class="keyword">synchronized</span> (lockB) &#123;       <span class="comment">// ② 等待lockB（被thread-2持有）</span></span><br><span class="line">                doPushSafety();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// thread-2: 先获取lockB，再获取lockA  ← 与thread-1顺序相反！</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">pushDeviceAlert</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">synchronized</span> (lockB) &#123;           <span class="comment">// ① 获取lockB</span></span><br><span class="line">            <span class="keyword">synchronized</span> (lockA) &#123;       <span class="comment">// ② 等待lockA（被thread-1持有）</span></span><br><span class="line">                doPushDevice();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ========== 修复方案：统一锁获取顺序 ==========</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlertPushService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">Object</span> <span class="variable">lockA</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Object</span>();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">Object</span> <span class="variable">lockB</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Object</span>();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 所有方法统一顺序：先lockA，再lockB</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">pushSafetyAlert</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">synchronized</span> (lockA) &#123;</span><br><span class="line">            <span class="keyword">synchronized</span> (lockB) &#123;</span><br><span class="line">                doPushSafety();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">pushDeviceAlert</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">synchronized</span> (lockA) &#123;           <span class="comment">// ← 修改：先lockA</span></span><br><span class="line">            <span class="keyword">synchronized</span> (lockB) &#123;       <span class="comment">// ← 修改：再lockB</span></span><br><span class="line">                doPushDevice();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ========== 更优方案：使用ReentrantLock + tryLock ==========</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlertPushService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">ReentrantLock</span> <span class="variable">lockA</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ReentrantLock</span>();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">ReentrantLock</span> <span class="variable">lockB</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ReentrantLock</span>();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">pushSafetyAlert</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">if</span> (lockA.tryLock(<span class="number">5</span>, TimeUnit.SECONDS)) &#123;</span><br><span class="line">                <span class="keyword">try</span> &#123;</span><br><span class="line">                    <span class="keyword">if</span> (lockB.tryLock(<span class="number">5</span>, TimeUnit.SECONDS)) &#123;</span><br><span class="line">                        <span class="keyword">try</span> &#123;</span><br><span class="line">                            doPushSafety();</span><br><span class="line">                        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                            lockB.unlock();</span><br><span class="line">                        &#125;</span><br><span class="line">                    &#125;</span><br><span class="line">                &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                    lockA.unlock();</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</span><br><span class="line">            Thread.currentThread().interrupt();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -595,8 +611,24 @@ article: http://ogp.me/ns/article#">
 <h3 id="4-4-场景三：线程状态分析"><a href="#4-4-场景三：线程状态分析" class="headerlink" title="4.4 场景三：线程状态分析"></a>4.4 场景三：线程状态分析</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 统计各状态线程数量</span></span><br><span class="line">jstack 12345 | grep <span class="string">&quot;java.lang.Thread.State&quot;</span> | <span class="built_in">sort</span> | <span class="built_in">uniq</span> -c</span><br><span class="line"><span class="comment">#    5 java.lang.Thread.State: RUNNABLE</span></span><br><span class="line"><span class="comment">#   20 java.lang.Thread.State: WAITING (on object monitor)</span></span><br><span class="line"><span class="comment">#    3 java.lang.Thread.State: TIMED_WAITING (sleeping)</span></span><br><span class="line"><span class="comment">#    2 java.lang.Thread.State: BLOCKED (on object monitor)</span></span><br></pre></td></tr></table></figure>
 
 <p><strong>线程状态解读与排查方向：</strong></p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">┌────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                       线程状态解读矩阵                                  │</span><br><span class="line">├─────────────┬──────────────────────┬────────────────┬─────────────────┤</span><br><span class="line">│   状态      │     含义             │  过多时的影响   │  排查方向       │</span><br><span class="line">├─────────────┼──────────────────────┼────────────────┼─────────────────┤</span><br><span class="line">│ RUNNABLE    │ 正在执行或等待CPU    │ CPU负载高       │ top -Hp定位最忙 │</span><br><span class="line">│             │                      │                 │ 线程            │</span><br><span class="line">├─────────────┼──────────────────────┼────────────────┼─────────────────┤</span><br><span class="line">│ BLOCKED     │ 等待获取监视器锁     │ 吞吐量下降      │ jstack查看等待  │</span><br><span class="line">│             │                      │ 响应变慢        │ 的锁和持有者     │</span><br><span class="line">├─────────────┼──────────────────────┼────────────────┼─────────────────┤</span><br><span class="line">│ WAITING     │ 无限期等待           │ 线程空闲或      │ 检查是否正常等待 │</span><br><span class="line">│             │ (wait/join/park)     │ 等待外部资源    │ 还是资源不足    │</span><br><span class="line">├─────────────┼──────────────────────┼────────────────┼─────────────────┤</span><br><span class="line">│ TIMED_WAIT  │ 有限期等待           │ 可能是正常等待  │ 检查超时配置    │</span><br><span class="line">│             │ (sleep/wait(n)/parkNanos)│             │ 是否合理        │</span><br><span class="line">└─────────────┴──────────────────────┴────────────────┴─────────────────┘</span><br></pre></td></tr></table></figure>
-
+<p><strong>线程状态解读矩阵</strong>：</p>
+<p><strong>状态           含义               过多时的影响     排查方向</strong>：</p>
+<p><strong>RUNNABLE     正在执行或等待CPU     CPU负载高        top -Hp定位最忙</strong>：</p>
+<ul>
+<li>线程</li>
+</ul>
+<p><strong>BLOCKED      等待获取监视器锁      吞吐量下降       jstack查看等待</strong>：</p>
+<ul>
+<li>响应变慢         的锁和持有者</li>
+</ul>
+<p><strong>WAITING      无限期等待            线程空闲或       检查是否正常等待</strong>：</p>
+<ul>
+<li>(wait&#x2F;join&#x2F;park)      等待外部资源     还是资源不足</li>
+</ul>
+<p><strong>TIMED_WAIT   有限期等待            可能是正常等待   检查超时配置</strong>：</p>
+<ul>
+<li>(sleep&#x2F;wait(n)&#x2F;parkNanos)              是否合理</li>
+</ul>
 <h3 id="4-5-实际项目实战：线程池满排查"><a href="#4-5-实际项目实战：线程池满排查" class="headerlink" title="4.5 实际项目实战：线程池满排查"></a>4.5 实际项目实战：线程池满排查</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 场景：设备数据处理线程池满，大量任务被拒绝</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 1: 统计线程状态</span></span><br><span class="line">jstack 12345 | grep <span class="string">&quot;java.lang.Thread.State&quot;</span> | <span class="built_in">sort</span> | <span class="built_in">uniq</span> -c</span><br><span class="line"><span class="comment">#   25 java.lang.Thread.State: RUNNABLE          ← 大量RUNNABLE</span></span><br><span class="line"><span class="comment">#    5 java.lang.Thread.State: WAITING</span></span><br><span class="line"><span class="comment">#   50 java.lang.Thread.State: TIMED_WAITING     ← 等待IO</span></span><br><span class="line"><span class="comment">#    0 java.lang.Thread.State: BLOCKED</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 2: 查看设备数据处理线程堆栈</span></span><br><span class="line">jstack 12345 | grep <span class="string">&quot;device-data-pool&quot;</span> -A 20</span><br><span class="line"><span class="comment"># &quot;device-data-pool-1&quot; #12 prio=5 os_prio=0 tid=0x... nid=0x... runnable</span></span><br><span class="line"><span class="comment">#    java.lang.Thread.State: RUNNABLE</span></span><br><span class="line"><span class="comment">#      at java.net.SocketInputStream.socketRead0(Native Method)</span></span><br><span class="line"><span class="comment">#      at java.net.SocketInputStream.socketRead(SocketInputStream.java:116)</span></span><br><span class="line"><span class="comment">#      at com.mysql.jdbc.ReadBuffer.fill(ReadBuffer.java:66)</span></span><br><span class="line"><span class="comment">#      at com.smartmine.dao.DeviceSensorDao.batchInsert(DeviceSensorDao.java:89)</span></span><br><span class="line"><span class="comment">#                                          ↑</span></span><br><span class="line"><span class="comment">#                                   线程在等待MySQL写入返回</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 3: 定位到批量写入MySQL慢，导致线程被占满</span></span><br><span class="line"><span class="comment"># 修复：优化批量INSERT，增大线程池，增加队列容量</span></span><br></pre></td></tr></table></figure>
 
 <h3 id="4-6-jstack常用命令速查"><a href="#4-6-jstack常用命令速查" class="headerlink" title="4.6 jstack常用命令速查"></a>4.6 jstack常用命令速查</h3><table>
@@ -675,8 +707,7 @@ article: http://ogp.me/ns/article#">
 </tbody></table>
 <hr>
 <h2 id="五、jmap——内存分析"><a href="#五、jmap——内存分析" class="headerlink" title="五、jmap——内存分析"></a>五、jmap——内存分析</h2><h3 id="5-1-jmap命令详解"><a href="#5-1-jmap命令详解" class="headerlink" title="5.1 jmap命令详解"></a>5.1 jmap命令详解</h3><p>jmap（JVM Memory Map Tool）用于查看堆内存信息和导出堆转储文件，是OOM和内存泄漏排查的核心工具。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">                      jmap命令体系</span><br><span class="line">                           │</span><br><span class="line">       ┌───────────────────┼───────────────────┐</span><br><span class="line">       │                   │                   │</span><br><span class="line">       ▼                   ▼                   ▼</span><br><span class="line">┌────────────┐     ┌────────────┐     ┌────────────┐</span><br><span class="line">│  -heap     │     │  -histo    │     │  -dump     │</span><br><span class="line">│  堆内存概况│     │  对象统计  │     │  导出堆转储│</span><br><span class="line">└────────────┘     └────────────┘     └────────────┘</span><br><span class="line">       │                   │                   │</span><br><span class="line">       ▼                   ▼                   ▼</span><br><span class="line">配置+使用率          按大小排序对象       生成.hprof文件</span><br><span class="line">快速判断内存         定位大对象/异常      MAT深度分析</span><br><span class="line">是否正常             对象数量增长         泄漏根因</span><br></pre></td></tr></table></figure>
-
+<p>-heap            -histo           -dump</p>
 <figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ========== 查看堆内存配置和使用情况 ==========</span></span><br><span class="line">jmap -heap 12345</span><br><span class="line"></span><br><span class="line"><span class="comment"># 输出：</span></span><br><span class="line"><span class="comment"># Heap Configuration:</span></span><br><span class="line"><span class="comment">#    MinHeapFreeRatio         = 40</span></span><br><span class="line"><span class="comment">#    MaxHeapFreeRatio         = 70</span></span><br><span class="line"><span class="comment">#    MaxHeapSize              = 2147483648 (2048.0MB)</span></span><br><span class="line"><span class="comment">#    NewSize                  = 445644288 (425.0MB)</span></span><br><span class="line"><span class="comment">#    MaxNewSize               = 445644288 (425.0MB)</span></span><br><span class="line"><span class="comment">#    OldSize                  = 1701836800 (1623.0MB)</span></span><br><span class="line"><span class="comment">#</span></span><br><span class="line"><span class="comment"># Heap Usage:</span></span><br><span class="line"><span class="comment"># PS Young Generation</span></span><br><span class="line"><span class="comment"># Eden Space:</span></span><br><span class="line"><span class="comment">#    capacity = 335544320 (320.0MB)</span></span><br><span class="line"><span class="comment">#    used     = 167772160 (160.0MB)</span></span><br><span class="line"><span class="comment">#    free     = 167772160 (160.0MB)</span></span><br><span class="line"><span class="comment">#    50.0% used</span></span><br><span class="line"><span class="comment"># PS Old Generation</span></span><br><span class="line"><span class="comment">#    capacity = 1701836800 (1623.0MB)</span></span><br><span class="line"><span class="comment">#    used     = 1361469440 (1298.3MB)</span></span><br><span class="line"><span class="comment">#    free     = 340367360 (324.7MB)</span></span><br><span class="line"><span class="comment">#    80.0% used</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 查看堆中对象统计（按占用空间排序） ==========</span></span><br><span class="line">jmap -histo 12345 | <span class="built_in">head</span> -20</span><br><span class="line"></span><br><span class="line"><span class="comment"># 输出：</span></span><br><span class="line"><span class="comment">#  num     #instances         #bytes  class name</span></span><br><span class="line"><span class="comment">#  1:       1234567       123456700  [B  (byte数组)</span></span><br><span class="line"><span class="comment">#  2:        567890        45431200  java.lang.String</span></span><br><span class="line"><span class="comment">#  3:        345678        27654240  java.util.HashMap$Node</span></span><br><span class="line"><span class="comment">#  4:        234567        18765360  java.lang.Long</span></span><br><span class="line"><span class="comment">#  5:        123456        14834720  com.smartmine.entity.DeviceSensorData</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 只看存活对象（会触发Full GC，慎用！） ==========</span></span><br><span class="line">jmap -histo:live 12345 | <span class="built_in">head</span> -20</span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 导出堆转储文件 ==========</span></span><br><span class="line">jmap -dump:format=b,file=heap.hprof 12345</span><br><span class="line"></span><br><span class="line"><span class="comment"># ========== 只dump存活对象（会触发Full GC） ==========</span></span><br><span class="line">jmap -dump:live,format=b,file=heap.hprof 12345</span><br></pre></td></tr></table></figure>
 
 <h3 id="5-2-jmap参数详解"><a href="#5-2-jmap参数详解" class="headerlink" title="5.2 jmap参数详解"></a>5.2 jmap参数详解</h3><table>
@@ -769,7 +800,8 @@ article: http://ogp.me/ns/article#">
 <p><strong>实际项目实战：对比两次histo发现内存泄漏</strong></p>
 <figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 第一次采集</span></span><br><span class="line">jmap -histo 12345 | <span class="built_in">head</span> -20 &gt; /tmp/histo1.txt</span><br><span class="line"><span class="comment"># 等待5分钟</span></span><br><span class="line"><span class="built_in">sleep</span> 300</span><br><span class="line"><span class="comment"># 第二次采集</span></span><br><span class="line">jmap -histo 12345 | <span class="built_in">head</span> -20 &gt; /tmp/histo2.txt</span><br><span class="line"></span><br><span class="line"><span class="comment"># 对比两次结果</span></span><br><span class="line">diff /tmp/histo1.txt /tmp/histo2.txt</span><br><span class="line"></span><br><span class="line"><span class="comment"># 发现：com.smartmine.entity.DeviceAlertData 实例数从 52340 增长到 89760</span></span><br><span class="line"><span class="comment">#        #bytes 从 6280800 增长到 10771200</span></span><br><span class="line"><span class="comment"># 结论：DeviceAlertData对象持续增长，有内存泄漏风险</span></span><br></pre></td></tr></table></figure>
 
-<h3 id="5-4-堆转储（-dump）与MAT分析"><a href="#5-4-堆转储（-dump）与MAT分析" class="headerlink" title="5.4 堆转储（-dump）与MAT分析"></a>5.4 堆转储（-dump）与MAT分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">                   堆转储分析全流程</span><br><span class="line">                         │</span><br><span class="line">                         ▼</span><br><span class="line">              ┌─────────────────────┐</span><br><span class="line">              │  jmap -dump导出     │</span><br><span class="line">              │  heap.hprof文件     │</span><br><span class="line">              └──────────┬──────────┘</span><br><span class="line">                         │</span><br><span class="line">                         ▼</span><br><span class="line">              ┌─────────────────────┐</span><br><span class="line">              │  MAT导入hprof文件   │</span><br><span class="line">              └──────────┬──────────┘</span><br><span class="line">                         │</span><br><span class="line">         ┌───────────────┼───────────────┐</span><br><span class="line">         │               │               │</span><br><span class="line">         ▼               ▼               ▼</span><br><span class="line">┌──────────────┐ ┌──────────────┐ ┌──────────────┐</span><br><span class="line">│ Leak Suspects│ │  Dominator   │ │  Histogram   │</span><br><span class="line">│ 泄漏嫌疑报告 │ │  Tree        │ │  按类统计    │</span><br><span class="line">│ 自动检测     │ │  支配者树    │ │              │</span><br><span class="line">└──────┬───────┘ └──────┬───────┘ └──────┬───────┘</span><br><span class="line">       │                │                │</span><br><span class="line">       ▼                ▼                ▼</span><br><span class="line">┌──────────────────────────────────────────────┐</span><br><span class="line">│           找到占用内存最大的对象                │</span><br><span class="line">│           查看GC Root引用链                   │</span><br><span class="line">│           定位到持有引用的代码                  │</span><br><span class="line">│           修复泄漏                            │</span><br><span class="line">└──────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="5-4-堆转储（-dump）与MAT分析"><a href="#5-4-堆转储（-dump）与MAT分析" class="headerlink" title="5.4 堆转储（-dump）与MAT分析"></a>5.4 堆转储（-dump）与MAT分析</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;jmap -dump导出&quot;]</span><br><span class="line">    N2[&quot;MAT导入hprof文件&quot;]</span><br><span class="line">    N3[&quot;heap.hprof文件&quot;]</span><br><span class="line">    N4[&quot;Leak Suspects&quot;]</span><br><span class="line">    N5[&quot;Dominator Histogram&quot;]</span><br><span class="line">    N6[&quot;泄漏嫌疑报告 Tree 按类统计&quot;]</span><br><span class="line">    N7[&quot;自动检测 支配者树&quot;]</span><br><span class="line">    N8[&quot;找到占用内存最大的对象 查看GC&quot;]</span><br><span class="line">    N9[&quot;Root引用链 定位到持有引用的代码&quot;]</span><br><span class="line">    N10[&quot;修复泄漏&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N2 --&gt; N7</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N5 --&gt; N4</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N6 --&gt; N4</span><br><span class="line">    N6 --&gt; N5</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N7 --&gt; N4</span><br><span class="line">    N7 --&gt; N5</span><br><span class="line">    N7 --&gt; N6</span><br><span class="line">    N4 --&gt; N8</span><br><span class="line">    N4 --&gt; N9</span><br><span class="line">    N4 --&gt; N10</span><br><span class="line">    N5 --&gt; N8</span><br><span class="line">    N5 --&gt; N9</span><br><span class="line">    N5 --&gt; N10</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N6 --&gt; N9</span><br><span class="line">    N6 --&gt; N10</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line">    N7 --&gt; N10</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <p><strong>MAT分析关键步骤（实际项目实战）：</strong></p>
 <ol>
@@ -852,19 +884,85 @@ article: http://ogp.me/ns/article#">
 <h3 id="6-3-实际项目实战：动态开启GC日志"><a href="#6-3-实际项目实战：动态开启GC日志" class="headerlink" title="6.3 实际项目实战：动态开启GC日志"></a>6.3 实际项目实战：动态开启GC日志</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 场景：线上GC异常，但启动时未开启GC详细日志</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 1: 确认当前GC日志状态</span></span><br><span class="line">jinfo -flag PrintGCDetails 12345</span><br><span class="line"><span class="comment"># -XX:-PrintGCDetails    ← 未开启</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 2: 动态开启GC详细日志</span></span><br><span class="line">jinfo -flag +PrintGCDetails 12345</span><br><span class="line">jinfo -flag +PrintGCDateStamps 12345</span><br><span class="line">jinfo -flag +PrintGCTimeStamps 12345</span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 3: 确认已开启</span></span><br><span class="line">jinfo -flag PrintGCDetails 12345</span><br><span class="line"><span class="comment"># -XX:+PrintGCDetails    ← 已开启</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 4: 观察GC日志</span></span><br><span class="line"><span class="built_in">tail</span> -f /data/logs/gc.log</span><br><span class="line"><span class="comment"># 2023-05-21T10:30:15.123+0800: 1234.567: [GC pause (G1 Evacuation Pause)</span></span><br><span class="line"><span class="comment">#   (young), 0.0234567 secs]</span></span><br><span class="line"><span class="comment">#    [Eden: 256.0M(256.0M)-&gt;0.0B(230.0M)</span></span><br><span class="line"><span class="comment">#     Survivors: 0.0B-&gt;26.0M</span></span><br><span class="line"><span class="comment">#     Heap: 1.5G(4.0G)-&gt;1.3G(4.0G)]</span></span><br><span class="line"><span class="comment">#  [Times: user=0.08 sys=0.01, real=0.02 secs]</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># Step 5: 排查完成后，关闭GC详细日志（减少IO开销）</span></span><br><span class="line">jinfo -flag -PrintGCDetails 12345</span><br></pre></td></tr></table></figure>
 
 <hr>
-<h2 id="七、工具组合实战——完整排查案例"><a href="#七、工具组合实战——完整排查案例" class="headerlink" title="七、工具组合实战——完整排查案例"></a>七、工具组合实战——完整排查案例</h2><h3 id="7-1-案例一：CPU飙高完整排查"><a href="#7-1-案例一：CPU飙高完整排查" class="headerlink" title="7.1 案例一：CPU飙高完整排查"></a>7.1 案例一：CPU飙高完整排查</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                      CPU飙高排查完整流程（实际项目）                      │</span><br><span class="line">├─────────────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                             │</span><br><span class="line">│  ① 告警触发  ────  Prometheus告警：device-data-service CPU 380%（4核）       │</span><br><span class="line">│       │                                                                     │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ② 定位进程  ────  jps -lv → PID=12345, DeviceDataApplication              │</span><br><span class="line">│       │                                                                     │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ③ 定位线程  ────  top -Hp 12345 → TID=12350, CPU=95%                      │</span><br><span class="line">│       │                                                                     │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ④ 转十六进制 ──  printf &quot;%x\n&quot; 12350 → 0x303e                              │</span><br><span class="line">│       │                                                                     │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ⑤ 查看堆栈  ────  jstack -l 12345 | grep 303e -A 30                        │</span><br><span class="line">│       │           → DeviceAlertRuleEngine.evaluateRule:128                    │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ⑥ 确认根因  ────  正则表达式回溯陷阱：(.*)+(\\d+)+(.*)+                     │</span><br><span class="line">│       │           特定设备ID格式触发灾难性回溯                                 │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ⑦ 修复验证  ────  使用占有量词替代贪婪量词：.*+取代.*                       │</span><br><span class="line">│                   增加正则预编译和匹配超时机制                                 │</span><br><span class="line">│                   CPU降至15%，接口恢复正常                                    │</span><br><span class="line">└─────────────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="七、工具组合实战——完整排查案例"><a href="#七、工具组合实战——完整排查案例" class="headerlink" title="七、工具组合实战——完整排查案例"></a>七、工具组合实战——完整排查案例</h2><h3 id="7-1-案例一：CPU飙高完整排查"><a href="#7-1-案例一：CPU飙高完整排查" class="headerlink" title="7.1 案例一：CPU飙高完整排查"></a>7.1 案例一：CPU飙高完整排查</h3><p><strong>CPU飙高排查完整流程（实际项目）</strong>：</p>
+<p><strong>① 告警触发  ────  Prometheus告警：device-data-service CPU 380%（4核）</strong>：</p>
+<ul>
+<li>▼</li>
+<li>② 定位进程  ────  jps -lv → PID&#x3D;12345, DeviceDataApplication</li>
+<li>▼</li>
+<li>③ 定位线程  ────  top -Hp 12345 → TID&#x3D;12350, CPU&#x3D;95%</li>
+<li>▼</li>
+<li>④ 转十六进制 ──  printf “%x\n” 12350 → 0x303e</li>
+<li>▼</li>
+<li>⑤ 查看堆栈  ────  jstack -l 12345 | grep 303e -A 30</li>
+<li>→ DeviceAlertRuleEngine.evaluateRule:128</li>
+<li>▼</li>
+<li>⑥ 确认根因  ────  正则表达式回溯陷阱：(.<em>)+(\d+)+(.</em>)+</li>
+<li>特定设备ID格式触发灾难性回溯</li>
+<li>▼</li>
+<li>⑦ 修复验证  ────  使用占有量词替代贪婪量词：.<em>+取代.</em></li>
+<li>增加正则预编译和匹配超时机制</li>
+<li>CPU降至15%，接口恢复正常</li>
+</ul>
 <p><strong>修复代码：</strong></p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ========== 问题代码：正则表达式回溯陷阱 ==========</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceAlertRuleEngine</span> &#123;</span><br><span class="line">    <span class="comment">// 问题：贪婪量词组合导致灾难性回溯</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Pattern</span> <span class="variable">ALERT_PATTERN</span> <span class="operator">=</span></span><br><span class="line">        Pattern.compile(<span class="string">&quot;(.*)+(\\d+)+(.*)+&quot;</span>);  <span class="comment">// ← 回溯陷阱！</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">evaluateRule</span><span class="params">(String deviceId, String rule)</span> &#123;</span><br><span class="line">        <span class="type">Matcher</span> <span class="variable">matcher</span> <span class="operator">=</span> ALERT_PATTERN.matcher(deviceId);</span><br><span class="line">        <span class="keyword">return</span> matcher.matches();  <span class="comment">// 特定输入时CPU飙高</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ========== 修复方案 ==========</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceAlertRuleEngine</span> &#123;</span><br><span class="line">    <span class="comment">// 方案1：使用占有量词（优先推荐）</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Pattern</span> <span class="variable">ALERT_PATTERN</span> <span class="operator">=</span></span><br><span class="line">        Pattern.compile(<span class="string">&quot;(.++)+(\\d++)+(.++)+&quot;</span>);  <span class="comment">// 占有量词不回溯</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 方案2：简化正则，避免嵌套量词</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Pattern</span> <span class="variable">ALERT_PATTERN_SIMPLE</span> <span class="operator">=</span></span><br><span class="line">        Pattern.compile(<span class="string">&quot;[A-Za-z0-9_-]+-\\d+-[A-Za-z0-9_-]+&quot;</span>);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 方案3：增加匹配超时保护</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">evaluateRuleWithTimeout</span><span class="params">(String deviceId, String rule)</span> &#123;</span><br><span class="line">        <span class="type">ExecutorService</span> <span class="variable">executor</span> <span class="operator">=</span> Executors.newSingleThreadExecutor();</span><br><span class="line">        Future&lt;Boolean&gt; future = executor.submit(() -&gt; &#123;</span><br><span class="line">            <span class="type">Matcher</span> <span class="variable">matcher</span> <span class="operator">=</span> ALERT_PATTERN.matcher(deviceId);</span><br><span class="line">            <span class="keyword">return</span> matcher.matches();</span><br><span class="line">        &#125;);</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> future.get(<span class="number">100</span>, TimeUnit.MILLISECONDS);  <span class="comment">// 100ms超时</span></span><br><span class="line">        &#125; <span class="keyword">catch</span> (TimeoutException e) &#123;</span><br><span class="line">            future.cancel(<span class="literal">true</span>);</span><br><span class="line">            log.warn(<span class="string">&quot;正则匹配超时, deviceId=&#123;&#125;, rule=&#123;&#125;&quot;</span>, deviceId, rule);</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            executor.shutdownNow();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="7-2-案例二：内存溢出完整排查"><a href="#7-2-案例二：内存溢出完整排查" class="headerlink" title="7.2 案例二：内存溢出完整排查"></a>7.2 案例二：内存溢出完整排查</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    内存溢出排查完整流程（实际项目）                        │</span><br><span class="line">├─────────────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                             │</span><br><span class="line">│  ① OOM告警  ────  java.lang.OutOfMemoryError: Java heap space               │</span><br><span class="line">│       │          服务自动重启，HeapDumpOnOutOfMemoryError已触发dump          │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ② 确认内存  ────  jstat -gcutil 12345                                      │</span><br><span class="line">│       │          O区使用率持续&gt;90%，Full GC频繁且不下降                        │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ③ 查看对象  ────  jmap -histo:live 12345 | head -20                        │</span><br><span class="line">│       │          DeviceAlertData实例数23万+，异常                             │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ④ MAT分析   ────  导入heap.hprof → Leak Suspects                           │</span><br><span class="line">│       │          → DeviceAlertCache.alertCache占87%堆内存                     │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ⑤ 定位代码  ────  HashMap只增不减，历史告警永远不释放                         │</span><br><span class="line">│       │          GC Root: DeviceAlertCache.alertCache → HashMap → ArrayList   │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ⑥ 修复验证  ────  Caffeine替代HashMap，设置maximumSize+过期时间             │</span><br><span class="line">│                   OOM问题彻底消失，服务稳定运行30天+                           │</span><br><span class="line">└─────────────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="7-3-案例三：线程死锁完整排查"><a href="#7-3-案例三：线程死锁完整排查" class="headerlink" title="7.3 案例三：线程死锁完整排查"></a>7.3 案例三：线程死锁完整排查</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                      线程死锁排查完整流程（实际项目）                      │</span><br><span class="line">├─────────────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                             │</span><br><span class="line">│  ① 告警触发  ────  矿井安全告警推送失败，大量请求超时                         │</span><br><span class="line">│       │                                                                     │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ② 统计线程  ────  jstack 12345 | grep &quot;State&quot; | sort | uniq -c            │</span><br><span class="line">│       │          大量BLOCKED线程                                             │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ③ 检测死锁  ────  jstack -l 12345                                          │</span><br><span class="line">│       │          Found one Java-level deadlock                               │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ④ 定位代码  ────  AlertPushService两把锁获取顺序不一致                       │</span><br><span class="line">│       │          thread-1: lockA→lockB  vs  thread-2: lockB→lockA            │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ⑤ 修复验证  ────  统一锁获取顺序，改用ReentrantLock.tryLock(timeout)        │</span><br><span class="line">│                   增加死锁检测告警，死锁问题不再发生                           │</span><br><span class="line">└─────────────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="7-4-案例四：GC频繁导致接口超时"><a href="#7-4-案例四：GC频繁导致接口超时" class="headerlink" title="7.4 案例四：GC频繁导致接口超时"></a>7.4 案例四：GC频繁导致接口超时</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                   GC频繁导致STW完整排查流程（实际项目）                    │</span><br><span class="line">├─────────────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                             │</span><br><span class="line">│  ① 告警触发  ────  接口偶发性超时，P99响应时间飙升                           │</span><br><span class="line">│       │                                                                     │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ② GC监控   ────  jstat -gcutil 12345 1000 20                               │</span><br><span class="line">│       │          YGC频率：每秒5次（正常应几秒一次）                            │</span><br><span class="line">│       │          YGCT/GCT占比高                                              │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ③ 确认原因  ────  Eden区设置过小（256MB），大量短生命周期设备数据对象        │</span><br><span class="line">│       │          在Eden区快速填满触发频繁YGC                                  │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ④ 修复调优  ────  增大新生代至1GB，调整-XX:SurvivorRatio=8                 │</span><br><span class="line">│                   YGC频率降至每分钟2-3次，STW占比从12%降至1%                  │</span><br><span class="line">│       ▼                                                                     │</span><br><span class="line">│  ⑤ 验证结果  ────  jstat -gcutil 12345 5000 12                              │</span><br><span class="line">│                   YGC间隔恢复正常，接口超时率降至0                            │</span><br><span class="line">└─────────────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="7-2-案例二：内存溢出完整排查"><a href="#7-2-案例二：内存溢出完整排查" class="headerlink" title="7.2 案例二：内存溢出完整排查"></a>7.2 案例二：内存溢出完整排查</h3><p><strong>内存溢出排查完整流程（实际项目）</strong>：</p>
+<p><strong>① OOM告警  ────  java.lang.OutOfMemoryError: Java heap space</strong>：</p>
+<ul>
+<li>服务自动重启，HeapDumpOnOutOfMemoryError已触发dump</li>
+<li>▼</li>
+<li>② 确认内存  ────  jstat -gcutil 12345</li>
+<li>O区使用率持续&gt;90%，Full GC频繁且不下降</li>
+<li>▼</li>
+<li>③ 查看对象  ────  jmap -histo:live 12345 | head -20</li>
+<li>DeviceAlertData实例数23万+，异常</li>
+<li>▼</li>
+<li>④ MAT分析   ────  导入heap.hprof → Leak Suspects</li>
+<li>→ DeviceAlertCache.alertCache占87%堆内存</li>
+<li>▼</li>
+<li>⑤ 定位代码  ────  HashMap只增不减，历史告警永远不释放</li>
+<li>GC Root: DeviceAlertCache.alertCache → HashMap → ArrayList</li>
+<li>▼</li>
+<li>⑥ 修复验证  ────  Caffeine替代HashMap，设置maximumSize+过期时间</li>
+<li>OOM问题彻底消失，服务稳定运行30天+</li>
+</ul>
+<h3 id="7-3-案例三：线程死锁完整排查"><a href="#7-3-案例三：线程死锁完整排查" class="headerlink" title="7.3 案例三：线程死锁完整排查"></a>7.3 案例三：线程死锁完整排查</h3><p><strong>线程死锁排查完整流程（实际项目）</strong>：</p>
+<p><strong>① 告警触发  ────  矿井安全告警推送失败，大量请求超时</strong>：</p>
+<ul>
+<li>▼</li>
+<li>② 统计线程  ────  jstack 12345 | grep “State” | sort | uniq -c</li>
+<li>大量BLOCKED线程</li>
+<li>▼</li>
+<li>③ 检测死锁  ────  jstack -l 12345</li>
+<li>Found one Java-level deadlock</li>
+<li>▼</li>
+<li>④ 定位代码  ────  AlertPushService两把锁获取顺序不一致</li>
+<li>thread-1: lockA→lockB  vs  thread-2: lockB→lockA</li>
+<li>▼</li>
+<li>⑤ 修复验证  ────  统一锁获取顺序，改用ReentrantLock.tryLock(timeout)</li>
+<li>增加死锁检测告警，死锁问题不再发生</li>
+</ul>
+<h3 id="7-4-案例四：GC频繁导致接口超时"><a href="#7-4-案例四：GC频繁导致接口超时" class="headerlink" title="7.4 案例四：GC频繁导致接口超时"></a>7.4 案例四：GC频繁导致接口超时</h3><p><strong>GC频繁导致STW完整排查流程（实际项目）</strong>：</p>
+<p><strong>① 告警触发  ────  接口偶发性超时，P99响应时间飙升</strong>：</p>
+<ul>
+<li>▼</li>
+<li>② GC监控   ────  jstat -gcutil 12345 1000 20</li>
+<li>YGC频率：每秒5次（正常应几秒一次）</li>
+<li>YGCT&#x2F;GCT占比高</li>
+<li>▼</li>
+<li>③ 确认原因  ────  Eden区设置过小（256MB），大量短生命周期设备数据对象</li>
+<li>在Eden区快速填满触发频繁YGC</li>
+<li>▼</li>
+<li>④ 修复调优  ────  增大新生代至1GB，调整-XX:SurvivorRatio&#x3D;8</li>
+<li>YGC频率降至每分钟2-3次，STW占比从12%降至1%</li>
+<li>▼</li>
+<li>⑤ 验证结果  ────  jstat -gcutil 12345 5000 12</li>
+<li>YGC间隔恢复正常，接口超时率降至0</li>
+</ul>
 <hr>
-<h2 id="八、OOM问题分类与排查决策"><a href="#八、OOM问题分类与排查决策" class="headerlink" title="八、OOM问题分类与排查决策"></a>八、OOM问题分类与排查决策</h2><h3 id="8-1-OOM类型决策树"><a href="#8-1-OOM类型决策树" class="headerlink" title="8.1 OOM类型决策树"></a>8.1 OOM类型决策树</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line">                       OOM类型排查决策树</span><br><span class="line">                            │</span><br><span class="line">                            ▼</span><br><span class="line">                 ┌─────────────────────┐</span><br><span class="line">                 │  收到OOM告警/异常   │</span><br><span class="line">                 │  java.lang.OutOf    │</span><br><span class="line">                 │  MemoryError        │</span><br><span class="line">                 └──────────┬──────────┘</span><br><span class="line">                            │</span><br><span class="line">                            ▼</span><br><span class="line">                 ┌─────────────────────┐</span><br><span class="line">                 │  确认OOM类型         │</span><br><span class="line">                 └──────────┬──────────┘</span><br><span class="line">                            │</span><br><span class="line">        ┌───────────┬───────┴───────┬───────────┐</span><br><span class="line">        │           │               │           │</span><br><span class="line">        ▼           ▼               ▼           ▼</span><br><span class="line">┌────────────┐ ┌──────────┐ ┌────────────┐ ┌──────────┐</span><br><span class="line">│ Java heap  │ │ Metaspace│ │  GC overhead│ │ Unable to│</span><br><span class="line">│ space      │ │          │ │  limit      │ │ create   │</span><br><span class="line">└─────┬──────┘ └────┬─────┘ └──────┬──────┘ └────┬─────┘</span><br><span class="line">      │             │              │              │</span><br><span class="line">      ▼             ▼              ▼              ▼</span><br><span class="line">┌──────────┐  ┌───────────┐ ┌────────────┐ ┌─────────────┐</span><br><span class="line">│ jmap或   │  │ jinfo或   │ │ 同heap     │ │ 检查线程数  │</span><br><span class="line">│ Arthas   │  │ jstat确认 │ │ space排查  │ │ ulimit -a   │</span><br><span class="line">│ heapdump │  │ Metaspace │ │ GC频率     │ │ 线程池配置  │</span><br><span class="line">│ 导出快照  │  │ 使用量    │ │ 过高       │ │ 是否泄漏    │</span><br><span class="line">└────┬─────┘  └─────┬─────┘ └──────┬─────┘ └──────┬──────┘</span><br><span class="line">     │              │              │               │</span><br><span class="line">     ▼              ▼              ▼               ▼</span><br><span class="line">┌──────────┐  ┌───────────┐ ┌────────────┐ ┌─────────────┐</span><br><span class="line">│ MAT分析  │  │ 加大      │ │ 优化对象   │ │ 优化线程池  │</span><br><span class="line">│ 泄漏根因 │  │ MaxMeta   │ │ 生命周期   │ │ 减少线程数  │</span><br><span class="line">│ 或大对象 │  │ spaceSize │ │ 或增堆     │ │ 或增系统    │</span><br><span class="line">│ 一次性   │  │ 或排查    │ │ 内存大小   │ │ 限制        │</span><br><span class="line">│ 分配过多 │  │ 动态类    │ │            │ │             │</span><br><span class="line">│          │  │ 加载泄漏  │ │            │ │             │</span><br><span class="line">└──────────┘  └───────────┘ └────────────┘ └─────────────┘</span><br></pre></td></tr></table></figure>
+<h2 id="八、OOM问题分类与排查决策"><a href="#八、OOM问题分类与排查决策" class="headerlink" title="八、OOM问题分类与排查决策"></a>八、OOM问题分类与排查决策</h2><h3 id="8-1-OOM类型决策树"><a href="#8-1-OOM类型决策树" class="headerlink" title="8.1 OOM类型决策树"></a>8.1 OOM类型决策树</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;收到OOM告警&quot;]</span><br><span class="line">    N2[&quot;确认OOM类型&quot;]</span><br><span class="line">    N3[&quot;异常 java.lang.OutOf MemoryError&quot;]</span><br><span class="line">    N4[&quot;Java heap Metaspace&quot;]</span><br><span class="line">    N5[&quot;GC overhead Unable&quot;]</span><br><span class="line">    N6[&quot;to space limit&quot;]</span><br><span class="line">    N7[&quot;create&quot;]</span><br><span class="line">    N8[&quot;jmap或 jinfo或 同heap&quot;]</span><br><span class="line">    N9[&quot;检查线程数 Arthas jstat确认&quot;]</span><br><span class="line">    N10[&quot;space排查 ulimit -a&quot;]</span><br><span class="line">    N11[&quot;heapdump Metaspace&quot;]</span><br><span class="line">    N12[&quot;GC频率 线程池配置 导出快照 使用量&quot;]</span><br><span class="line">    N13[&quot;过高 是否泄漏&quot;]</span><br><span class="line">    N14[&quot;MAT分析 加大 优化对象 优化线程池&quot;]</span><br><span class="line">    N15[&quot;泄漏根因 MaxMeta 生命周期&quot;]</span><br><span class="line">    N16[&quot;减少线程数 或大对象 spaceSize&quot;]</span><br><span class="line">    N17[&quot;或增堆 或增系统 一次性 或排查&quot;]</span><br><span class="line">    N18[&quot;内存大小 限制 分配过多 动态类&quot;]</span><br><span class="line">    N19[&quot;加载泄漏&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N3 --&gt; N2</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N2 --&gt; N5</span><br><span class="line">    N2 --&gt; N6</span><br><span class="line">    N2 --&gt; N7</span><br><span class="line">    N4 --&gt; N5</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N5 --&gt; N4</span><br><span class="line">    N5 --&gt; N6</span><br><span class="line">    N5 --&gt; N7</span><br><span class="line">    N6 --&gt; N4</span><br><span class="line">    N6 --&gt; N5</span><br><span class="line">    N6 --&gt; N7</span><br><span class="line">    N7 --&gt; N4</span><br><span class="line">    N7 --&gt; N5</span><br><span class="line">    N7 --&gt; N6</span><br><span class="line">    N4 --&gt; N8</span><br><span class="line">    N4 --&gt; N9</span><br><span class="line">    N4 --&gt; N10</span><br><span class="line">    N4 --&gt; N11</span><br><span class="line">    N4 --&gt; N12</span><br><span class="line">    N4 --&gt; N13</span><br><span class="line">    N5 --&gt; N8</span><br><span class="line">    N5 --&gt; N9</span><br><span class="line">    N5 --&gt; N10</span><br><span class="line">    N5 --&gt; N11</span><br><span class="line">    N5 --&gt; N12</span><br><span class="line">    N5 --&gt; N13</span><br><span class="line">    N6 --&gt; N8</span><br><span class="line">    N6 --&gt; N9</span><br><span class="line">    N6 --&gt; N10</span><br><span class="line">    N6 --&gt; N11</span><br><span class="line">    N6 --&gt; N12</span><br><span class="line">    N6 --&gt; N13</span><br><span class="line">    N7 --&gt; N8</span><br><span class="line">    N7 --&gt; N9</span><br><span class="line">    N7 --&gt; N10</span><br><span class="line">    N7 --&gt; N11</span><br><span class="line">    N7 --&gt; N12</span><br><span class="line">    N7 --&gt; N13</span><br><span class="line">    N8 --&gt; N14</span><br><span class="line">    N8 --&gt; N15</span><br><span class="line">    N8 --&gt; N16</span><br><span class="line">    N8 --&gt; N17</span><br><span class="line">    N8 --&gt; N18</span><br><span class="line">    N8 --&gt; N19</span><br><span class="line">    N9 --&gt; N14</span><br><span class="line">    N9 --&gt; N15</span><br><span class="line">    N9 --&gt; N16</span><br><span class="line">    N9 --&gt; N17</span><br><span class="line">    N9 --&gt; N18</span><br><span class="line">    N9 --&gt; N19</span><br><span class="line">    N10 --&gt; N14</span><br><span class="line">    N10 --&gt; N15</span><br><span class="line">    N10 --&gt; N16</span><br><span class="line">    N10 --&gt; N17</span><br><span class="line">    N10 --&gt; N18</span><br><span class="line">    N10 --&gt; N19</span><br><span class="line">    N11 --&gt; N14</span><br><span class="line">    N11 --&gt; N15</span><br><span class="line">    N11 --&gt; N16</span><br><span class="line">    N11 --&gt; N17</span><br><span class="line">    N11 --&gt; N18</span><br><span class="line">    N11 --&gt; N19</span><br><span class="line">    N12 --&gt; N14</span><br><span class="line">    N12 --&gt; N15</span><br><span class="line">    N12 --&gt; N16</span><br><span class="line">    N12 --&gt; N17</span><br><span class="line">    N12 --&gt; N18</span><br><span class="line">    N12 --&gt; N19</span><br><span class="line">    N13 --&gt; N14</span><br><span class="line">    N13 --&gt; N15</span><br><span class="line">    N13 --&gt; N16</span><br><span class="line">    N13 --&gt; N17</span><br><span class="line">    N13 --&gt; N18</span><br><span class="line">    N13 --&gt; N19</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
 <h3 id="8-2-各类OOM详细说明"><a href="#8-2-各类OOM详细说明" class="headerlink" title="8.2 各类OOM详细说明"></a>8.2 各类OOM详细说明</h3><table>
 <thead>
@@ -1374,14 +1472,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
                         2023
-                        <span>(68)</span>
+                        <span>(61)</span>
                     </a>
                 </div>
             
@@ -1547,7 +1645,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

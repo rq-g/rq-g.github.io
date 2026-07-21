@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2025-06-15T06:55:51.000Z">
   <article class="post">
     <h1 class="post-title">Kafka深度实战——高吞吐场景的消息中间件</h1>
 
@@ -209,8 +209,25 @@ article: http://ogp.me/ns/article#">
       <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>Kafka是大数据量日志和事件流场景的最佳选择，高吞吐、低延迟、水平可扩展。但只了解基本用法不够，线上遇到消息丢失、消费积压、分区不均衡等问题时需要深入理解Kafka底层原理。这篇文章从Kafka核心架构到高可用机制，从生产者发送模式到消费者Rebalance，结合实际项目实战经验，全面深入分析Kafka核心原理与实战。</p>
 <hr>
 <h2 id="Kafka核心架构"><a href="#Kafka核心架构" class="headerlink" title="Kafka核心架构"></a>Kafka核心架构</h2><h3 id="整体架构"><a href="#整体架构" class="headerlink" title="整体架构"></a>整体架构</h3><p>Kafka集群由多个Broker组成，其中一个Broker被选为Controller负责分区Leader选举、副本分配等集群管理操作。Producer将消息写入Broker上的Partition，Consumer从Partition拉取消息。ZooKeeper（或KRaft）负责Controller选举和元数据管理。</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">                        ┌─────────────────────────────────────────────────┐</span><br><span class="line">                        │              ZooKeeper / KRaft                  │</span><br><span class="line">                        │         (元数据管理 / Controller选举)             │</span><br><span class="line">                        └──────────────┬──────────────────────────────────┘</span><br><span class="line">                                       │</span><br><span class="line">                                       ▼</span><br><span class="line">┌──────────┐    ┌──────────────────────────────────────────────┐    ┌──────────┐</span><br><span class="line">│          │    │              Kafka Cluster                    │    │          │</span><br><span class="line">│Producer  │───▶│  ┌─────────┐  ┌─────────┐  ┌─────────┐     │───▶│Consumer  │</span><br><span class="line">│  Group   │    │  │ Broker 0│  │ Broker 1│  │ Broker 2│     │    │  Group   │</span><br><span class="line">│          │    │  │(Controller)│ │         │  │         │     │    │          │</span><br><span class="line">└──────────┘    │  └────┬────┘  └────┬────┘  └────┬────┘     │    └──────────┘</span><br><span class="line">                │       │            │            │           │</span><br><span class="line">                │  ┌────┴────────────┴────────────┴────┐     │</span><br><span class="line">                │  │         Topic: vehicle-gps         │     │</span><br><span class="line">                │  │  ┌──────────┬──────────┬────────┐  │     │</span><br><span class="line">                │  │  │Partition0│Partition1│Part...N│  │     │</span><br><span class="line">                │  │  ├──────────┼──────────┼────────┤  │     │</span><br><span class="line">                │  │  │Leader:B0 │Leader:B1 │Leader:B2│ │     │</span><br><span class="line">                │  │  │ISR:B1,B2 │ISR:B0,B2 │ISR:B0,B1│ │     │</span><br><span class="line">                │  │  └──────────┴──────────┴────────┘  │     │</span><br><span class="line">                │  └─────────────────────────────────────┘     │</span><br><span class="line">                └──────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<table>
+<thead>
+<tr>
+<th>Partition0</th>
+<th>Partition1</th>
+<th>Part…N</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Leader:B0</td>
+<td>Leader:B1</td>
+<td>Leader:B2</td>
+</tr>
+<tr>
+<td>ISR:B1,B2</td>
+<td>ISR:B0,B2</td>
+<td>ISR:B0,B1</td>
+</tr>
+</tbody></table>
 <p><strong>实际项目背景</strong>：实际场景中，井下车辆GPS数据采集系统每日处理约10亿条位置事件，设备告警事件流实时推送至监控中心。Kafka作为核心消息中间件，承担GPS轨迹流、设备事件流、日志采集三大场景的数据传输。</p>
 <h3 id="关键概念"><a href="#关键概念" class="headerlink" title="关键概念"></a>关键概念</h3><table>
 <thead>
@@ -380,8 +397,10 @@ article: http://ogp.me/ns/article#">
 
 <hr>
 <h2 id="ISR机制与HW-LEO"><a href="#ISR机制与HW-LEO" class="headerlink" title="ISR机制与HW&#x2F;LEO"></a>ISR机制与HW&#x2F;LEO</h2><p>ISR（In-Sync Replicas）是Kafka数据一致性和高可用的核心机制。</p>
-<h3 id="核心概念"><a href="#核心概念" class="headerlink" title="核心概念"></a>核心概念</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">Leader Replica                    Follower Replica</span><br><span class="line">┌─────────────────┐              ┌─────────────────┐</span><br><span class="line">│ LEO = 12        │   Pull       │ LEO = 10        │</span><br><span class="line">│ HW  = 10        │◀─────────────│ HW  = 10        │</span><br><span class="line">└─────────────────┘              └─────────────────┘</span><br><span class="line"></span><br><span class="line">LEO (Log End Offset): 每个副本的日志末尾位移，即下一条待写入消息的offset</span><br><span class="line">HW  (High Watermark): 所有ISR副本中最小的LEO，Consumer只能消费到HW之前的消息</span><br><span class="line"></span><br><span class="line">- Leader写入消息后LEO增长，但HW只有在所有ISR副本都同步后才增长</span><br><span class="line">- Follower持续从Leader拉取消息，追赶LEO</span><br><span class="line">- 当Follower落后太多（超过replica.lag.time.max.ms），将被踢出ISR</span><br><span class="line">- Leader宕机时，只从ISR中选举新Leader，保证已提交消息不丢失</span><br></pre></td></tr></table></figure>
-
+<h3 id="核心概念"><a href="#核心概念" class="headerlink" title="核心概念"></a>核心概念</h3><p><strong>LEO &#x3D; 12           Pull        LEO &#x3D; 10</strong>：</p>
+<ul>
+<li>HW  &#x3D; 10        ◀───────────── HW  &#x3D; 10</li>
+</ul>
 <h3 id="ISR工作机制"><a href="#ISR工作机制" class="headerlink" title="ISR工作机制"></a>ISR工作机制</h3><ol>
 <li><strong>消息写入</strong>：Producer写入消息到Leader，Leader的LEO +1</li>
 <li><strong>副本同步</strong>：Follower从Leader持续Pull消息，Follower的LEO追赶Leader</li>
@@ -506,15 +525,9 @@ article: http://ogp.me/ns/article#">
 </tr>
 </tbody></table>
 <p><strong>注意</strong>：acks&#x3D;all必须配合 <code>min.insync.replicas &gt;= 2</code> 才有意义。如果ISR中只有Leader一个副本，acks&#x3D;all等同于acks&#x3D;1。</p>
-<h3 id="Producer内部工作流程"><a href="#Producer内部工作流程" class="headerlink" title="Producer内部工作流程"></a>Producer内部工作流程</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">Producer Record</span><br><span class="line">      │</span><br><span class="line">      ▼</span><br><span class="line">┌──────────────┐     ┌──────────────────────────────────────┐</span><br><span class="line">│  Serializer  │────▶│          Partitioner                  │</span><br><span class="line">└──────────────┘     │ (按key hash / round-robin / custom)   │</span><br><span class="line">                     └──────────────┬───────────────────────┘</span><br><span class="line">                                    │</span><br><span class="line">                                    ▼</span><br><span class="line">                     ┌──────────────────────────────────────┐</span><br><span class="line">                     │     RecordAccumulator                 │</span><br><span class="line">                     │  ┌─────────┬─────────┬─────────┐     │</span><br><span class="line">                     │  │Batch P0 │Batch P1 │Batch P2 │ ... │</span><br><span class="line">                     │  └────┬────┴────┬────┴────┬────┘     │</span><br><span class="line">                     └───────┼─────────┼─────────┼──────────┘</span><br><span class="line">                             │         │         │</span><br><span class="line">                             ▼         ▼         ▼</span><br><span class="line">                     ┌──────────────────────────────────────┐</span><br><span class="line">                     │         Sender Thread                 │</span><br><span class="line">                     │  (batch.size满 或 linger.ms到 发送)   │</span><br><span class="line">                     └──────────────┬───────────────────────┘</span><br><span class="line">                                    │</span><br><span class="line">                                    ▼</span><br><span class="line">                              Kafka Broker</span><br></pre></td></tr></table></figure>
+<h3 id="Producer内部工作流程"><a href="#Producer内部工作流程" class="headerlink" title="Producer内部工作流程"></a>Producer内部工作流程</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;Serializer&quot;]</span><br><span class="line">    N2[&quot;RecordAccumulator&quot;]</span><br><span class="line">    N3[&quot;Batch P0 Batch P1&quot;]</span><br><span class="line">    N4[&quot;Batch P2 ...&quot;]</span><br><span class="line">    N5[&quot;Partitioner&quot;]</span><br><span class="line">    N6[&quot;Sender Thread&quot;]</span><br><span class="line">    N7[&quot;(batch.size满 或&quot;]</span><br><span class="line">    N8[&quot;linger.ms到 发送)&quot;]</span><br><span class="line">    N9[&quot;1.&quot;]</span><br><span class="line">    N10[&quot;消息经序列化后进入Partitioner选择目标Partition&quot;]</span><br><span class="line">    N11[&quot;2.&quot;]</span><br><span class="line">    N12[&quot;消息写入RecordAccumulator中对应Partition的Batch&quot;]</span><br><span class="line">    N13[&quot;3. 当Batch满batch.size16KB或等待时间到linger.ms&quot;]</span><br><span class="line">    N14[&quot;Sender线程将Batch发送到Broker&quot;]</span><br><span class="line">    N15[&quot;4. Sender线程将多个Partition的Batch合并为一个Request发送&quot;]</span><br><span class="line">    N16[&quot;减少网络IO&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N1 --&gt; N4</span><br><span class="line">    N5 --&gt; N2</span><br><span class="line">    N5 --&gt; N3</span><br><span class="line">    N5 --&gt; N4</span><br><span class="line">    N2 --&gt; N3</span><br><span class="line">    N2 --&gt; N4</span><br><span class="line">    N3 --&gt; N4</span><br><span class="line">    N4 --&gt; N3</span><br><span class="line">    N3 --&gt; N6</span><br><span class="line">    N3 --&gt; N7</span><br><span class="line">    N3 --&gt; N8</span><br><span class="line">    N4 --&gt; N6</span><br><span class="line">    N4 --&gt; N7</span><br><span class="line">    N4 --&gt; N8</span><br><span class="line">    N9 --&gt; N10</span><br><span class="line">    N11 --&gt; N12</span><br><span class="line">    N13 --&gt; N14</span><br><span class="line">    N15 --&gt; N16</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<ol>
-<li>消息经序列化后进入Partitioner选择目标Partition</li>
-<li>消息写入RecordAccumulator中对应Partition的Batch</li>
-<li>当Batch满（batch.size&#x3D;16KB）或等待时间到（linger.ms），Sender线程将Batch发送到Broker</li>
-<li>Sender线程将多个Partition的Batch合并为一个Request发送，减少网络IO</li>
-</ol>
-<hr>
 <h2 id="消费者深度解析"><a href="#消费者深度解析" class="headerlink" title="消费者深度解析"></a>消费者深度解析</h2><h3 id="Rebalance机制"><a href="#Rebalance机制" class="headerlink" title="Rebalance机制"></a>Rebalance机制</h3><p>Consumer Rebalance是Kafka实现Consumer Group内负载均衡的核心机制。当Consumer加入、离开或发生故障时，触发Rebalance重新分配Partition。</p>
 <p><strong>触发Rebalance的条件</strong>：</p>
 <ul>
@@ -1170,14 +1183,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2025/" aria-label="分类: 2025">
                         2025
-                        <span>(30)</span>
+                        <span>(29)</span>
                     </a>
                 </div>
             
@@ -1343,7 +1356,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 

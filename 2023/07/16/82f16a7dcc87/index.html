@@ -191,7 +191,7 @@ article: http://ogp.me/ns/article#">
     </div>
 </aside>
 <div class="post-page">
-<div class="post-container">
+<div class="post-container" id="post-container" data-post-date="2023-07-16T05:57:39.000Z">
   <article class="post">
     <h1 class="post-title">StampedLock与乐观读——比ReadWriteLock更快的锁</h1>
 
@@ -208,15 +208,66 @@ article: http://ogp.me/ns/article#">
     <div class="post-content">
       <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>在实际场景中，设备状态缓存是典型的读多写少场景。ReadWriteLock是常用方案，但读锁会阻塞写锁，当矿车状态查询非常频繁时，状态更新线程可能被”饿死”。JDK8引入的StampedLock提供了乐观读策略——读操作完全不加锁，只有在写入发生时才校验，性能远超ReadWriteLock。</p>
 <hr>
-<h2 id="ReadWriteLock的痛点"><a href="#ReadWriteLock的痛点" class="headerlink" title="ReadWriteLock的痛点"></a>ReadWriteLock的痛点</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│             ReadWriteLock 的痛点                           │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  1. 读锁阻塞写锁 → 高频读场景下写线程饥饿                  │</span><br><span class="line">│     矿车状态高频查询 → 状态更新一直等                      │</span><br><span class="line">│                                                          │</span><br><span class="line">│  2. 每次读都要获取锁 → 锁竞争开销                         │</span><br><span class="line">│     100个线程读设备状态，每次都要CAS获取读锁                │</span><br><span class="line">│                                                          │</span><br><span class="line">│  3. 不支持锁降级 → 灵活性不足                              │</span><br><span class="line">│                                                          │</span><br><span class="line">│  矿山场景：                                               │</span><br><span class="line">│  线程1读矿车状态 → 获取读锁                               │</span><br><span class="line">│  线程2读矿车状态 → 获取读锁（共享）                        │</span><br><span class="line">│  线程3更新矿车状态 → 等待（读写互斥）                      │</span><br><span class="line">│  线程4读矿车状态 → 获取读锁（新来的可以插队！）             │</span><br><span class="line">│  线程5读矿车状态 → 获取读锁                               │</span><br><span class="line">│  线程3更新矿车状态 → 一直等！写饥饿！                      │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
-<h3 id="ReadWriteLock写饥饿时序分析"><a href="#ReadWriteLock写饥饿时序分析" class="headerlink" title="ReadWriteLock写饥饿时序分析"></a>ReadWriteLock写饥饿时序分析</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│          ReadWriteLock写饥饿时序图                         │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  时间轴 ─────────────────────────────────────────────&gt;    │</span><br><span class="line">│                                                          │</span><br><span class="line">│  T1: 读锁获取 ══════════════════════╗                    │</span><br><span class="line">│  T2: 读锁获取     ══════════════════╣                    │</span><br><span class="line">│  T3: 写锁请求         X 等待...       ║                   │</span><br><span class="line">│  T4: 读锁获取             ═══════════╣                    │</span><br><span class="line">│  T5: 读锁获取                 ═══════╣                    │</span><br><span class="line">│  T6: 读锁获取                     ═══╣                    │</span><br><span class="line">│  T7: 读锁获取                       ═╣                    │</span><br><span class="line">│                                     ╚═ 释放所有读锁后      │</span><br><span class="line">│  T3: 写锁获取                         ════════            │</span><br><span class="line">│                                                          │</span><br><span class="line">│  问题：读请求源源不断 → 写请求永远获取不到锁               │</span><br><span class="line">│  矿山场景：设备状态高频查询 → 状态更新延迟严重             │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="ReadWriteLock的痛点"><a href="#ReadWriteLock的痛点" class="headerlink" title="ReadWriteLock的痛点"></a>ReadWriteLock的痛点</h2><p><strong>ReadWriteLock 的痛点</strong>：</p>
+<p><strong>1. 读锁阻塞写锁 → 高频读场景下写线程饥饿</strong>：</p>
+<ul>
+<li>矿车状态高频查询 → 状态更新一直等</li>
+<li><ol start="2">
+<li>每次读都要获取锁 → 锁竞争开销</li>
+</ol>
+</li>
+<li>100个线程读设备状态，每次都要CAS获取读锁</li>
+<li><ol start="3">
+<li>不支持锁降级 → 灵活性不足</li>
+</ol>
+</li>
+<li>矿山场景：</li>
+<li>线程1读矿车状态 → 获取读锁</li>
+<li>线程2读矿车状态 → 获取读锁（共享）</li>
+<li>线程3更新矿车状态 → 等待（读写互斥）</li>
+<li>线程4读矿车状态 → 获取读锁（新来的可以插队！）</li>
+<li>线程5读矿车状态 → 获取读锁</li>
+<li>线程3更新矿车状态 → 一直等！写饥饿！</li>
+</ul>
+<h3 id="ReadWriteLock写饥饿时序分析"><a href="#ReadWriteLock写饥饿时序分析" class="headerlink" title="ReadWriteLock写饥饿时序分析"></a>ReadWriteLock写饥饿时序分析</h3><p><strong>ReadWriteLock写饥饿时序图</strong>：</p>
+<p><strong>时间轴 ─────────────────────────────────────────────&gt;</strong>：</p>
+<ul>
+<li>T1: 读锁获取 ══════════════════════╗</li>
+<li>T2: 读锁获取     ══════════════════╣</li>
+<li>T3: 写锁请求         X 等待…       ║</li>
+<li>T4: 读锁获取             ═══════════╣</li>
+<li>T5: 读锁获取                 ═══════╣</li>
+<li>T6: 读锁获取                     ═══╣</li>
+<li>T7: 读锁获取                       ═╣</li>
+<li>╚═ 释放所有读锁后</li>
+<li>T3: 写锁获取                         ════════</li>
+<li>问题：读请求源源不断 → 写请求永远获取不到锁</li>
+<li>矿山场景：设备状态高频查询 → 状态更新延迟严重</li>
+</ul>
 <h3 id="ReadWriteLock源码分析"><a href="#ReadWriteLock源码分析" class="headerlink" title="ReadWriteLock源码分析"></a>ReadWriteLock源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ReentrantReadWriteLock.Sync 尝试获取读锁</span></span><br><span class="line"><span class="comment">// 源码简化版</span></span><br><span class="line"><span class="keyword">protected</span> <span class="keyword">final</span> <span class="type">int</span> <span class="title function_">tryAcquireShared</span><span class="params">(<span class="type">int</span> unused)</span> &#123;</span><br><span class="line">    <span class="type">Thread</span> <span class="variable">current</span> <span class="operator">=</span> Thread.currentThread();</span><br><span class="line">    <span class="type">int</span> <span class="variable">c</span> <span class="operator">=</span> getState();</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 如果写锁被其他线程持有，获取读锁失败</span></span><br><span class="line">    <span class="keyword">if</span> (exclusiveCount(c) != <span class="number">0</span> &amp;&amp;</span><br><span class="line">        getExclusiveOwnerThread() != current)</span><br><span class="line">        <span class="keyword">return</span> -<span class="number">1</span>;</span><br><span class="line"></span><br><span class="line">    <span class="type">int</span> <span class="variable">r</span> <span class="operator">=</span> sharedCount(c);</span><br><span class="line">    <span class="comment">// 读锁获取成功条件：没有写锁 或 当前线程持有写锁</span></span><br><span class="line">    <span class="keyword">if</span> (!readerShouldBlock() &amp;&amp;   <span class="comment">// 公平模式下检查队列</span></span><br><span class="line">        r &lt; MAX_COUNT &amp;&amp;</span><br><span class="line">        compareAndSetState(c, c + SHARED_UNIT)) &#123;</span><br><span class="line">        <span class="comment">// 读锁获取成功</span></span><br><span class="line">        <span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> fullTryAcquireShared(current);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// readerShouldBlock() 在非公平模式下的实现</span></span><br><span class="line"><span class="comment">// 允许读线程&quot;插队&quot;，导致写饥饿</span></span><br><span class="line"><span class="keyword">final</span> <span class="type">boolean</span> <span class="title function_">apparentlyFirstQueuedIsExclusive</span><span class="params">()</span> &#123;</span><br><span class="line">    Node h, s;</span><br><span class="line">    <span class="keyword">return</span> (h = head) != <span class="literal">null</span> &amp;&amp;</span><br><span class="line">        (s = h.next)  != <span class="literal">null</span> &amp;&amp;</span><br><span class="line">        !s.isShared()         &amp;&amp;  <span class="comment">// 队列第一个等待的是写锁</span></span><br><span class="line">        s.waiter != <span class="literal">null</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <hr>
-<h2 id="StampedLock三种模式"><a href="#StampedLock三种模式" class="headerlink" title="StampedLock三种模式"></a>StampedLock三种模式</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│           StampedLock 三种模式                             │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  1. 写锁（Write Lock）                                    │</span><br><span class="line">│     独占锁，与读锁和乐观读互斥                             │</span><br><span class="line">│     类似ReadWriteLock的写锁                               │</span><br><span class="line">│                                                          │</span><br><span class="line">│  2. 读锁（Read Lock/Pessimistic Read）                    │</span><br><span class="line">│     共享锁，与写锁互斥，与读锁共享                         │</span><br><span class="line">│     类似ReadWriteLock的读锁                               │</span><br><span class="line">│                                                          │</span><br><span class="line">│  3. 乐观读（Optimistic Read）                             │</span><br><span class="line">│     完全不加锁！                                          │</span><br><span class="line">│     读取前获取stamp，读取后校验stamp是否变化               │</span><br><span class="line">│     如果没变 → 数据一致，直接使用                          │</span><br><span class="line">│     如果变了 → 升级为读锁重新读取                          │</span><br><span class="line">│                                                          │</span><br><span class="line">│  性能：乐观读 &gt;&gt;&gt; 悲观读 &gt; ReadWriteLock                   │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="StampedLock三种模式"><a href="#StampedLock三种模式" class="headerlink" title="StampedLock三种模式"></a>StampedLock三种模式</h2><p><strong>StampedLock 三种模式</strong>：</p>
+<p><strong>1. 写锁（Write Lock）</strong>：</p>
+<ul>
+<li>独占锁，与读锁和乐观读互斥</li>
+<li>类似ReadWriteLock的写锁</li>
+<li><ol start="2">
+<li>读锁（Read Lock&#x2F;Pessimistic Read）</li>
+</ol>
+</li>
+<li>共享锁，与写锁互斥，与读锁共享</li>
+<li>类似ReadWriteLock的读锁</li>
+<li><ol start="3">
+<li>乐观读（Optimistic Read）</li>
+</ol>
+</li>
+<li>完全不加锁！</li>
+<li>读取前获取stamp，读取后校验stamp是否变化</li>
+<li>如果没变 → 数据一致，直接使用</li>
+<li>如果变了 → 升级为读锁重新读取</li>
+<li>性能：乐观读 &gt;&gt;&gt; 悲观读 &gt; ReadWriteLock</li>
+</ul>
 <h3 id="三种模式对比"><a href="#三种模式对比" class="headerlink" title="三种模式对比"></a>三种模式对比</h3><table>
 <thead>
 <tr>
@@ -266,8 +317,23 @@ article: http://ogp.me/ns/article#">
 <hr>
 <h2 id="StampedLock实战"><a href="#StampedLock实战" class="headerlink" title="StampedLock实战"></a>StampedLock实战</h2><h3 id="基础用法"><a href="#基础用法" class="headerlink" title="基础用法"></a>基础用法</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceStatusCache</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">StampedLock</span> <span class="variable">sl</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">StampedLock</span>();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, DeviceStatus&gt; cache = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 乐观读：完全不加锁，性能最好</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> DeviceStatus <span class="title function_">getStatus</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 乐观读：获取stamp</span></span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.tryOptimisticRead();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 读取数据（不加锁）</span></span><br><span class="line">        <span class="type">DeviceStatus</span> <span class="variable">status</span> <span class="operator">=</span> cache.get(deviceId);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 校验stamp是否变化</span></span><br><span class="line">        <span class="keyword">if</span> (sl.validate(stamp)) &#123;</span><br><span class="line">            <span class="keyword">return</span> status;  <span class="comment">// stamp未变，数据有效</span></span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 4. stamp变了，升级为读锁</span></span><br><span class="line">        stamp = sl.readLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> cache.get(deviceId);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlockRead(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 写操作：独占锁</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">updateStatus</span><span class="params">(String deviceId, DeviceStatus status)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.writeLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            cache.put(deviceId, status);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlockWrite(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="乐观读流程图"><a href="#乐观读流程图" class="headerlink" title="乐观读流程图"></a>乐观读流程图</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│              乐观读执行流程                                │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  tryOptimisticRead() → 获取stamp                         │</span><br><span class="line">│         │                                                │</span><br><span class="line">│         ▼                                                │</span><br><span class="line">│  读取数据（不加锁）                                       │</span><br><span class="line">│         │                                                │</span><br><span class="line">│         ▼                                                │</span><br><span class="line">│  validate(stamp)?                                        │</span><br><span class="line">│    ├── true  → 数据有效，直接返回                         │</span><br><span class="line">│    └── false → 数据被修改                                │</span><br><span class="line">│              │                                           │</span><br><span class="line">│              ▼                                           │</span><br><span class="line">│         readLock() → 悲观读锁重新读取                     │</span><br><span class="line">│              │                                           │</span><br><span class="line">│              ▼                                           │</span><br><span class="line">│         unlockRead(stamp) → 释放读锁                     │</span><br><span class="line">│                                                          │</span><br><span class="line">│  关键：乐观读失败率低时性能极高                            │</span><br><span class="line">│       乐观读失败率高时应直接用悲观读                       │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="乐观读流程图"><a href="#乐观读流程图" class="headerlink" title="乐观读流程图"></a>乐观读流程图</h3><p><strong>乐观读执行流程</strong>：</p>
+<p><strong>tryOptimisticRead() → 获取stamp</strong>：</p>
+<ul>
+<li>▼</li>
+<li>读取数据（不加锁）</li>
+<li>▼</li>
+<li>validate(stamp)?</li>
+</ul>
+<p><strong>└── false → 数据被修改</strong>：</p>
+<ul>
+<li>▼</li>
+<li>readLock() → 悲观读锁重新读取</li>
+<li>▼</li>
+<li>unlockRead(stamp) → 释放读锁</li>
+<li>关键：乐观读失败率低时性能极高</li>
+<li>乐观读失败率高时应直接用悲观读</li>
+</ul>
 <h3 id="完整实战：设备状态本地缓存"><a href="#完整实战：设备状态本地缓存" class="headerlink" title="完整实战：设备状态本地缓存"></a>完整实战：设备状态本地缓存</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceLocalCache</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">StampedLock</span> <span class="variable">sl</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">StampedLock</span>();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, CacheEntry&gt; cache = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;(<span class="number">64</span>);</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Data</span></span><br><span class="line">    <span class="meta">@AllArgsConstructor</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">class</span> <span class="title class_">CacheEntry</span> &#123;</span><br><span class="line">        <span class="keyword">private</span> Object value;</span><br><span class="line">        <span class="keyword">private</span> <span class="type">long</span> expireTime;</span><br><span class="line"></span><br><span class="line">        <span class="type">boolean</span> <span class="title function_">isExpired</span><span class="params">()</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> System.currentTimeMillis() &gt; expireTime;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 乐观读获取缓存</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> &lt;T&gt; T <span class="title function_">get</span><span class="params">(String key, Class&lt;T&gt; type)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.tryOptimisticRead();</span><br><span class="line">        <span class="type">CacheEntry</span> <span class="variable">entry</span> <span class="operator">=</span> cache.get(key);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (sl.validate(stamp)) &#123;</span><br><span class="line">            <span class="keyword">if</span> (entry == <span class="literal">null</span> || entry.isExpired()) <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">            <span class="keyword">return</span> type.cast(entry.getValue());</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 乐观读失败，升级为悲观读锁</span></span><br><span class="line">        stamp = sl.readLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            entry = cache.get(key);</span><br><span class="line">            <span class="keyword">if</span> (entry == <span class="literal">null</span> || entry.isExpired()) <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">            <span class="keyword">return</span> type.cast(entry.getValue());</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlockRead(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 写入缓存</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">put</span><span class="params">(String key, Object value, <span class="type">long</span> ttlMs)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.writeLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            cache.put(key, <span class="keyword">new</span> <span class="title class_">CacheEntry</span>(value,</span><br><span class="line">                System.currentTimeMillis() + ttlMs));</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlockWrite(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 删除缓存</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">remove</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.writeLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            cache.remove(key);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlockWrite(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="锁转换：读锁转写锁"><a href="#锁转换：读锁转写锁" class="headerlink" title="锁转换：读锁转写锁"></a>锁转换：读锁转写锁</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceConfigManager</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">StampedLock</span> <span class="variable">sl</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">StampedLock</span>();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, String&gt; config = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 读取配置，如果不存在则加载</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">getConfig</span><span class="params">(String key)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 先获取读锁</span></span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.readLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">value</span> <span class="operator">=</span> config.get(key);</span><br><span class="line">            <span class="keyword">if</span> (value != <span class="literal">null</span>) <span class="keyword">return</span> value;</span><br><span class="line"></span><br><span class="line">            <span class="comment">// 2. 缓存未命中，尝试转换为写锁</span></span><br><span class="line">            <span class="type">long</span> <span class="variable">writeStamp</span> <span class="operator">=</span> sl.tryConvertToWriteLock(stamp);</span><br><span class="line"></span><br><span class="line">            <span class="keyword">if</span> (writeStamp != <span class="number">0L</span>) &#123;</span><br><span class="line">                <span class="comment">// 转换成功</span></span><br><span class="line">                stamp = writeStamp;</span><br><span class="line">                value = loadFromDb(key);</span><br><span class="line">                config.put(key, value);</span><br><span class="line">                <span class="keyword">return</span> value;</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                <span class="comment">// 转换失败，释放读锁，获取写锁</span></span><br><span class="line">                sl.unlockRead(stamp);</span><br><span class="line">                stamp = sl.writeLock();</span><br><span class="line">                <span class="keyword">try</span> &#123;</span><br><span class="line">                    value = config.get(key);</span><br><span class="line">                    <span class="keyword">if</span> (value == <span class="literal">null</span>) &#123;</span><br><span class="line">                        value = loadFromDb(key);</span><br><span class="line">                        config.put(key, value);</span><br><span class="line">                    &#125;</span><br><span class="line">                    <span class="keyword">return</span> value;</span><br><span class="line">                &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                    sl.unlockWrite(stamp);</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlock(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -279,11 +345,32 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="写锁源码"><a href="#写锁源码" class="headerlink" title="写锁源码"></a>写锁源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 写锁获取</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">long</span> <span class="title function_">writeLock</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">long</span> next;</span><br><span class="line">    <span class="comment">// CAS修改state，设置WBIT</span></span><br><span class="line">    <span class="keyword">return</span> ((next = tryWriteLock()) != <span class="number">0L</span>)</span><br><span class="line">        ? next</span><br><span class="line">        : acquireWrite(<span class="literal">false</span>, <span class="number">0L</span>);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="type">long</span> <span class="title function_">tryWriteLock</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">long</span> s;</span><br><span class="line">    <span class="comment">// state&amp;WBIT != 0 表示写锁被占用</span></span><br><span class="line">    <span class="keyword">if</span> ((s = state) &amp; WBIT) != <span class="number">0L</span>)</span><br><span class="line">        <span class="keyword">return</span> <span class="number">0L</span>;  <span class="comment">// 写锁已被占用</span></span><br><span class="line">    <span class="comment">// CAS: state + WBIT（设置写锁标志）</span></span><br><span class="line">    <span class="keyword">if</span> (!U.compareAndSwapLong(<span class="built_in">this</span>, STATE, s, next = s + WBIT))</span><br><span class="line">        <span class="keyword">return</span> <span class="number">0L</span>;  <span class="comment">// CAS失败</span></span><br><span class="line">    owner = Thread.currentThread();</span><br><span class="line">    <span class="keyword">return</span> next;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 写锁释放</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">unlockWrite</span><span class="params">(<span class="type">long</span> stamp)</span> &#123;</span><br><span class="line">    <span class="comment">// 校验stamp是否匹配</span></span><br><span class="line">    <span class="keyword">if</span> (state != stamp)</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">IllegalMonitorStateException</span>();</span><br><span class="line">    owner = <span class="literal">null</span>;</span><br><span class="line">    <span class="comment">// 释放写锁：state + WBIT</span></span><br><span class="line">    <span class="comment">// 关键：释放写锁时 state += WBIT</span></span><br><span class="line">    <span class="comment">// 这会改变stamp的高位，使所有乐观读的validate失败</span></span><br><span class="line">    U.putLongVolatile(<span class="built_in">this</span>, STATE, stamp + WBIT);</span><br><span class="line">    <span class="comment">// 唤醒等待线程</span></span><br><span class="line">    release(<span class="number">0</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<h3 id="乐观读原理图解"><a href="#乐观读原理图解" class="headerlink" title="乐观读原理图解"></a>乐观读原理图解</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│          乐观读原理：基于stamp版本号                        │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  state结构（64位）：                                      │</span><br><span class="line">│  ┌─────────────┬───────┬───────────────────────┐        │</span><br><span class="line">│  │ stamp版本号  │ 读锁数  │ 写锁标志              │        │</span><br><span class="line">│  │  bit[63:8]  │       │ bit[7]                │        │</span><br><span class="line">│  └─────────────┴───────┴───────────────────────┘        │</span><br><span class="line">│                                                          │</span><br><span class="line">│  乐观读流程：                                             │</span><br><span class="line">│  1. tryOptimisticRead()                                  │</span><br><span class="line">│     读取state → 记录stamp = state &amp; SBITS                │</span><br><span class="line">│                                                          │</span><br><span class="line">│  2. 读取共享变量（无锁）                                  │</span><br><span class="line">│     DeviceStatus status = cache.get(deviceId);           │</span><br><span class="line">│                                                          │</span><br><span class="line">│  3. validate(stamp)                                      │</span><br><span class="line">│     loadFence() → 内存屏障                                │</span><br><span class="line">│     比较 (stamp &amp; SBITS) == (state &amp; SBITS)              │</span><br><span class="line">│     ├── 相等 → 期间无写操作，数据有效                     │</span><br><span class="line">│     └── 不等 → 期间有写操作，数据可能不一致               │</span><br><span class="line">│                                                          │</span><br><span class="line">│  写锁释放时state变化：                                    │</span><br><span class="line">│  unlockWrite → state += WBIT → stamp版本号变化            │</span><br><span class="line">│  → 所有之前的乐观读stamp都会validate失败                  │</span><br><span class="line">│                                                          │</span><br><span class="line">│  这就是为什么乐观读能保证数据一致性：                      │</span><br><span class="line">│  写操作一定会改变stamp → validate一定能检测到写操作        │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="乐观读原理图解"><a href="#乐观读原理图解" class="headerlink" title="乐观读原理图解"></a>乐观读原理图解</h3><p><strong>架构流程</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">flowchart TD</span><br><span class="line">    N1[&quot;乐观读原理&quot;]</span><br><span class="line">    N2[&quot;stamp版本号 读锁数 写锁标志 bit[63&quot;]</span><br><span class="line">    N3[&quot;8] bit[7]&quot;]</span><br><span class="line">    N4[&quot;基于stamp版本号&quot;]</span><br><span class="line">    N1 --&gt; N2</span><br><span class="line">    N1 --&gt; N3</span><br><span class="line">    N4 --&gt; N2</span><br><span class="line">    N4 --&gt; N3</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-<hr>
-<h2 id="性能对比"><a href="#性能对比" class="headerlink" title="性能对比"></a>性能对比</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│           三种锁性能对比（读多写少）                        │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  StampedLock乐观读  &gt;&gt;&gt;  StampedLock悲观读  &gt;  RWLock    │</span><br><span class="line">│      1500万次/秒           800万次/秒        500万次/秒  │</span><br><span class="line">│                                                          │</span><br><span class="line">│  为什么乐观读这么快？                                     │</span><br><span class="line">│  1. 不加锁 → 没有锁竞争                                  │</span><br><span class="line">│  2. 不修改锁状态 → 没有CAS操作                            │</span><br><span class="line">│  3. 只校验stamp → 一次volatile读                          │</span><br><span class="line">│                                                          │</span><br><span class="line">│  智慧矿山压测数据：                                       │</span><br><span class="line">│  100个线程读设备状态，1个线程更新                          │</span><br><span class="line">│  ReadWriteLock:      约 500万次/秒                       │</span><br><span class="line">│  StampedLock乐观读:  约 1500万次/秒                      │</span><br><span class="line">│  StampedLock悲观读:  约 800万次/秒                       │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="性能对比"><a href="#性能对比" class="headerlink" title="性能对比"></a>性能对比</h2><p><strong>三种锁性能对比（读多写少）</strong>：</p>
+<p><strong>StampedLock乐观读  &gt;&gt;&gt;  StampedLock悲观读  &gt;  RWLock</strong>：</p>
+<ul>
+<li>1500万次&#x2F;秒           800万次&#x2F;秒        500万次&#x2F;秒</li>
+<li>为什么乐观读这么快？</li>
+<li><ol>
+<li>不加锁 → 没有锁竞争</li>
+</ol>
+</li>
+<li><ol start="2">
+<li>不修改锁状态 → 没有CAS操作</li>
+</ol>
+</li>
+<li><ol start="3">
+<li>只校验stamp → 一次volatile读</li>
+</ol>
+</li>
+<li>智慧矿山压测数据：</li>
+<li>100个线程读设备状态，1个线程更新</li>
+<li>ReadWriteLock:      约 500万次&#x2F;秒</li>
+<li>StampedLock乐观读:  约 1500万次&#x2F;秒</li>
+<li>StampedLock悲观读:  约 800万次&#x2F;秒</li>
+</ul>
 <h3 id="JMH基准测试代码"><a href="#JMH基准测试代码" class="headerlink" title="JMH基准测试代码"></a>JMH基准测试代码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * StampedLock vs ReadWriteLock 性能基准测试</span></span><br><span class="line"><span class="comment"> * 使用JMH微基准测试框架</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@BenchmarkMode(Mode.Throughput)</span></span><br><span class="line"><span class="meta">@OutputTimeUnit(TimeUnit.SECONDS)</span></span><br><span class="line"><span class="meta">@State(Scope.Group)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LockPerformanceBenchmark</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">StampedLock</span> <span class="variable">stampedLock</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">StampedLock</span>();</span><br><span class="line">    <span class="keyword">private</span> <span class="type">ReadWriteLock</span> <span class="variable">rwLock</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ReentrantReadWriteLock</span>();</span><br><span class="line">    <span class="keyword">private</span> Map&lt;String, DeviceStatus&gt; data = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Setup</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">setup</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="comment">// 初始化1000个设备状态</span></span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; <span class="number">1000</span>; i++) &#123;</span><br><span class="line">            data.put(<span class="string">&quot;device-&quot;</span> + i, <span class="keyword">new</span> <span class="title class_">DeviceStatus</span>(<span class="string">&quot;ONLINE&quot;</span>, <span class="number">0</span>));</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ===== StampedLock 乐观读 =====</span></span><br><span class="line">    <span class="meta">@Group(&quot;stamped_optimistic&quot;)</span></span><br><span class="line">    <span class="meta">@Benchmark</span></span><br><span class="line">    <span class="keyword">public</span> DeviceStatus <span class="title function_">stampedOptimisticRead</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> stampedLock.tryOptimisticRead();</span><br><span class="line">        <span class="type">DeviceStatus</span> <span class="variable">status</span> <span class="operator">=</span> data.get(<span class="string">&quot;device-500&quot;</span>);</span><br><span class="line">        <span class="keyword">if</span> (!stampedLock.validate(stamp)) &#123;</span><br><span class="line">            stamp = stampedLock.readLock();</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                status = data.get(<span class="string">&quot;device-500&quot;</span>);</span><br><span class="line">            &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                stampedLock.unlockRead(stamp);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> status;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Group(&quot;stamped_optimistic&quot;)</span></span><br><span class="line">    <span class="meta">@Benchmark</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">stampedOptimisticWrite</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> stampedLock.writeLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            data.put(<span class="string">&quot;device-500&quot;</span>, <span class="keyword">new</span> <span class="title class_">DeviceStatus</span>(<span class="string">&quot;RUNNING&quot;</span>, <span class="number">100</span>));</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            stampedLock.unlockWrite(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ===== ReadWriteLock =====</span></span><br><span class="line">    <span class="meta">@Group(&quot;rwlock&quot;)</span></span><br><span class="line">    <span class="meta">@Benchmark</span></span><br><span class="line">    <span class="keyword">public</span> DeviceStatus <span class="title function_">rwLockRead</span><span class="params">()</span> &#123;</span><br><span class="line">        rwLock.readLock().lock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> data.get(<span class="string">&quot;device-500&quot;</span>);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            rwLock.readLock().unlock();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Group(&quot;rwlock&quot;)</span></span><br><span class="line">    <span class="meta">@Benchmark</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">rwLockWrite</span><span class="params">()</span> &#123;</span><br><span class="line">        rwLock.writeLock().lock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            data.put(<span class="string">&quot;device-500&quot;</span>, <span class="keyword">new</span> <span class="title class_">DeviceStatus</span>(<span class="string">&quot;RUNNING&quot;</span>, <span class="number">100</span>));</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            rwLock.writeLock().unlock();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="不同读写比下的性能表现"><a href="#不同读写比下的性能表现" class="headerlink" title="不同读写比下的性能表现"></a>不同读写比下的性能表现</h3><table>
@@ -330,8 +417,39 @@ article: http://ogp.me/ns/article#">
 <p>注意：读写比低于5:1时，乐观读优势消失，此时应直接使用悲观读。</p>
 </blockquote>
 <hr>
-<h2 id="StampedLock注意事项"><a href="#StampedLock注意事项" class="headerlink" title="StampedLock注意事项"></a>StampedLock注意事项</h2><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│            StampedLock 注意事项                            │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  1. 不可重入                                              │</span><br><span class="line">│     持有锁的方法中调用另一个需要同一把锁的方法 → 死锁！    │</span><br><span class="line">│                                                          │</span><br><span class="line">│  2. 不要在中断场景使用                                    │</span><br><span class="line">│     readLock/writeLock不响应中断                          │</span><br><span class="line">│     需要可中断用 readLockInterruptibly                    │</span><br><span class="line">│                                                          │</span><br><span class="line">│  3. 乐观读中不要调用可能修改数据的方法                    │</span><br><span class="line">│     乐观读是不加锁的，写操作会导致validate失败             │</span><br><span class="line">│                                                          │</span><br><span class="line">│  4. stamp不能为0                                          │</span><br><span class="line">│     stamp=0表示获取锁失败                                 │</span><br><span class="line">│                                                          │</span><br><span class="line">│  5. unlock时stamp必须匹配                                 │</span><br><span class="line">│     writeLock返回的stamp用unlockWrite释放                 │</span><br><span class="line">│     readLock返回的stamp用unlockRead释放                   │</span><br><span class="line">│     或使用通用的unlock(stamp)                             │</span><br><span class="line">│                                                          │</span><br><span class="line">│  6. 不支持Condition                                      │</span><br><span class="line">│     需要条件变量请用ReentrantLock                         │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h2 id="StampedLock注意事项"><a href="#StampedLock注意事项" class="headerlink" title="StampedLock注意事项"></a>StampedLock注意事项</h2><p><strong>StampedLock 注意事项</strong>：</p>
+<p><strong>1. 不可重入</strong>：</p>
+<ul>
+<li>持有锁的方法中调用另一个需要同一把锁的方法 → 死锁！</li>
+<li><ol start="2">
+<li>不要在中断场景使用</li>
+</ol>
+</li>
+<li>readLock&#x2F;writeLock不响应中断</li>
+<li>需要可中断用 readLockInterruptibly</li>
+<li><ol start="3">
+<li>乐观读中不要调用可能修改数据的方法</li>
+</ol>
+</li>
+<li>乐观读是不加锁的，写操作会导致validate失败</li>
+<li><ol start="4">
+<li>stamp不能为0</li>
+</ol>
+</li>
+<li>stamp&#x3D;0表示获取锁失败</li>
+<li><ol start="5">
+<li>unlock时stamp必须匹配</li>
+</ol>
+</li>
+<li>writeLock返回的stamp用unlockWrite释放</li>
+<li>readLock返回的stamp用unlockRead释放</li>
+<li>或使用通用的unlock(stamp)</li>
+<li><ol start="6">
+<li>不支持Condition</li>
+</ol>
+</li>
+<li>需要条件变量请用ReentrantLock</li>
+</ul>
 <h3 id="不可重入死锁示例"><a href="#不可重入死锁示例" class="headerlink" title="不可重入死锁示例"></a>不可重入死锁示例</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * StampedLock不可重入死锁示例</span></span><br><span class="line"><span class="comment"> * 实际项目中的实际踩坑</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceStatusManager</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">StampedLock</span> <span class="variable">sl</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">StampedLock</span>();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;String, DeviceStatus&gt; cache = <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * ❌ 死锁！方法A获取写锁后调用方法B，方法B也尝试获取写锁</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">updateDeviceAndNotify</span><span class="params">(String deviceId, DeviceStatus status)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.writeLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 更新设备状态</span></span><br><span class="line">            cache.put(deviceId, status);</span><br><span class="line">            <span class="comment">// ❌ 通知关联设备更新 → 内部又获取写锁 → 死锁！</span></span><br><span class="line">            notifyRelatedDevices(deviceId);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlockWrite(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">void</span> <span class="title function_">notifyRelatedDevices</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.writeLock();  <span class="comment">// ❌ 死锁！已经持有写锁，再次获取写锁</span></span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 更新关联设备状态...</span></span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlockWrite(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * ✅ 正确做法：拆分为独立方法，避免嵌套加锁</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">updateDeviceAndNotifyFixed</span><span class="params">(String deviceId, DeviceStatus status)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">stamp</span> <span class="operator">=</span> sl.writeLock();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            cache.put(deviceId, status);</span><br><span class="line">            <span class="comment">// 收集需要通知的设备ID，但不在这里加锁</span></span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            sl.unlockWrite(stamp);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 锁已释放，安全获取新锁</span></span><br><span class="line">        notifyRelatedDevices(deviceId);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <h3 id="三种锁选型对比"><a href="#三种锁选型对比" class="headerlink" title="三种锁选型对比"></a>三种锁选型对比</h3><table>
@@ -386,8 +504,18 @@ article: http://ogp.me/ns/article#">
 <td>读远多于写</td>
 </tr>
 </tbody></table>
-<h3 id="锁选型决策树"><a href="#锁选型决策树" class="headerlink" title="锁选型决策树"></a>锁选型决策树</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────┐</span><br><span class="line">│              锁选型决策树                                  │</span><br><span class="line">├──────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                          │</span><br><span class="line">│  是否需要多条件等待？                                     │</span><br><span class="line">│  ├── 是 → ReentrantLock                                  │</span><br><span class="line">│  └── 否 → 读多写少？                                     │</span><br><span class="line">│           ├── 否 → ReentrantLock（通用场景）              │</span><br><span class="line">│           └── 是 → 读写比 &gt; 10:1？                        │</span><br><span class="line">│                    ├── 否 → ReadWriteLock                 │</span><br><span class="line">│                    └── 是 → StampedLock                   │</span><br><span class="line">│                             ├── 需要可重入？→ ReadWriteLock│</span><br><span class="line">│                             ├── 需要Condition？→ RWLock   │</span><br><span class="line">│                             └── 都不需要 → 乐观读         │</span><br><span class="line">│                                                          │</span><br><span class="line">│  实际项目选型：                                       │</span><br><span class="line">│  设备状态缓存(100:1) → StampedLock乐观读                  │</span><br><span class="line">│  设备配置管理(10:1) → ReadWriteLock                       │</span><br><span class="line">│  任务队列(生产消费) → ReentrantLock+Condition             │</span><br><span class="line">│                                                          │</span><br><span class="line">└──────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
-
+<h3 id="锁选型决策树"><a href="#锁选型决策树" class="headerlink" title="锁选型决策树"></a>锁选型决策树</h3><p><strong>锁选型决策树</strong>：</p>
+<p><strong>是否需要多条件等待？</strong>：</p>
+<p><strong>└── 否 → 读多写少？</strong>：</p>
+<p><strong>└── 是 → 读写比 &gt; 10:1？</strong>：</p>
+<p><strong>└── 是 → StampedLock</strong>：</p>
+<p><strong>└── 都不需要 → 乐观读</strong>：</p>
+<ul>
+<li>实际项目选型：</li>
+<li>设备状态缓存(100:1) → StampedLock乐观读</li>
+<li>设备配置管理(10:1) → ReadWriteLock</li>
+<li>任务队列(生产消费) → ReentrantLock+Condition</li>
+</ul>
 <hr>
 <h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-StampedLock和ReadWriteLock的区别？"><a href="#1-StampedLock和ReadWriteLock的区别？" class="headerlink" title="1. StampedLock和ReadWriteLock的区别？"></a>1. StampedLock和ReadWriteLock的区别？</h3><p>StampedLock多了乐观读模式，读操作完全不加锁，只在写入时校验。乐观读性能是ReadWriteLock的3倍。</p>
 <h3 id="2-乐观读的原理？"><a href="#2-乐观读的原理？" class="headerlink" title="2. 乐观读的原理？"></a>2. 乐观读的原理？</h3><p>tryOptimisticRead获取stamp（不阻塞），读取数据，validate校验stamp是否变化。未变则数据有效，变了则升级为读锁重新读取。底层依赖volatile变量的内存语义：写锁释放时修改state，validate通过loadFence保证可见性。</p>
@@ -501,14 +629,14 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(255)</span>
+                        <span>(238)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
                         2023
-                        <span>(68)</span>
+                        <span>(61)</span>
                     </a>
                 </div>
             
@@ -674,7 +802,465 @@ article: http://ogp.me/ns/article#">
 })();
 </script>
 
+<script>
+(function() {
+    var container = document.getElementById('post-container');
+    if (container) {
+        var postDateStr = container.getAttribute('data-post-date');
+        if (postDateStr) {
+            var postDate = new Date(postDateStr);
+            var now = new Date();
+            
+            if (postDate > now) {
+                var diffMs = postDate - now;
+                var diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                var diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                var diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                var timeStr = '';
+                if (diffDays > 0) timeStr += diffDays + '天';
+                if (diffHours > 0) timeStr += diffHours + '小时';
+                if (diffMinutes > 0) timeStr += diffMinutes + '分钟';
+                
+                container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #e1e1ff;"><h2 style="font-size: 1.5rem; margin-bottom: 20px;">⏰ 文章尚未发布</h2><p style="font-size: 1rem; margin-bottom: 10px;">这篇文章计划于 <strong>' + postDate.toLocaleString('zh-CN') + '</strong> 发布</p><p style="font-size: 0.9rem; color: #888;">还需等待约 ' + timeStr + '</p></div>';
+                return;
+            }
+        }
+    }
+})();
+</script>
+
+
+
     <footer>
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            var codeBlocks = document.querySelectorAll('pre code');
+            codeBlocks.forEach(function(code) {
+              var text = code.textContent || code.innerText;
+              if (text.trim().startsWith('flowchart') || 
+                  text.trim().startsWith('graph') || 
+                  text.trim().startsWith('sequenceDiagram') ||
+                  text.trim().startsWith('classDiagram') ||
+                  text.trim().startsWith('stateDiagram') ||
+                  text.trim().startsWith('pie') ||
+                  text.trim().startsWith('gantt')) {
+                
+                var pre = code.parentElement;
+                var figure = pre.parentElement;
+                
+                var mermaidDiv = document.createElement('div');
+                mermaidDiv.className = 'mermaid';
+                mermaidDiv.textContent = text;
+                
+                if (figure && figure.tagName === 'FIGURE') {
+                  figure.parentNode.replaceChild(mermaidDiv, figure);
+                } else if (pre) {
+                  pre.parentNode.replaceChild(mermaidDiv, pre);
+                }
+              }
+            });
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
     <span id="busuanzi_container_site_pv" style="display: inline;"></span>
 
 
