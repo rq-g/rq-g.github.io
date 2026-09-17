@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>LinkedList底层原理——双向链表的真实面貌 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2022/02/01/a6e01e402827/">
+<meta name="description" content="前言在智慧矿山调度系统里做过一个”任务优先级队列”：紧急调度任务插队头，普通任务排队尾。当时随手写了一版DequeDeviceTaskqueue=newLinkedList()，压测时发现两个问题：消费线程和生产线程直接共享这个队列，偶发丢任务、偶发ConcurrentModificationExceptio">
+
+<!-- Open Graph -->
+<meta property="og:title" content="LinkedList底层原理——双向链表的真实面貌">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2022/02/01/a6e01e402827/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言在智慧矿山调度系统里做过一个”任务优先级队列”：紧急调度任务插队头，普通任务排队尾。当时随手写了一版DequeDeviceTaskqueue=newLinkedList()，压测时发现两个问题：消费线程和生产线程直接共享这个队列，偶发丢任务、偶发ConcurrentModificationExceptio">
+
+<meta property="article:published_time" content="2022-02-01T02:24:13.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="LinkedList底层原理——双向链表的真实面貌">
+<meta name="twitter:description" content="前言在智慧矿山调度系统里做过一个”任务优先级队列”：紧急调度任务插队头，普通任务排队尾。当时随手写了一版DequeDeviceTaskqueue=newLinkedList()，压测时发现两个问题：消费线程和生产线程直接共享这个队列，偶发丢任务、偶发ConcurrentModificationExceptio">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"LinkedList底层原理——双向链表的真实面貌","description":"前言在智慧矿山调度系统里做过一个”任务优先级队列”：紧急调度任务插队头，普通任务排队尾。当时随手写了一版DequeDeviceTaskqueue=newLinkedList()，压测时发现两个问题：消费线程和生产线程直接共享这个队列，偶发丢任务、偶发ConcurrentModificationExceptio","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2022-02-01T02:24:13.000Z","dateModified":"2022-02-01T02:24:13.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2022/02/01/a6e01e402827/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2022-02-01T02:24:13.000Z">
+  <article class="post">
+    <h1 class="post-title">LinkedList底层原理——双向链表的真实面貌</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2022-02-01T02:24:13.000Z">2022-02-01</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2022/">2022</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2022/Java%E5%9F%BA%E7%A1%80/">Java基础</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>在智慧矿山调度系统里做过一个”任务优先级队列”：紧急调度任务插队头，普通任务排队尾。当时随手写了一版 <code>Deque&lt;DeviceTask&gt; queue = new LinkedList&lt;&gt;()</code>，压测时发现两个问题：</p>
+<ol>
+<li><strong>消费线程和生产线程直接共享这个队列，偶发丢任务、偶发 <code>ConcurrentModificationException</code></strong>——因为 <code>LinkedList</code> 根本不是线程安全的；</li>
+<li>撤销功能用 <code>history.get(currentIndex)</code> 实现，历史记录超过一万条后，<strong>每次撤销都要从链表头遍历一万次</strong>，接口从 1ms 涨到 40ms。</li>
+</ol>
+<p>这两个问题把我原来”链表插入删除快，所以用 LinkedList”的认知彻底打碎了。后来认真读了一遍 JDK 源码，才明白它的真实成本在哪里。</p>
+<p>这篇文章回答六个问题：</p>
+<ol>
+<li>每个节点到底占多少内存，100 万元素的 LinkedList 和 ArrayList 差多少？</li>
+<li>“链表插入 O(1)”这句话哪里是对的、哪里是骗人的？</li>
+<li><code>node(index)</code> 为什么要从两头遍历，这个优化省了多少？</li>
+<li><code>Queue</code>&#x2F;<code>Deque</code> 的两套方法（<code>add</code>&#x2F;<code>offer</code>、<code>remove</code>&#x2F;<code>poll</code>）到底差在哪？</li>
+<li>为什么 JDK 有 <code>Stack</code> 类却没人用？</li>
+<li>什么场景<strong>真的</strong>该用 LinkedList？（答案：几乎没有）</li>
+</ol>
+<hr>
+<h2 id="一、底层数据结构：三个字段撑起一切"><a href="#一、底层数据结构：三个字段撑起一切" class="headerlink" title="一、底层数据结构：三个字段撑起一切"></a>一、底层数据结构：三个字段撑起一切</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LinkedList</span>&lt;E&gt;</span><br><span class="line">    <span class="keyword">extends</span> <span class="title class_">AbstractSequentialList</span>&lt;E&gt;</span><br><span class="line">    <span class="keyword">implements</span> <span class="title class_">List</span>&lt;E&gt;, Deque&lt;E&gt;, Cloneable, java.io.Serializable &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">transient</span> <span class="type">int</span> <span class="variable">size</span> <span class="operator">=</span> <span class="number">0</span>;               <span class="comment">// 元素个数</span></span><br><span class="line">    <span class="keyword">transient</span> Node&lt;E&gt; first;              <span class="comment">// 头节点引用</span></span><br><span class="line">    <span class="keyword">transient</span> Node&lt;E&gt; last;               <span class="comment">// 尾节点引用</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>注意：<strong>LinkedList 没有”容量”的概念</strong>，没有任何数组，也没有 <code>modCount</code> 之外的预分配空间——这是它和 ArrayList 最本质的区别。</p>
+<h3 id="1-1-Node：真正干活的类"><a href="#1-1-Node：真正干活的类" class="headerlink" title="1.1 Node：真正干活的类"></a>1.1 Node：真正干活的类</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">class</span> <span class="title class_">Node</span>&lt;E&gt; &#123;</span><br><span class="line">    E item;          <span class="comment">// 数据</span></span><br><span class="line">    Node&lt;E&gt; next;    <span class="comment">// 后继</span></span><br><span class="line">    Node&lt;E&gt; prev;    <span class="comment">// 前驱</span></span><br><span class="line"></span><br><span class="line">    Node(Node&lt;E&gt; prev, E element, Node&lt;E&gt; next) &#123;</span><br><span class="line">        <span class="built_in">this</span>.item = element;</span><br><span class="line">        <span class="built_in">this</span>.next = next;</span><br><span class="line">        <span class="built_in">this</span>.prev = prev;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<pre class="mermaid">flowchart LR
+    F["first"] --> A
+    subgraph A["Node A"]
+        A1["prev = null"] --- A2["item = 任务A"] --- A3["next = B"]
+    end
+    subgraph B["Node B"]
+        B1["prev = A"] --- B2["item = 任务B"] --- B3["next = C"]
+    end
+    subgraph C["Node C"]
+        C1["prev = B"] --- C2["item = 任务C"] --- C3["next = null"]
+    end
+    A3 -.-> B
+    B3 -.-> C
+    B1 -.-> A
+    C1 -.-> B
+    C3 --> L["last"]</pre>
+
+<p>结构要点：</p>
+<ul>
+<li><strong>双向链表</strong>，每个节点两个方向的指针，所以<strong>任意节点都可以向前也可以向后遍历</strong>；</li>
+<li><code>first.prev = null</code>、<code>last.next = null</code>，链表两端是明确的边界；</li>
+<li><strong>不是循环链表</strong>（不像 <code>LinkedHashMap</code> 的内部链表那样可选成环）。</li>
+</ul>
+<h3 id="1-2-一个节点到底占多少内存"><a href="#1-2-一个节点到底占多少内存" class="headerlink" title="1.2 一个节点到底占多少内存"></a>1.2 一个节点到底占多少内存</h3><p>64 位 JVM 开启压缩指针（<code>-XX:+UseCompressedOops</code>，JDK 8+ 默认开启）：</p>
+<table>
+<thead>
+<tr>
+<th>组成</th>
+<th>字节</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>对象头（Mark Word 8 + Klass Pointer 4）</td>
+<td>12</td>
+</tr>
+<tr>
+<td>item 引用</td>
+<td>4</td>
+</tr>
+<tr>
+<td>next 引用</td>
+<td>4</td>
+</tr>
+<tr>
+<td>prev 引用</td>
+<td>4</td>
+</tr>
+<tr>
+<td><strong>对齐填充（8 字节对齐）</strong></td>
+<td>8</td>
+</tr>
+<tr>
+<td><strong>合计</strong></td>
+<td><strong>32 字节</strong></td>
+</tr>
+</tbody></table>
+<p>对比 ArrayList：每个元素只占引用数组的一个槽位，<strong>4 字节</strong>。</p>
+<p><strong>100 万元素的内存对比</strong>：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>ArrayList</th>
+<th>LinkedList</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>元素存储</td>
+<td>4 MB</td>
+<td>32 MB</td>
+</tr>
+<tr>
+<td>节点对象个数</td>
+<td>1 个数组</td>
+<td><strong>100 万个 Node 对象</strong></td>
+</tr>
+<tr>
+<td>GC 压力</td>
+<td>低（一个连续大对象）</td>
+<td>高（100 万个小对象）</td>
+</tr>
+</tbody></table>
+<p><strong>8 倍的内存差距 + 100 万个额外对象</strong>。这就是”LinkedList 更省内存（因为不用预分配）”这个直觉错误的地方——它省下的扩容空间，远抵不上每个节点的对象头开销。</p>
+<blockquote>
+<p>用 JOL 可以自己验证：<code>ClassLayout.parseInstance(new LinkedList.Node&lt;&gt;(null, &quot;x&quot;, null)).instanceSize()</code></p>
+</blockquote>
+<hr>
+<h2 id="二、”插入-O-1-”这句话，一半是真的"><a href="#二、”插入-O-1-”这句话，一半是真的" class="headerlink" title="二、”插入 O(1)”这句话，一半是真的"></a>二、”插入 O(1)”这句话，一半是真的</h2><h3 id="2-1-头部插入-addFirst"><a href="#2-1-头部插入-addFirst" class="headerlink" title="2.1 头部插入 addFirst"></a>2.1 头部插入 addFirst</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addFirst</span><span class="params">(E e)</span> &#123;</span><br><span class="line">    linkFirst(e);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="type">void</span> <span class="title function_">linkFirst</span><span class="params">(E e)</span> &#123;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">Node</span>&lt;E&gt; <span class="variable">f</span> <span class="operator">=</span> first;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">Node</span>&lt;E&gt; <span class="variable">newNode</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Node</span>&lt;&gt;(<span class="literal">null</span>, e, f);</span><br><span class="line">    first = newNode;</span><br><span class="line">    <span class="keyword">if</span> (f == <span class="literal">null</span>)</span><br><span class="line">        last = newNode;        <span class="comment">// 空链表：头尾都指向新节点</span></span><br><span class="line">    <span class="keyword">else</span></span><br><span class="line">        f.prev = newNode;      <span class="comment">// 原头节点的 prev 指回新节点</span></span><br><span class="line">    size++;</span><br><span class="line">    modCount++;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>四步：建节点 → 改 <code>first</code> → 改原头的 <code>prev</code> → 计数。<strong>确实是 O(1)</strong>，没有任何遍历。</p>
+<p>一个细节：源码用 <code>final Node&lt;E&gt; f = first</code> 把引用拷贝到局部变量。这不是多余——<strong>JIT 会把局部变量的读取优化成寄存器访问，重复读字段则可能被去优化打断</strong>。HotSpot 源码里大量使用这个模式。</p>
+<h3 id="2-2-尾部插入-addLast"><a href="#2-2-尾部插入-addLast" class="headerlink" title="2.2 尾部插入 addLast"></a>2.2 尾部插入 addLast</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">linkLast</span><span class="params">(E e)</span> &#123;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">Node</span>&lt;E&gt; <span class="variable">l</span> <span class="operator">=</span> last;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">Node</span>&lt;E&gt; <span class="variable">newNode</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Node</span>&lt;&gt;(l, e, <span class="literal">null</span>);</span><br><span class="line">    last = newNode;</span><br><span class="line">    <span class="keyword">if</span> (l == <span class="literal">null</span>)</span><br><span class="line">        first = newNode;</span><br><span class="line">    <span class="keyword">else</span></span><br><span class="line">        l.next = newNode;</span><br><span class="line">    size++;</span><br><span class="line">    modCount++;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>和 <code>linkFirst</code> 完全对称。<strong>这就是 <code>add(e)</code> 的实际实现</strong>（<code>add</code> 直接调 <code>linkLast</code>），所以”尾部追加”也是 O(1)。</p>
+<h3 id="2-3-中间插入：O-n-定位-O-1-指针"><a href="#2-3-中间插入：O-n-定位-O-1-指针" class="headerlink" title="2.3 中间插入：O(n) 定位 + O(1) 指针"></a>2.3 中间插入：O(n) 定位 + O(1) 指针</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">add</span><span class="params">(<span class="type">int</span> index, E element)</span> &#123;</span><br><span class="line">    checkPositionIndex(index);</span><br><span class="line">    <span class="keyword">if</span> (index == size)</span><br><span class="line">        linkLast(element);</span><br><span class="line">    <span class="keyword">else</span></span><br><span class="line">        linkBefore(element, node(index));   <span class="comment">// ← 先找到 index 处的节点</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">void</span> <span class="title function_">linkBefore</span><span class="params">(E e, Node&lt;E&gt; succ)</span> &#123;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">Node</span>&lt;E&gt; <span class="variable">pred</span> <span class="operator">=</span> succ.prev;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">Node</span>&lt;E&gt; <span class="variable">newNode</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Node</span>&lt;&gt;(pred, e, succ);</span><br><span class="line">    succ.prev = newNode;</span><br><span class="line">    <span class="keyword">if</span> (pred == <span class="literal">null</span>)</span><br><span class="line">        first = newNode;</span><br><span class="line">    <span class="keyword">else</span></span><br><span class="line">        pred.next = newNode;</span><br><span class="line">    size++;</span><br><span class="line">    modCount++;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>linkBefore</code> 本身只改两个指针，是 O(1)。<strong>真正的开销全在 <code>node(index)</code>：</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">Node</span>&lt;E&gt; <span class="title function_">node</span><span class="params">(<span class="type">int</span> index)</span> &#123;</span><br><span class="line">    <span class="comment">// assert isElementIndex(index);</span></span><br><span class="line">    <span class="keyword">if</span> (index &lt; (size &gt;&gt; <span class="number">1</span>)) &#123;        <span class="comment">// ← 在前半段：从头遍历</span></span><br><span class="line">        <span class="type">Node</span>&lt;E&gt; <span class="variable">x</span> <span class="operator">=</span> first;</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; index; i++)</span><br><span class="line">            x = x.next;</span><br><span class="line">        <span class="keyword">return</span> x;</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;                           <span class="comment">// ← 在后半段：从尾遍历</span></span><br><span class="line">        <span class="type">Node</span>&lt;E&gt; <span class="variable">x</span> <span class="operator">=</span> last;</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> size - <span class="number">1</span>; i &gt; index; i--)</span><br><span class="line">            x = x.prev;</span><br><span class="line">        <span class="keyword">return</span> x;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>两个要点：</strong></p>
+<ol>
+<li><strong>二分方向</strong>：<code>index &lt; size/2</code> 就从头走，否则从尾走。最坏情况走 <code>size/2</code> 步——这个优化把常数项砍半，但<strong>改变不了 O(n) 的量级</strong>。</li>
+<li><strong>这就是”链表插入快”的真相</strong>：插入动作本身 O(1)，但<strong>为了找到插入位置，平均要走 n&#x2F;4 步</strong>（随机位置）。所以 <code>add(index, e)</code> 整体是 O(n)。</li>
+</ol>
+<p><strong>唯一例外：手里已经拿着 Node 引用的时候。</strong> 迭代器内部就持有当前节点，所以 <code>ListIterator.add()</code> 是真 O(1)——前提是<strong>用迭代器顺序遍历</strong>，而不是每次都 <code>list.add(i, e)</code>。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ O(n²)：每次 add(i, e) 都要 node(i) 走 n/4 步</span></span><br><span class="line"><span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; n; i++) &#123;</span><br><span class="line">    list.add(i, e);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ O(n)：迭代器一直在当前位置，插入是纯指针操作</span></span><br><span class="line"><span class="type">ListIterator</span>&lt;E&gt; <span class="variable">it</span> <span class="operator">=</span> list.listIterator();</span><br><span class="line"><span class="keyword">while</span> (...) &#123;</span><br><span class="line">    it.add(e);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-4-删除：同样卡在定位上"><a href="#2-4-删除：同样卡在定位上" class="headerlink" title="2.4 删除：同样卡在定位上"></a>2.4 删除：同样卡在定位上</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">E</span> <span class="title function_">remove</span><span class="params">(<span class="type">int</span> index)</span> &#123;</span><br><span class="line">    checkElementIndex(index);</span><br><span class="line">    <span class="keyword">return</span> unlink(node(index));    <span class="comment">// 又是先 node(index)</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>unlink</code> 才是真正的删除，注意它做了<strong>完整的 GC 清理</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">E</span> <span class="title function_">unlink</span><span class="params">(Node&lt;E&gt; x)</span> &#123;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">E</span> <span class="variable">element</span> <span class="operator">=</span> x.item;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">Node</span>&lt;E&gt; <span class="variable">next</span> <span class="operator">=</span> x.next;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">Node</span>&lt;E&gt; <span class="variable">prev</span> <span class="operator">=</span> x.prev;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (prev == <span class="literal">null</span>) &#123;</span><br><span class="line">        first = next;                 <span class="comment">// 删的是头</span></span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        prev.next = next;</span><br><span class="line">        x.prev = <span class="literal">null</span>;                <span class="comment">// ← 置 null，断开引用链，帮助 GC</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">if</span> (next == <span class="literal">null</span>) &#123;</span><br><span class="line">        last = prev;                  <span class="comment">// 删的是尾</span></span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        next.prev = prev;</span><br><span class="line">        x.next = <span class="literal">null</span>;                <span class="comment">// ← 同上</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    x.item = <span class="literal">null</span>;                    <span class="comment">// ← 数据也置 null</span></span><br><span class="line">    size--;</span><br><span class="line">    modCount++;</span><br><span class="line">    <span class="keyword">return</span> element;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>三个 <code>= null</code> 一个都不能少。</strong> 被删节点虽然脱离了链表，但它自己的 <code>item</code>&#x2F;<code>next</code>&#x2F;<code>prev</code> 字段还持有引用。如果不置 null，只要这个 Node 对象还被别处引用（比如迭代器的 <code>lastRet</code>），它指向的元素就回收不掉——和 ArrayList 的 <code>elementData[--size] = null</code> 是同一个道理，都是<strong>清除游离引用（loitering objects）</strong>。</p>
+<h3 id="2-5-remove-Object-o-：null-特判的原因"><a href="#2-5-remove-Object-o-：null-特判的原因" class="headerlink" title="2.5 remove(Object o)：null 特判的原因"></a>2.5 remove(Object o)：null 特判的原因</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">remove</span><span class="params">(Object o)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (o == <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">Node</span>&lt;E&gt; <span class="variable">x</span> <span class="operator">=</span> first; x != <span class="literal">null</span>; x = x.next) &#123;</span><br><span class="line">            <span class="keyword">if</span> (x.item == <span class="literal">null</span>) &#123;          <span class="comment">// null 用 == 比较</span></span><br><span class="line">                unlink(x);</span><br><span class="line">                <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">Node</span>&lt;E&gt; <span class="variable">x</span> <span class="operator">=</span> first; x != <span class="literal">null</span>; x = x.next) &#123;</span><br><span class="line">            <span class="keyword">if</span> (o.equals(x.item)) &#123;        <span class="comment">// 非 null 用 equals</span></span><br><span class="line">                unlink(x);</span><br><span class="line">                <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>LinkedList</code> <strong>允许 null 元素</strong>，所以必须先特判 null，否则 <code>o.equals(...)</code> 直接 NPE。这个写法在 JDK 的集合源码里很常见（<code>HashMap.get</code> 也是同样套路）。</p>
+<blockquote>
+<p>注意：删除的只是<strong>第一个</strong>匹配的元素。<code>LinkedList</code> 没有”删所有匹配”的原生方法（要批量删用 <code>removeIf</code> 或 <code>Iterator.remove</code>）。</p>
+</blockquote>
+<hr>
+<h2 id="三、双重身份：List-Deque"><a href="#三、双重身份：List-Deque" class="headerlink" title="三、双重身份：List + Deque"></a>三、双重身份：List + Deque</h2><p><code>LinkedList</code> 同时实现 <code>List</code> 和 <code>Deque</code>，是 JDK 里少有的”多面手”。但也因此有两套<strong>语义不同</strong>的方法。</p>
+<h3 id="3-1-Queue-的两套方法"><a href="#3-1-Queue-的两套方法" class="headerlink" title="3.1 Queue 的两套方法"></a>3.1 Queue 的两套方法</h3><p>这是面试必考、实战必混的地方：</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th><strong>抛异常版</strong></th>
+<th><strong>返回特殊值版</strong></th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>入队（尾）</td>
+<td><code>add(e)</code></td>
+<td><code>offer(e)</code></td>
+<td>队列满时：<code>add</code> 抛 <code>IllegalStateException</code>，<code>offer</code> 返回 false</td>
+</tr>
+<tr>
+<td>出队（头）</td>
+<td><code>remove()</code></td>
+<td><code>poll()</code></td>
+<td>队列空时：<code>remove</code> 抛 <code>NoSuchElementException</code>，<code>poll</code> 返回 null</td>
+</tr>
+<tr>
+<td>查看队头</td>
+<td><code>element()</code></td>
+<td><code>peek()</code></td>
+<td>队列空时：<code>element</code> 抛异常，<code>peek</code> 返回 null</td>
+</tr>
+</tbody></table>
+<p><strong>实战建议</strong>：除非你明确希望”空了就报错”，否则一律用 <code>poll</code>&#x2F;<code>peek</code>&#x2F;<code>offer</code>——<strong>用返回值判断比捕获异常优雅得多</strong>，也更不容易在循环里失控。</p>
+<p>对应的 Deque 双端版本：</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>头部</th>
+<th>尾部</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>插入</td>
+<td><code>addFirst</code> &#x2F; <code>offerFirst</code></td>
+<td><code>addLast</code> &#x2F; <code>offerLast</code></td>
+</tr>
+<tr>
+<td>移除</td>
+<td><code>removeFirst</code> &#x2F; <code>pollFirst</code></td>
+<td><code>removeLast</code> &#x2F; <code>pollLast</code></td>
+</tr>
+<tr>
+<td>查看</td>
+<td><code>getFirst</code> &#x2F; <code>peekFirst</code></td>
+<td><code>getLast</code> &#x2F; <code>peekLast</code></td>
+</tr>
+</tbody></table>
+<h3 id="3-2-当栈用：push-pop"><a href="#3-2-当栈用：push-pop" class="headerlink" title="3.2 当栈用：push&#x2F;pop"></a>3.2 当栈用：push&#x2F;pop</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">Deque</span>&lt;String&gt; <span class="variable">stack</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">LinkedList</span>&lt;&gt;();</span><br><span class="line">stack.push(<span class="string">&quot;a&quot;</span>);        <span class="comment">// = addFirst(e)，压栈</span></span><br><span class="line">stack.push(<span class="string">&quot;b&quot;</span>);</span><br><span class="line">stack.pop();            <span class="comment">// = removeFirst()，弹栈，返回 &quot;b&quot;</span></span><br><span class="line">stack.peek();           <span class="comment">// 查看栈顶，不出栈</span></span><br></pre></td></tr></table></figure>
+
+<p><code>push</code>&#x2F;<code>pop</code> 只是 <code>addFirst</code>&#x2F;<code>removeFirst</code> 的别名，<strong>栈顶在链表头部</strong>。</p>
+<p><strong>为什么不用 <code>java.util.Stack</code>？</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">Stack</span>&lt;E&gt; <span class="keyword">extends</span> <span class="title class_">Vector</span>&lt;E&gt; &#123; ... &#125;</span><br></pre></td></tr></table></figure>
+
+<p>三个致命问题：</p>
+<ol>
+<li><strong>继承 Vector</strong>——所有方法 <code>synchronized</code>，单线程场景白白付出锁开销；</li>
+<li><strong>暴露了 List 接口</strong>——你可以在”栈”上调用 <code>get(1)</code>、<code>remove(0)</code>、<code>insertElementAt</code>，<strong>栈的 LIFO 语义形同虚设</strong>，破坏封装；</li>
+<li>基于数组（Vector），<code>pop</code> 还会 <code>trimToSize</code>-类的操作，实现晦涩。</li>
+</ol>
+<p>JDK 文档自己都说：应该用 <code>Deque</code> 代替 <code>Stack</code>。而 Deque 的实现里，<strong>优先选 <code>ArrayDeque</code></strong>。</p>
+<h3 id="3-3-fail-fast-与-ArrayList-一模一样"><a href="#3-3-fail-fast-与-ArrayList-一模一样" class="headerlink" title="3.3 fail-fast 与 ArrayList 一模一样"></a>3.3 fail-fast 与 ArrayList 一模一样</h3><p><code>LinkedList</code> 同样继承 <code>AbstractList</code> 的 <code>modCount</code>，迭代器同样在 <code>next()</code> 里做 <code>checkForComodification()</code>。上一节 ArrayList 的所有结论（foreach 删除抛 CME、删倒数第二个元素不抛但结果错、fail-fast 是 best-effort）<strong>原封不动适用于 LinkedList</strong>。</p>
+<hr>
+<h2 id="四、性能真相：基准测试要看怎么测"><a href="#四、性能真相：基准测试要看怎么测" class="headerlink" title="四、性能真相：基准测试要看怎么测"></a>四、性能真相：基准测试要看怎么测</h2><h3 id="4-1-理论复杂度"><a href="#4-1-理论复杂度" class="headerlink" title="4.1 理论复杂度"></a>4.1 理论复杂度</h3><table>
+<thead>
+<tr>
+<th>操作</th>
+<th>ArrayList</th>
+<th>LinkedList</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>get(i)</code></td>
+<td><strong>O(1)</strong></td>
+<td>O(n)（最多走 n&#x2F;2 步）</td>
+</tr>
+<tr>
+<td><code>add(e)</code> 尾部</td>
+<td>均摊 O(1)</td>
+<td><strong>O(1)</strong></td>
+</tr>
+<tr>
+<td><code>add(0, e)</code> 头部</td>
+<td>O(n)（全量后移）</td>
+<td><strong>O(1)</strong></td>
+</tr>
+<tr>
+<td><code>add(i, e)</code> 中间</td>
+<td>O(n)（移动后半段）</td>
+<td>O(n)（遍历定位）</td>
+</tr>
+<tr>
+<td><code>remove(i)</code></td>
+<td>O(n)</td>
+<td>O(n)</td>
+</tr>
+<tr>
+<td><code>contains</code> &#x2F; <code>indexOf</code></td>
+<td>O(n)</td>
+<td>O(n)</td>
+</tr>
+<tr>
+<td>迭代器插入&#x2F;删除</td>
+<td>O(n)（还是全量移动）</td>
+<td><strong>O(1)</strong></td>
+</tr>
+</tbody></table>
+<h3 id="4-2-但复杂度相等-≠-性能相等"><a href="#4-2-但复杂度相等-≠-性能相等" class="headerlink" title="4.2 但复杂度相等 ≠ 性能相等"></a>4.2 但复杂度相等 ≠ 性能相等</h3><p>上面表格里”中间插入两者都是 O(n)”，<strong>实测 ArrayList 通常更快</strong>。原因有二：</p>
+<p><strong>第一，常数项差一个数量级。</strong></p>
+<ul>
+<li>ArrayList 的 O(n) 是 <code>System.arraycopy</code>——JVM intrinsic，编译成 <code>memmove</code>，CPU 上移动连续内存每元素约 1~2 ns；</li>
+<li>LinkedList 的 O(n) 是 <code>n/4</code> 次<strong>指针跳转</strong>，每次都可能 cache miss（约 100 ns），还要解引用两次（Node → item）。</li>
+</ul>
+<p>平均下来 LinkedList 的常数项比 ArrayList 大 50~100 倍。</p>
+<p><strong>第二，LinkedList 还有分配和 GC 成本。</strong> 每次 <code>add</code> 都要 <code>new Node</code>（TLAB 分配，快，但仍有时空开销），节点是 32 字节的小对象，堆里产生大量垃圾。</p>
+<h3 id="4-3-量级参考（10-万元素，JDK-17，参考值）"><a href="#4-3-量级参考（10-万元素，JDK-17，参考值）" class="headerlink" title="4.3 量级参考（10 万元素，JDK 17，参考值）"></a>4.3 量级参考（10 万元素，JDK 17，参考值）</h3><table>
+<thead>
+<tr>
+<th>操作</th>
+<th>ArrayList</th>
+<th>LinkedList</th>
+<th>结论</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>顺序追加 10 万</td>
+<td>~3 ms</td>
+<td>~6 ms</td>
+<td>差距不大</td>
+</tr>
+<tr>
+<td>随机 <code>get</code> 10 万次</td>
+<td>~1 ms</td>
+<td><strong>~数分钟级</strong></td>
+<td>完全不可用</td>
+</tr>
+<tr>
+<td>头部插入 10 万</td>
+<td>~2000 ms</td>
+<td>~5 ms</td>
+<td><strong>LinkedList 赢</strong></td>
+</tr>
+<tr>
+<td>中间随机插入 10 万</td>
+<td>~50 ms</td>
+<td>~数百 ms</td>
+<td><strong>ArrayList 反而赢</strong></td>
+</tr>
+</tbody></table>
+<p><strong>结论很清晰</strong>：LinkedList 唯一明确赢的场景是<strong>头部（或迭代器位置）高频插入&#x2F;删除</strong>。其余所有场景，包括理论打平的中间插入，实际都是 ArrayList 更快。</p>
+<blockquote>
+<p>但”头部高频插入”这个场景，<code>ArrayDeque</code> 同样 O(1) 且更快（连续内存 + 无节点分配），所以 LinkedList 的生存空间被两头挤压。</p>
+</blockquote>
+<hr>
+<h2 id="五、两个真实代码的坑（原文示例的问题）"><a href="#五、两个真实代码的坑（原文示例的问题）" class="headerlink" title="五、两个真实代码的坑（原文示例的问题）"></a>五、两个真实代码的坑（原文示例的问题）</h2><h3 id="5-1-坑一：把-LinkedList-当并发任务队列"><a href="#5-1-坑一：把-LinkedList-当并发任务队列" class="headerlink" title="5.1 坑一：把 LinkedList 当并发任务队列"></a>5.1 坑一：把 LinkedList 当并发任务队列</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 原始写法：多线程共享，非线程安全</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> <span class="type">Deque</span>&lt;DeviceTask&gt; <span class="variable">taskQueue</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">LinkedList</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addTask</span><span class="params">(DeviceTask task)</span> &#123; taskQueue.addLast(task); &#125;   <span class="comment">// 生产线程</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">DeviceTask</span> <span class="title function_">poll</span><span class="params">()</span> &#123; <span class="keyword">return</span> taskQueue.pollFirst(); &#125;          <span class="comment">// 消费线程</span></span><br></pre></td></tr></table></figure>
+
+<p><code>LinkedList</code> <strong>没有任何同步</strong>。生产&#x2F;消费并发时会发生：</p>
+<ul>
+<li><code>size</code> 计数错乱（<code>size++</code> 不是原子操作）；</li>
+<li><code>first</code>&#x2F;<code>last</code> 指针竞争，出现节点”丢失”或链表断裂；</li>
+<li>生产线程扩容时消费线程遍历，抛 <code>ConcurrentModificationException</code>。</li>
+</ul>
+<p><strong>修复方案按场景选：</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 单机阻塞队列（最常用）：生产快于消费时自动阻塞，天然背压</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> <span class="type">BlockingDeque</span>&lt;DeviceTask&gt; <span class="variable">queue</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">LinkedBlockingDeque</span>&lt;&gt;(<span class="number">10_000</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 无锁非阻塞：高吞吐、能接受 busy-wait/自旋</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> <span class="type">ConcurrentLinkedDeque</span>&lt;DeviceTask&gt; <span class="variable">queue</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ConcurrentLinkedDeque</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line"><span class="comment">// ❌ 想继续用 LinkedList：必须自己包 synchronized，且 poll 要 while 循环 + wait/notify</span></span><br></pre></td></tr></table></figure>
+
+<p>另外别忘了队列要有界——无界队列在消费端卡死时会<strong>内存无限增长</strong>，这是比丢任务更严重的事故。</p>
+<h3 id="5-2-坑二：用-history-get-currentIndex-做撤销"><a href="#5-2-坑二：用-history-get-currentIndex-做撤销" class="headerlink" title="5.2 坑二：用 history.get(currentIndex) 做撤销"></a>5.2 坑二：用 <code>history.get(currentIndex)</code> 做撤销</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 原始写法：LinkedList 的 get(i) 是 O(n)</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> <span class="type">LinkedList</span>&lt;String&gt; <span class="variable">history</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">LinkedList</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">String</span> <span class="title function_">undo</span><span class="params">()</span> &#123;</span><br><span class="line">    currentIndex--;</span><br><span class="line">    <span class="keyword">return</span> history.get(currentIndex);   <span class="comment">// ← 每次撤销走 n/2 步，历史越长越慢</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>LinkedList.get(i)</code> 内部就是 <code>node(i)</code>，<strong>每次都是从头或尾遍历</strong>。一万条历史记录，撤销一次要走约 5000 次指针跳转。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 方案一：用迭代器游标（LinkedList 场景的正确姿势）</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> <span class="type">LinkedList</span>&lt;String&gt; <span class="variable">history</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">LinkedList</span>&lt;&gt;();</span><br><span class="line"><span class="keyword">private</span> <span class="type">ListIterator</span>&lt;String&gt; <span class="variable">cursor</span> <span class="operator">=</span> history.listIterator();</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">execute</span><span class="params">(String op)</span> &#123;</span><br><span class="line">    <span class="keyword">while</span> (cursor.hasNext()) cursor.next();   <span class="comment">// 丢弃 redo 分支</span></span><br><span class="line">    cursor.add(op);                            <span class="comment">// O(1) 追加</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">String</span> <span class="title function_">undo</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (!cursor.hasPrevious()) <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">    <span class="keyword">return</span> cursor.previous();                  <span class="comment">// O(1)，游标往前挪</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">String</span> <span class="title function_">redo</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (!cursor.hasNext()) <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">    <span class="keyword">return</span> cursor.next();                      <span class="comment">// O(1)</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 方案二：直接用 ArrayList（更简单，get 是 O(1)，尾部追加均摊 O(1)）</span></span><br><span class="line"><span class="comment">// 撤销/重做场景 ArrayList 全方位优于 LinkedList</span></span><br><span class="line"><span class="keyword">private</span> <span class="keyword">final</span> <span class="type">List</span>&lt;String&gt; <span class="variable">history</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line"><span class="keyword">private</span> <span class="type">int</span> <span class="variable">cursor</span> <span class="operator">=</span> -<span class="number">1</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">execute</span><span class="params">(String op)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (cursor &lt; history.size() - <span class="number">1</span>) &#123;</span><br><span class="line">        history.subList(cursor + <span class="number">1</span>, history.size()).clear();  <span class="comment">// 丢弃 redo 分支</span></span><br><span class="line">    &#125;</span><br><span class="line">    history.add(op);</span><br><span class="line">    cursor = history.size() - <span class="number">1</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="type">String</span> <span class="title function_">undo</span><span class="params">()</span>  &#123; <span class="keyword">return</span> cursor &gt; <span class="number">0</span>            ? history.get(--cursor) : <span class="literal">null</span>; &#125;</span><br><span class="line"><span class="keyword">public</span> <span class="type">String</span> <span class="title function_">redo</span><span class="params">()</span>  &#123; <span class="keyword">return</span> cursor &lt; history.size() - <span class="number">1</span> ? history.get(++cursor) : <span class="literal">null</span>; &#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>两条教训</strong>：</p>
+<ol>
+<li>在 <code>LinkedList</code> 上调用 <code>get(i)</code>，几乎总是<strong>设计错误</strong>的信号；</li>
+<li>就算真的需要频繁头部&#x2F;中部操作，也先想想 <code>ArrayDeque</code> 或 <code>LinkedHashMap</code>（LRU 场景）。</li>
+</ol>
+<hr>
+<h2 id="六、什么时候真的该用-LinkedList"><a href="#六、什么时候真的该用-LinkedList" class="headerlink" title="六、什么时候真的该用 LinkedList"></a>六、什么时候真的该用 LinkedList</h2><p>过一遍真实的场景清单：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>该用什么</th>
+<th>为什么不是 LinkedList</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>通用 List</td>
+<td><code>ArrayList</code></td>
+<td>上面所有分析</td>
+</tr>
+<tr>
+<td>队列 FIFO</td>
+<td><code>ArrayDeque</code></td>
+<td>O(1) 且更快、更省内存</td>
+</tr>
+<tr>
+<td>双端队列</td>
+<td><code>ArrayDeque</code></td>
+<td>同上</td>
+</tr>
+<tr>
+<td>栈</td>
+<td><code>ArrayDeque</code></td>
+<td>同上，且比 <code>Stack</code> 类安全</td>
+</tr>
+<tr>
+<td>任务队列（生产者-消费者）</td>
+<td><code>LinkedBlockingQueue</code> &#x2F; <code>ArrayBlockingQueue</code></td>
+<td>线程安全 + 有界 + 阻塞语义</td>
+</tr>
+<tr>
+<td>延迟&#x2F;定时任务</td>
+<td><code>DelayQueue</code> &#x2F; <code>ScheduledThreadPoolExecutor</code></td>
+<td>自带排序和阻塞</td>
+</tr>
+<tr>
+<td>优先级调度</td>
+<td><code>PriorityQueue</code></td>
+<td>O(log n) 插入，按优先级出队</td>
+</tr>
+<tr>
+<td>LRU 缓存</td>
+<td><code>LinkedHashMap</code>（accessOrder&#x3D;true）</td>
+<td>哈希定位 O(1) + 内部链表维护访问序</td>
+</tr>
+<tr>
+<td>需要维护插入顺序的 Map</td>
+<td><code>LinkedHashMap</code></td>
+<td>内部就是双向链表，但配合哈希定位</td>
+</tr>
+</tbody></table>
+<p><strong>真正非 LinkedList 不可的场景，我至今没在生产代码里遇到过。</strong> 它的价值更多在于：是理解双向链表、<code>Deque</code> 接口、fail-fast 机制的最佳教材。</p>
+<p>唯一勉强说得过去的场景：<strong>迭代过程中大量随机位置的插入&#x2F;删除</strong>（持有迭代器游标，O(1) 操作）。但这类需求通常也意味着数据结构选错了。</p>
+<hr>
+<h2 id="七、避坑清单"><a href="#七、避坑清单" class="headerlink" title="七、避坑清单"></a>七、避坑清单</h2><p><strong>内存与性能</strong></p>
+<ol>
+<li>❌ 不要在 <code>LinkedList</code> 上调用 <code>get(i)</code> &#x2F; <code>remove(i)</code>（每次 O(n) 定位）</li>
+<li>✅ 需要顺序处理就用迭代器，操作当前节点是 O(1)</li>
+<li>❌ 别用 <code>java.util.Stack</code>，用 <code>ArrayDeque</code></li>
+<li>✅ 队列&#x2F;栈&#x2F;双端队列，默认选 <code>ArrayDeque</code></li>
+<li>✅ 元素量大时先算内存账：LinkedList 每节点 32 字节，ArrayList 每元素 4 字节</li>
+</ol>
+<p><strong>并发</strong><br>6. ❌ <code>LinkedList</code> 不是线程安全的，禁止多线程共享裸实例<br>7. ✅ 生产者-消费者用 <code>LinkedBlockingDeque</code>（有界！）<br>8. ✅ 高吞吐无阻塞用 <code>ConcurrentLinkedDeque</code><br>9. ✅ fail-fast 只是 best-effort，不能当并发保护</p>
+<p><strong>API 语义</strong><br>10. ✅ 队列操作用 <code>offer</code>&#x2F;<code>poll</code>&#x2F;<code>peek</code>（返回特殊值），别用 <code>add</code>&#x2F;<code>remove</code>&#x2F;<code>element</code>（抛异常）<br>11. ✅ <code>push</code>&#x2F;<code>pop</code> 是 <code>addFirst</code>&#x2F;<code>removeFirst</code> 的别名，栈顶在头部<br>12. ✅ <code>remove(Object)</code> 只删第一个匹配的，且 null 元素要特判（<code>LinkedList</code> 允许 null）</p>
+<p><strong>正确性</strong><br>13. ✅ <code>unlink</code> 会把 <code>item</code>&#x2F;<code>next</code>&#x2F;<code>prev</code> 全部置 null 帮助 GC——手写链表时别忘了这步<br>14. ✅ <code>modCount</code> 机制与 ArrayList 一致，foreach 里删除同样会炸</p>
+<hr>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>回到开头那个任务队列事故。根因不是”LinkedList 慢”，而是<strong>把它用在了它完全不能胜任的地方</strong>：多线程共享（非线程安全）+ 随机访问撤销（get 是 O(n)）。</p>
+<p>这篇文章的核心结论：</p>
+<ol>
+<li><strong>每个节点 32 字节，比 ArrayList 的 4 字节引用贵 8 倍</strong>，而且 100 万元素 &#x3D; 100 万个 Node 对象，GC 压力完全不在一个量级。</li>
+<li><strong>“插入 O(1)”只在两种情况下成立</strong>：头&#x2F;尾插入（有 <code>first</code>&#x2F;<code>last</code> 指针直达），或手里已持有节点引用（迭代器）。<code>add(index, e)</code> 要先 <code>node(index)</code> 走 n&#x2F;4 步，整体是 O(n)。</li>
+<li><strong><code>node(index)</code> 从两头遍历</strong>（<code>index &lt; size&gt;&gt;1</code> 决定方向），把最坏步数从 n 砍到 n&#x2F;2——这是 LinkedList 源码里最值得学习的优化思路，但它救不了 O(n) 的量级。</li>
+<li><strong><code>unlink</code> 里的三个 <code>= null</code> 不能省</strong>，这是清理游离引用的标准动作，和 ArrayList 的 <code>elementData[--size] = null</code> 一脉相承。</li>
+<li><strong>Queue 的两套方法</strong>：<code>add</code>&#x2F;<code>remove</code>&#x2F;<code>element</code> 抛异常，<code>offer</code>&#x2F;<code>poll</code>&#x2F;<code>peek</code> 返回特殊值。实战默认用后者。</li>
+<li><strong><code>Stack</code> 类是反面教材</strong>（继承 Vector，暴露 List 接口破坏 LIFO 语义），栈请用 <code>ArrayDeque</code>。</li>
+<li><strong>中间插入实测 ArrayList 反而更快</strong>——<code>arraycopy</code> 是 memmove，LinkedList 的指针跳转 cache miss 严重。LinkedList 唯一明确赢的是头部高频插删，而那个场景 <code>ArrayDeque</code> 又碾压它。</li>
+</ol>
+<p>一句话概括：<strong>LinkedList 是一个教科书级的双向链表实现，但在生产代码里，它的每一个典型用途都有更好的替代品——List 用 ArrayList，队列&#x2F;栈用 ArrayDeque，并发队列用 Blocking 系，LRU 用 LinkedHashMap。理解它，然后不选它。</strong></p>
+<hr>
+<h2 id="相关阅读"><a href="#相关阅读" class="headerlink" title="相关阅读"></a>相关阅读</h2><ul>
+<li><a href="/2022/01/29/d3ae9717d40d/">ArrayList底层原理——动态数组的核心秘密</a></li>
+<li><a href="/2022/01/26/308f25db0e24/">HashMap底层原理——面试必问，开发必懂</a></li>
+<li><a href="/2022/07/15/86c0c8293db8/">Java并发基础——线程创建与同步机制</a></li>
+</ul>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2022/01/29/d3ae9717d40d/">ArrayList底层原理——动态数组的核心秘密</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2022/02/06/75a486a7a6c2/">HashSet与LinkedHashSet——去重与顺序的抉择</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E9%9B%86%E5%90%88/" class="tag" aria-label="标签: #集合">#集合</a>
+            
+                <a href="/tags/%E6%BA%90%E7%A0%81/" class="tag" aria-label="标签: #源码">#源码</a>
+            
+                <a href="/tags/LinkedList/" class="tag" aria-label="标签: #LinkedList">#LinkedList</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2022/" aria-label="分类: 2022">
+                        2022
+                        <span>(75)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2022/Java%E5%9F%BA%E7%A1%80/" aria-label="分类: Java基础">
+                        Java基础
+                        <span>(32)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

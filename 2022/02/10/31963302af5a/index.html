@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>TreeMap底层原理——红黑树在Java中的应用 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2022/02/10/31963302af5a/">
+<meta name="description" content="前言第一次用TreeMap是做一个矿卡驾驶时长排行榜：key是驾驶时长，value是司机信息，遍历出来天然有序。上线第三天运营发现榜上少了两个人——两个司机驾驶时长完全相同（精确到分钟），后写入的把先写入的覆盖了。当时的第一反应是”数据有问题”，排查半天才发现是TreeMap.put的语义：key相等不是”追">
+
+<!-- Open Graph -->
+<meta property="og:title" content="TreeMap底层原理——红黑树在Java中的应用">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2022/02/10/31963302af5a/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言第一次用TreeMap是做一个矿卡驾驶时长排行榜：key是驾驶时长，value是司机信息，遍历出来天然有序。上线第三天运营发现榜上少了两个人——两个司机驾驶时长完全相同（精确到分钟），后写入的把先写入的覆盖了。当时的第一反应是”数据有问题”，排查半天才发现是TreeMap.put的语义：key相等不是”追">
+
+<meta property="article:published_time" content="2022-02-09T16:47:31.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="TreeMap底层原理——红黑树在Java中的应用">
+<meta name="twitter:description" content="前言第一次用TreeMap是做一个矿卡驾驶时长排行榜：key是驾驶时长，value是司机信息，遍历出来天然有序。上线第三天运营发现榜上少了两个人——两个司机驾驶时长完全相同（精确到分钟），后写入的把先写入的覆盖了。当时的第一反应是”数据有问题”，排查半天才发现是TreeMap.put的语义：key相等不是”追">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"TreeMap底层原理——红黑树在Java中的应用","description":"前言第一次用TreeMap是做一个矿卡驾驶时长排行榜：key是驾驶时长，value是司机信息，遍历出来天然有序。上线第三天运营发现榜上少了两个人——两个司机驾驶时长完全相同（精确到分钟），后写入的把先写入的覆盖了。当时的第一反应是”数据有问题”，排查半天才发现是TreeMap.put的语义：key相等不是”追","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2022-02-09T16:47:31.000Z","dateModified":"2022-02-09T16:47:31.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2022/02/10/31963302af5a/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2022-02-09T16:47:31.000Z">
+  <article class="post">
+    <h1 class="post-title">TreeMap底层原理——红黑树在Java中的应用</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2022-02-09T16:47:31.000Z">2022-02-10</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2022/">2022</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2022/Java%E5%9F%BA%E7%A1%80/">Java基础</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>第一次用 TreeMap 是做一个矿卡驾驶时长排行榜：key 是驾驶时长，value 是司机信息，遍历出来天然有序。上线第三天运营发现榜上少了两个人——<strong>两个司机驾驶时长完全相同（精确到分钟），后写入的把先写入的覆盖了</strong>。</p>
+<p>当时的第一反应是”数据有问题”，排查半天才发现是 <code>TreeMap.put</code> 的语义：<strong>key 相等不是”追加”，是”替换 value”</strong>。这个问题用 HashMap 一样会踩，但 HashMap 没有”排序”这个直观预期，反而更容易被测试发现。</p>
+<p>这件事让我意识到：<strong>排序容器不是”能自动排序的 HashMap”，它有一整套自己的语义</strong>——比较器怎么定相等、范围查询返回的是不是副本、为什么 key 不能是 null、为什么插入和删除的平衡策略不一样。这篇文章把这些问题讲透：</p>
+<ol>
+<li>红黑树的五条规则是怎么”证明”树不会退化成链表的？</li>
+<li>插入后怎么修复平衡？三种 case 分别做什么？</li>
+<li>为什么 JDK 选红黑树而不是更严格的 AVL 树？</li>
+<li><code>floor</code>&#x2F;<code>ceiling</code>&#x2F;<code>lower</code>&#x2F;<code>higher</code> 四兄弟到底差在哪？</li>
+<li><code>subMap</code> 返回的是副本还是视图？改了会发生什么？</li>
+<li>为什么 <code>ConcurrentSkipListMap</code> 用跳表而不是红黑树？</li>
+</ol>
+<hr>
+<h2 id="一、TreeMap-是什么：一棵带排序约束的红黑树"><a href="#一、TreeMap-是什么：一棵带排序约束的红黑树" class="headerlink" title="一、TreeMap 是什么：一棵带排序约束的红黑树"></a>一、TreeMap 是什么：一棵带排序约束的红黑树</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">TreeMap</span>&lt;K,V&gt;</span><br><span class="line">    <span class="keyword">extends</span> <span class="title class_">AbstractMap</span>&lt;K,V&gt;</span><br><span class="line">    <span class="keyword">implements</span> <span class="title class_">NavigableMap</span>&lt;K,V&gt;, Cloneable, java.io.Serializable</span><br></pre></td></tr></table></figure>
+
+<p>核心特点：</p>
+<table>
+<thead>
+<tr>
+<th>特性</th>
+<th>说明</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>按 key 有序</strong></td>
+<td>自然顺序或 <code>Comparator</code></td>
+<td>底层是搜索树，中序遍历即有序</td>
+</tr>
+<tr>
+<td><strong>不允许 null key</strong></td>
+<td><code>put(null, v)</code> 抛 NPE</td>
+<td>排序需要比较，null 无法比较</td>
+</tr>
+<tr>
+<td><strong>允许 null value</strong></td>
+<td>✅</td>
+<td>value 不参与比较</td>
+</tr>
+<tr>
+<td><strong>O(log n)</strong></td>
+<td>增删查</td>
+<td>红黑树保证平衡</td>
+</tr>
+<tr>
+<td><strong>线程不安全</strong></td>
+<td>并发修改会数据错乱 + fail-fast</td>
+<td>无同步机制</td>
+</tr>
+<tr>
+<td><strong>key 相等 → 覆盖 value</strong></td>
+<td>不是追加</td>
+<td>所有 Map 的通用语义</td>
+</tr>
+</tbody></table>
+<h3 id="1-1-“key-相等”是谁决定的"><a href="#1-1-“key-相等”是谁决定的" class="headerlink" title="1.1 “key 相等”是谁决定的"></a>1.1 “key 相等”是谁决定的</h3><p>这是排行榜事故的根因。<strong>TreeMap 判断 key 是否相等，只看比较器的返回值是否为 0</strong>，与 <code>equals()</code> 完全无关：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// put 源码里找到相等 key 时：</span></span><br><span class="line"><span class="keyword">else</span></span><br><span class="line">    <span class="keyword">return</span> t.setValue(value);   <span class="comment">// ← cmp == 0，直接替换 value，返回旧值</span></span><br></pre></td></tr></table></figure>
+
+<p>这意味着一个容易踩的坑：<strong><code>compareTo</code> 返回 0 但 <code>equals</code> 返回 false 的两个对象，在 TreeMap 里被视为同一个 key，但在 HashSet&#x2F;HashMap 里是两个不同元素。</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">class</span> <span class="title class_">Score</span> &#123;</span><br><span class="line">    <span class="type">int</span> value;</span><br><span class="line">    Score(<span class="type">int</span> v) &#123; value = v; &#125;</span><br><span class="line">    <span class="comment">// compareTo 按 value 比较，equals 未重写（按引用比较）</span></span><br><span class="line">    <span class="meta">@Override</span> <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">compareTo</span><span class="params">(Score o)</span> &#123; <span class="keyword">return</span> Integer.compare(value, o.value); &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">TreeMap</span>&lt;Score, String&gt; <span class="variable">tm</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TreeMap</span>&lt;&gt;();</span><br><span class="line">tm.put(<span class="keyword">new</span> <span class="title class_">Score</span>(<span class="number">90</span>), <span class="string">&quot;张三&quot;</span>);</span><br><span class="line">tm.put(<span class="keyword">new</span> <span class="title class_">Score</span>(<span class="number">90</span>), <span class="string">&quot;李四&quot;</span>);      <span class="comment">// compareTo == 0 → 覆盖！张三没了</span></span><br><span class="line">tm.size();                          <span class="comment">// 1</span></span><br><span class="line"></span><br><span class="line"><span class="type">HashSet</span>&lt;Score&gt; <span class="variable">hs</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">HashSet</span>&lt;&gt;();</span><br><span class="line">hs.add(<span class="keyword">new</span> <span class="title class_">Score</span>(<span class="number">90</span>));</span><br><span class="line">hs.add(<span class="keyword">new</span> <span class="title class_">Score</span>(<span class="number">90</span>));              <span class="comment">// equals 为 false → 两个都存</span></span><br><span class="line">hs.size();                          <span class="comment">// 2</span></span><br></pre></td></tr></table></figure>
+
+<p><strong><code>compareTo</code> 与 <code>equals</code> 必须保持一致</strong>（Effective Java 第 14 条），否则同一个对象在排序容器和无序容器里行为不一致，排查起来非常痛苦。</p>
+<h3 id="1-2-Entry：六个字段"><a href="#1-2-Entry：六个字段" class="headerlink" title="1.2 Entry：六个字段"></a>1.2 Entry：六个字段</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">class</span> <span class="title class_">Entry</span>&lt;K,V&gt; <span class="keyword">implements</span> <span class="title class_">Map</span>.Entry&lt;K,V&gt; &#123;</span><br><span class="line">    K key;</span><br><span class="line">    V value;</span><br><span class="line">    Entry&lt;K,V&gt; left;</span><br><span class="line">    Entry&lt;K,V&gt; right;</span><br><span class="line">    Entry&lt;K,V&gt; parent;    <span class="comment">// ← 比 HashMap 多个 parent，因为旋转和遍历都要向上走</span></span><br><span class="line">    <span class="type">boolean</span> <span class="variable">color</span> <span class="operator">=</span> BLACK;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>color</code> 用 <code>boolean</code> 而不是枚举——<code>true</code> 表示红色，<code>false</code> 表示黑色，一个字节解决。</p>
+<p>对比 HashMap 的树化节点 <code>TreeNode</code>（继承 <code>LinkedHashMap.Entry</code>，还要维护 <code>before</code>&#x2F;<code>after</code> 双向链表），TreeMap 的 Entry 精简得多。</p>
+<hr>
+<h2 id="二、红黑树：五条规则换来的保证"><a href="#二、红黑树：五条规则换来的保证" class="headerlink" title="二、红黑树：五条规则换来的保证"></a>二、红黑树：五条规则换来的保证</h2><p>红黑树是一棵<strong>自平衡二叉搜索树</strong>，通过五条着色规则约束平衡：</p>
+<ol>
+<li>每个节点非红即黑；</li>
+<li>根节点是黑色；</li>
+<li>叶子节点（NIL，空节点）视为黑色；</li>
+<li><strong>红色节点的子节点必须是黑色</strong>（不允许两个红节点相连）；</li>
+<li><strong>从任一节点到其所有后代叶节点的路径上，黑色节点数量相同</strong>（黑高一致）。</li>
+</ol>
+<h3 id="2-1-这五条规则证明了什么"><a href="#2-1-这五条规则证明了什么" class="headerlink" title="2.1 这五条规则证明了什么"></a>2.1 这五条规则证明了什么</h3><p>设黑高为 <code>bh</code>。由规则 4，<strong>最短路径全黑，长度 &#x3D; bh</strong>；由规则 4 + 规则 5，最长路径黑红相间，<strong>长度 ≤ 2 × bh</strong>。</p>
+<p>所以：<strong>最长路径 ≤ 2 × 最短路径</strong>。树不可能退化成链表，高度被约束在 <code>2·log₂(n+1)</code> 以内——这就是 O(log n) 的来源。</p>
+<p><strong>对比一下就明白这个约束有多宽松又多有效</strong>：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>普通 BST</th>
+<th>AVL 树</th>
+<th>红黑树</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>平衡约束</td>
+<td>无</td>
+<td>严格：左右子树高度差 ≤ 1</td>
+<td>宽松：最长 ≤ 2 × 最短</td>
+</tr>
+<tr>
+<td>期望高度</td>
+<td>O(log n)，最坏 O(n)</td>
+<td>~1.44 log n</td>
+<td>~2 log n</td>
+</tr>
+<tr>
+<td>查找</td>
+<td>最坏 O(n)</td>
+<td>最快</td>
+<td>略慢于 AVL</td>
+</tr>
+<tr>
+<td><strong>插入修复</strong></td>
+<td>无</td>
+<td>最多 O(log n) 次旋转</td>
+<td><strong>最多 2 次旋转 + O(log n) 次变色</strong></td>
+</tr>
+<tr>
+<td><strong>删除修复</strong></td>
+<td>无</td>
+<td>最多 O(log n) 次旋转</td>
+<td><strong>最多 3 次旋转</strong></td>
+</tr>
+<tr>
+<td>适用</td>
+<td>—</td>
+<td>读多写少</td>
+<td><strong>写多读少（增删频繁）</strong></td>
+</tr>
+</tbody></table>
+<p><strong>JDK 选红黑树的核心理由：删除修复的旋转次数有上界（最多 3 次）。</strong> AVL 删除可能引发 O(log n) 次旋转，每根到根的路径都要重新平衡。对于”增删频繁”的通用容器，红黑树的总代价更低。</p>
+<p>（顺带一提：HashMap 的链表长度达到 8 才转红黑树，阈值 8 来自泊松分布——默认扰动下链表长度超过 8 的概率约千万分之一，这个设计在 HashMap 那篇里详细讲过。）</p>
+<h3 id="2-2-旋转：修复平衡的唯一手段"><a href="#2-2-旋转：修复平衡的唯一手段" class="headerlink" title="2.2 旋转：修复平衡的唯一手段"></a>2.2 旋转：修复平衡的唯一手段</h3><p>左旋（<code>rotateLeft</code>）：节点 p 的右孩子 r 顶替 p 的位置：</p>
+<pre class="mermaid">flowchart TB
+    subgraph B["左旋前"]
+        P1["P(黑)"] --> L1["L"]
+        P1 --> R1["R(红)"]
+        R1 --> RL1["RL"]
+        R1 --> RR1["RR"]
+    end
+    subgraph A["左旋后"]
+        R2["R(黑)"] --> P2["P(红)"]
+        R2 --> RR2["RR"]
+        P2 --> L2["L"]
+        P2 --> RL2["RL"]
+    end
+    B ---|"rotateLeft(P)"| A</pre>
+
+<p>右旋对称。旋转的要点：</p>
+<ul>
+<li>只改 3~4 个指针，O(1)；</li>
+<li>旋转会改变颜色（源码里 <code>setColor</code>）；</li>
+<li>旋转<strong>不改变中序遍历结果</strong>（二叉搜索树的有序性），所以修复平衡是安全的。</li>
+</ul>
+<hr>
+<h2 id="三、put-源码精读：定位-→-插入-→-修复"><a href="#三、put-源码精读：定位-→-插入-→-修复" class="headerlink" title="三、put 源码精读：定位 → 插入 → 修复"></a>三、put 源码精读：定位 → 插入 → 修复</h2><h3 id="3-1-完整流程"><a href="#3-1-完整流程" class="headerlink" title="3.1 完整流程"></a>3.1 完整流程</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">V</span> <span class="title function_">put</span><span class="params">(K key, V value)</span> &#123;</span><br><span class="line">    <span class="type">Entry</span>&lt;K,V&gt; <span class="variable">t</span> <span class="operator">=</span> root;</span><br><span class="line">    <span class="keyword">if</span> (t == <span class="literal">null</span>) &#123;</span><br><span class="line">        compare(key, key);          <span class="comment">// ① 类型检查：key 必须能和自己比较</span></span><br><span class="line">        root = <span class="keyword">new</span> <span class="title class_">Entry</span>&lt;&gt;(key, value, <span class="literal">null</span>);</span><br><span class="line">        size = <span class="number">1</span>;</span><br><span class="line">        modCount++;</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="type">int</span> cmp;</span><br><span class="line">    Entry&lt;K,V&gt; parent;</span><br><span class="line">    <span class="type">Comparator</span>&lt;? <span class="built_in">super</span> K&gt; <span class="variable">cpr</span> <span class="operator">=</span> comparator;</span><br><span class="line">    <span class="keyword">if</span> (cpr != <span class="literal">null</span>) &#123;              <span class="comment">// ② 用构造时传入的 Comparator</span></span><br><span class="line">        <span class="keyword">do</span> &#123;</span><br><span class="line">            parent = t;</span><br><span class="line">            cmp = cpr.compare(key, t.key);</span><br><span class="line">            <span class="keyword">if</span> (cmp &lt; <span class="number">0</span>)      t = t.left;</span><br><span class="line">            <span class="keyword">else</span> <span class="keyword">if</span> (cmp &gt; <span class="number">0</span>) t = t.right;</span><br><span class="line">            <span class="keyword">else</span> <span class="keyword">return</span> t.setValue(value);    <span class="comment">// ③ key 相等 → 覆盖 value</span></span><br><span class="line">        &#125; <span class="keyword">while</span> (t != <span class="literal">null</span>);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;                        <span class="comment">// ②&#x27; 自然顺序：key 必须实现 Comparable</span></span><br><span class="line">        <span class="type">Comparable</span>&lt;? <span class="built_in">super</span> K&gt; <span class="variable">k</span> <span class="operator">=</span> (Comparable&lt;? <span class="built_in">super</span> K&gt;) key;</span><br><span class="line">        <span class="keyword">do</span> &#123;</span><br><span class="line">            parent = t;</span><br><span class="line">            cmp = k.compareTo(t.key);</span><br><span class="line">            <span class="keyword">if</span> (cmp &lt; <span class="number">0</span>)      t = t.left;</span><br><span class="line">            <span class="keyword">else</span> <span class="keyword">if</span> (cmp &gt; <span class="number">0</span>) t = t.right;</span><br><span class="line">            <span class="keyword">else</span> <span class="keyword">return</span> t.setValue(value);</span><br><span class="line">        &#125; <span class="keyword">while</span> (t != <span class="literal">null</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="type">Entry</span>&lt;K,V&gt; <span class="variable">e</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Entry</span>&lt;&gt;(key, value, parent);</span><br><span class="line">    <span class="keyword">if</span> (cmp &lt; <span class="number">0</span>)</span><br><span class="line">        parent.left = e;</span><br><span class="line">    <span class="keyword">else</span></span><br><span class="line">        parent.right = e;</span><br><span class="line">    fixAfterInsertion(e);           <span class="comment">// ④ 修复红黑性质</span></span><br><span class="line">    size++;</span><br><span class="line">    modCount++;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>两个容易被忽略的细节：</strong></p>
+<ol>
+<li><strong><code>compare(key, key)</code> 的作用</strong>：第一个元素插入时做”自比较”，如果 key 没实现 <code>Comparable</code>，<strong>在这里就抛 <code>ClassCastException</code></strong>，而不是等到第二个元素才炸——把错误暴露得更早。</li>
+<li><strong>新节点默认是红色</strong>：</li>
+</ol>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Entry(K key, V value, Entry&lt;K,V&gt; parent) &#123;</span><br><span class="line">    <span class="built_in">this</span>.key = key;</span><br><span class="line">    <span class="built_in">this</span>.value = value;</span><br><span class="line">    <span class="built_in">this</span>.parent = parent;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>字段声明是 <code>boolean color = BLACK</code>，但构造器<strong>不设置 color</strong>，而 <code>fixAfterInsertion</code> 第一行是 <code>x.color = RED</code>。为什么新节点必须是红色？因为<strong>插入红色节点不会破坏规则 5（黑高不变）</strong>，只需要处理”父节点也是红色”的情况；插黑色则必然破坏规则 5，修复代价更大。</p>
+<h3 id="3-2-fixAfterInsertion：三种-case"><a href="#3-2-fixAfterInsertion：三种-case" class="headerlink" title="3.2 fixAfterInsertion：三种 case"></a>3.2 fixAfterInsertion：三种 case</h3><p>新节点 x 是红色，唯一会违反的规则是规则 4（父节点也是红色）。按”叔叔节点”的颜色分三种情况：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="type">void</span> <span class="title function_">fixAfterInsertion</span><span class="params">(Entry&lt;K,V&gt; x)</span> &#123;</span><br><span class="line">    x.color = RED;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">while</span> (x != <span class="literal">null</span> &amp;&amp; x != root &amp;&amp; x.parent.color == RED) &#123;</span><br><span class="line">        <span class="keyword">if</span> (parentOf(x) == leftOf(parentOf(parentOf(x)))) &#123;   <span class="comment">// 父节点是左孩子</span></span><br><span class="line">            <span class="type">Entry</span>&lt;K,V&gt; <span class="variable">y</span> <span class="operator">=</span> rightOf(parentOf(parentOf(x)));    <span class="comment">// 叔叔节点 y</span></span><br><span class="line">            <span class="keyword">if</span> (colorOf(y) == RED) &#123;</span><br><span class="line">                <span class="comment">// Case 1：叔叔是红色 → 只变色，不上溯旋转</span></span><br><span class="line">                setColor(parentOf(x), BLACK);</span><br><span class="line">                setColor(y, BLACK);</span><br><span class="line">                setColor(parentOf(parentOf(x)), RED);</span><br><span class="line">                x = parentOf(parentOf(x));      <span class="comment">// ← 问题上移两层，继续循环</span></span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                <span class="keyword">if</span> (x == rightOf(parentOf(x))) &#123;</span><br><span class="line">                    <span class="comment">// Case 2：叔叔是黑色，x 是&quot;内侧&quot;孩子 → 先左旋变成 Case 3</span></span><br><span class="line">                    x = parentOf(x);</span><br><span class="line">                    rotateLeft(x);</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="comment">// Case 3：叔叔是黑色，x 是&quot;外侧&quot;孩子 → 变色 + 右旋，结束</span></span><br><span class="line">                setColor(parentOf(x), BLACK);</span><br><span class="line">                setColor(parentOf(parentOf(x)), RED);</span><br><span class="line">                rotateRight(parentOf(parentOf(x)));</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">// 对称情况（父节点是右孩子）：左旋右旋互换</span></span><br><span class="line">            ...</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    root.color = BLACK;   <span class="comment">// ← 兜底：规则 2 要求根必须是黑的</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>条件</th>
+<th>动作</th>
+<th>后续</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>叔叔是红色</td>
+<td>父、叔变黑，祖父变红</td>
+<td>问题<strong>上移两层</strong>，可能继续循环</td>
+</tr>
+<tr>
+<td>2</td>
+<td>叔叔是黑色，x 是内侧孩子</td>
+<td>对父节点左旋</td>
+<td>转化为 Case 3</td>
+</tr>
+<tr>
+<td>3</td>
+<td>叔叔是黑色，x 是外侧孩子</td>
+<td>父变黑、祖父变红，对祖父右旋</td>
+<td><strong>结束</strong></td>
+</tr>
+</tbody></table>
+<p><strong>关键结论</strong>：插入修复<strong>最多旋转 2 次</strong>（Case 2 → Case 3），变色次数最多 O(log n)（Case 1 连环上溯）。这就是红黑树插入性能好的原因。</p>
+<p>最后一行 <code>root.color = BLACK</code> 也不是可有可无：如果 Case 1 一直上溯到根，根会被染红，必须拨回来。</p>
+<h3 id="3-3-删除修复（简述）"><a href="#3-3-删除修复（简述）" class="headerlink" title="3.3 删除修复（简述）"></a>3.3 删除修复（简述）</h3><p>删除比插入麻烦得多——<strong>删除红色节点不破坏任何规则，删除黑色节点必然破坏规则 5（黑高）</strong>。所以 JDK 源码里 <code>deleteEntry</code> 有一个前提判断：只有删的是黑节点（或替代上来的节点是黑）才需要 <code>fixAfterDeletion</code>。</p>
+<p>删除修复引入”双重黑”（double black）概念，分四种 case 处理，<strong>最多旋转 3 次</strong>。这块展开会非常长，工程上需要掌握的是：</p>
+<ul>
+<li>TreeMap 的 <code>remove</code> 是 O(log n)，不是 O(1)；</li>
+<li>删除的旋转次数有上界（≤ 3），这是它胜过 AVL 的地方；</li>
+<li><code>remove(key)</code> 返回的是<strong>被删节点的 value</strong>，不是 boolean。</li>
+</ul>
+<h3 id="3-4-get：就是二叉搜索树查找"><a href="#3-4-get：就是二叉搜索树查找" class="headerlink" title="3.4 get：就是二叉搜索树查找"></a>3.4 get：就是二叉搜索树查找</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">V</span> <span class="title function_">get</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">    <span class="type">Entry</span>&lt;K,V&gt; <span class="variable">p</span> <span class="operator">=</span> getEntry(key);</span><br><span class="line">    <span class="keyword">return</span> (p == <span class="literal">null</span> ? <span class="literal">null</span> : p.value);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">final</span> <span class="type">Entry</span>&lt;K,V&gt; <span class="title function_">getEntry</span><span class="params">(Object key)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (comparator != <span class="literal">null</span>)</span><br><span class="line">        <span class="keyword">return</span> getEntryUsingComparator(key);</span><br><span class="line"></span><br><span class="line">    <span class="meta">@SuppressWarnings(&quot;unchecked&quot;)</span></span><br><span class="line">    <span class="type">Comparable</span>&lt;? <span class="built_in">super</span> K&gt; <span class="variable">k</span> <span class="operator">=</span> (Comparable&lt;? <span class="built_in">super</span> K&gt;) key;</span><br><span class="line">    <span class="type">Entry</span>&lt;K,V&gt; <span class="variable">p</span> <span class="operator">=</span> root;</span><br><span class="line">    <span class="keyword">while</span> (p != <span class="literal">null</span>) &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">cmp</span> <span class="operator">=</span> k.compareTo(p.key);</span><br><span class="line">        <span class="keyword">if</span> (cmp &lt; <span class="number">0</span>)      p = p.left;</span><br><span class="line">        <span class="keyword">else</span> <span class="keyword">if</span> (cmp &gt; <span class="number">0</span>) p = p.right;</span><br><span class="line">        <span class="keyword">else</span>              <span class="keyword">return</span> p;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>注意 <code>get</code> 里对 key 做了 <code>(Comparable&lt;? super K&gt;) key</code> 强转——<strong>如果 key 没实现 Comparable，<code>get</code> 会直接抛 <code>ClassCastException</code></strong>。所以 TreeMap 的 key 类型约束是”硬”的，不像 HashMap 只依赖 <code>hashCode/equals</code>。</p>
+<hr>
+<h2 id="四、NavigableMap：TreeMap-真正的价值所在"><a href="#四、NavigableMap：TreeMap-真正的价值所在" class="headerlink" title="四、NavigableMap：TreeMap 真正的价值所在"></a>四、NavigableMap：TreeMap 真正的价值所在</h2><p>如果只用 <code>put</code>&#x2F;<code>get</code>，TreeMap 相比 HashMap 的唯一收益是”遍历有序”。<strong>但它的杀手锏是一整套范围&#x2F;邻近查询 API</strong>——这是 HashMap 完全做不到的（HashMap 要范围查询只能全量遍历过滤，O(n)）。</p>
+<h3 id="4-1-四个”邻近查询”"><a href="#4-1-四个”邻近查询”" class="headerlink" title="4.1 四个”邻近查询”"></a>4.1 四个”邻近查询”</h3><table>
+<thead>
+<tr>
+<th>方法</th>
+<th>语义</th>
+<th>例子（key: 80, 85, 90）</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>floorEntry(k)</code></td>
+<td><strong>≤ k</strong> 的最大 key</td>
+<td><code>floorEntry(87)</code> → 85</td>
+</tr>
+<tr>
+<td><code>ceilingEntry(k)</code></td>
+<td><strong>≥ k</strong> 的最小 key</td>
+<td><code>ceilingEntry(87)</code> → 90</td>
+</tr>
+<tr>
+<td><code>lowerEntry(k)</code></td>
+<td><strong>&lt; k</strong> 的最大 key（严格小于）</td>
+<td><code>lowerEntry(85)</code> → 80</td>
+</tr>
+<tr>
+<td><code>higherEntry(k)</code></td>
+<td><strong>&gt; k</strong> 的最小 key（严格大于）</td>
+<td><code>higherEntry(85)</code> → 90</td>
+</tr>
+</tbody></table>
+<p><strong>记忆技巧</strong>：<code>floor/ceiling</code> 是”闭区间”（含等于），<code>lower/higher</code> 是”开区间”（严格）。四个都返回 <code>Map.Entry</code>，且都只做一次 O(log n) 的树查找。</p>
+<p>还有一个不对称的：<code>firstEntry()</code>&#x2F;<code>lastEntry()</code> 取最小&#x2F;最大，<code>pollFirstEntry()</code>&#x2F;<code>pollLastEntry()</code> 取出<strong>并删除</strong>。</p>
+<h3 id="4-2-区间视图：subMap-headMap-tailMap"><a href="#4-2-区间视图：subMap-headMap-tailMap" class="headerlink" title="4.2 区间视图：subMap &#x2F; headMap &#x2F; tailMap"></a>4.2 区间视图：subMap &#x2F; headMap &#x2F; tailMap</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">NavigableMap</span>&lt;Integer, String&gt; <span class="variable">rank</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TreeMap</span>&lt;&gt;();</span><br><span class="line"><span class="comment">// ... 塞入分数 60~100</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 闭区间 [80, 90]</span></span><br><span class="line"><span class="type">SortedMap</span>&lt;Integer, String&gt; <span class="variable">s1</span> <span class="operator">=</span> rank.subMap(<span class="number">80</span>, <span class="number">90</span>);</span><br><span class="line"><span class="comment">// 半开区间 [80, 90)</span></span><br><span class="line"><span class="type">NavigableMap</span>&lt;Integer, String&gt; <span class="variable">s2</span> <span class="operator">=</span> rank.subMap(<span class="number">80</span>, <span class="literal">true</span>, <span class="number">90</span>, <span class="literal">false</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// &lt; 70 和 &gt;= 70</span></span><br><span class="line"><span class="type">SortedMap</span>&lt;Integer, String&gt; <span class="variable">low</span>  <span class="operator">=</span> rank.headMap(<span class="number">70</span>);</span><br><span class="line"><span class="type">SortedMap</span>&lt;Integer, String&gt; <span class="variable">high</span> <span class="operator">=</span> rank.tailMap(<span class="number">70</span>);</span><br></pre></td></tr></table></figure>
+
+<p><strong>关键：这些返回的都是视图，不是副本</strong>（和 <code>List.subList</code> 一样的坑）：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">NavigableMap</span>&lt;Integer, String&gt; <span class="variable">sub</span> <span class="operator">=</span> rank.subMap(<span class="number">80</span>, <span class="number">90</span>);</span><br><span class="line">sub.put(<span class="number">85</span>, <span class="string">&quot;新值&quot;</span>);</span><br><span class="line">System.out.println(rank.get(<span class="number">85</span>));    <span class="comment">// &quot;新值&quot; —— 原map被改了！</span></span><br><span class="line"></span><br><span class="line">rank.put(<span class="number">70</span>, <span class="string">&quot;新元素&quot;</span>);</span><br><span class="line">System.out.println(sub.size());      <span class="comment">// 70 不在 [80,90) 内，不影响 sub 的 key 集</span></span><br><span class="line"><span class="comment">// 但如果放进的是 85 附近区间内的新 key，sub 会&quot;长出&quot;这个元素</span></span><br></pre></td></tr></table></figure>
+
+<p>对视图做<strong>超出范围</strong>的插入会抛 <code>IllegalArgumentException</code>（视图会校验 key 必须落在区间内）。</p>
+<p><strong>想要独立副本必须包一层：</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">Map</span>&lt;Integer, String&gt; <span class="variable">copy</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TreeMap</span>&lt;&gt;(rank.subMap(<span class="number">80</span>, <span class="number">90</span>));</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-3-反向遍历"><a href="#4-3-反向遍历" class="headerlink" title="4.3 反向遍历"></a>4.3 反向遍历</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 倒序视图（也是视图，不复制数据）</span></span><br><span class="line"><span class="type">NavigableMap</span>&lt;Integer, String&gt; <span class="variable">desc</span> <span class="operator">=</span> rank.descendingMap();</span><br><span class="line"><span class="keyword">for</span> (Map.Entry&lt;Integer, String&gt; e : desc.entrySet()) &#123; ... &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 或者用倒序 keySet</span></span><br><span class="line"><span class="keyword">for</span> (Integer k : rank.descendingKeySet()) &#123; ... &#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-4-遍历：entrySet-是中序遍历"><a href="#4-4-遍历：entrySet-是中序遍历" class="headerlink" title="4.4 遍历：entrySet 是中序遍历"></a>4.4 遍历：entrySet 是中序遍历</h3><p>TreeMap 的 <code>entrySet().iterator()</code> 内部用 <code>successor()</code>（后继节点）逐个跳转——<strong>这就是中序遍历</strong>，所以结果天然按 key 升序。</p>
+<p>整个遍历是 O(n)：第一个元素 O(log n)（找最左节点），之后每次 <code>successor()</code> 均摊 O(1)（树的总边数有限，均摊分析后整棵树走一遍是 O(n)）。</p>
+<p>这也意味着：<strong>TreeMap 遍历 &#x3D; 排序后遍历，不需要先 <code>keySet().stream().sorted()</code></strong>。用 HashMap 做同样的事要多花一次 O(n log n) 排序。</p>
+<hr>
+<h2 id="五、三个真实场景的正确实现"><a href="#五、三个真实场景的正确实现" class="headerlink" title="五、三个真实场景的正确实现"></a>五、三个真实场景的正确实现</h2><h3 id="5-1-排行榜：同分覆盖是必踩的坑"><a href="#5-1-排行榜：同分覆盖是必踩的坑" class="headerlink" title="5.1 排行榜：同分覆盖是必踩的坑"></a>5.1 排行榜：同分覆盖是必踩的坑</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 原始写法：key 是分数，同分用户互相覆盖</span></span><br><span class="line"><span class="type">TreeMap</span>&lt;Integer, String&gt; <span class="variable">rankMap</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TreeMap</span>&lt;&gt;(Comparator.reverseOrder());</span><br><span class="line">rankMap.put(<span class="number">95</span>, <span class="string">&quot;张三&quot;</span>);</span><br><span class="line">rankMap.put(<span class="number">95</span>, <span class="string">&quot;李四&quot;</span>);     <span class="comment">// 张三没了！</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>修复思路一：key 用复合键，保证唯一</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">record</span> <span class="title class_">RankKey</span><span class="params">(<span class="type">int</span> score, <span class="type">long</span> userId)</span> <span class="keyword">implements</span> <span class="title class_">Comparable</span>&lt;RankKey&gt; &#123;</span><br><span class="line">    <span class="meta">@Override</span> <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">compareTo</span><span class="params">(RankKey o)</span> &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">c</span> <span class="operator">=</span> Integer.compare(o.score, score);   <span class="comment">// 分数倒序</span></span><br><span class="line">        <span class="keyword">return</span> c != <span class="number">0</span> ? c : Long.compare(userId, o.userId);  <span class="comment">// 同分按 id 升序，保证唯一</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">TreeMap</span>&lt;RankKey, Driver&gt; <span class="variable">rank</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TreeMap</span>&lt;&gt;();</span><br><span class="line">rank.put(<span class="keyword">new</span> <span class="title class_">RankKey</span>(<span class="number">95</span>, <span class="number">1001</span>), driver1);</span><br><span class="line">rank.put(<span class="keyword">new</span> <span class="title class_">RankKey</span>(<span class="number">95</span>, <span class="number">1002</span>), driver2);   <span class="comment">// ✅ 两个都保留，且 1001 排在 1002 前面</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 取 Top N：直接前序遍历前 N 个</span></span><br><span class="line"><span class="type">List</span>&lt;Driver&gt; <span class="variable">top10</span> <span class="operator">=</span> rank.values().stream().limit(<span class="number">10</span>).toList();</span><br></pre></td></tr></table></figure>
+
+<p><strong>修复思路二：value 挂 List，同分聚合</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">TreeMap</span>&lt;Integer, List&lt;Driver&gt;&gt; <span class="variable">rank</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TreeMap</span>&lt;&gt;(Comparator.reverseOrder());</span><br><span class="line">rank.computeIfAbsent(driver.getScore(), k -&gt; <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;()).add(driver);</span><br></pre></td></tr></table></figure>
+
+<p>方案一更好：取 Top N 时方案一可以直接 <code>limit(n)</code>，方案二还得在 List 内部再处理边界。</p>
+<p><strong>生产环境的真实答案是 Redis ZSet（跳表实现）</strong>——排行榜天然需要”分数可变”（驾驶时长一直在涨），而 TreeMap 修改 key 的分数意味着”删了再插”，每次 O(log n) × 2，且单机内存受限。这个话题在分布式篇再展开。</p>
+<h3 id="5-2-定时-延时任务：TreeMap-不该出现在这里"><a href="#5-2-定时-延时任务：TreeMap-不该出现在这里" class="headerlink" title="5.2 定时&#x2F;延时任务：TreeMap 不该出现在这里"></a>5.2 定时&#x2F;延时任务：TreeMap 不该出现在这里</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 原始写法</span></span><br><span class="line"><span class="type">TreeMap</span>&lt;Long, Runnable&gt; <span class="variable">taskQueue</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TreeMap</span>&lt;&gt;();</span><br><span class="line">taskQueue.put(System.currentTimeMillis() + delay, task);</span><br><span class="line"><span class="comment">// 两个任务如果到期时间戳相同（毫秒级碰撞很常见），后一个覆盖前一个</span></span><br></pre></td></tr></table></figure>
+
+<p>时间戳做 key 几乎必然碰撞——同一毫秒内提交两个任务太正常了。<strong>而且这个场景 JDK 早有专门的容器：</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 延迟任务：DelayQueue</span></span><br><span class="line">PriorityBlockingQueue&lt;Delayed&gt;  <span class="comment">// DelayQueue 的底层，堆实现</span></span><br><span class="line"><span class="type">DelayQueue</span>&lt;ScheduledTask&gt; <span class="variable">delayQueue</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">DelayQueue</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 生产环境直接用调度器，别自己造</span></span><br><span class="line"><span class="type">ScheduledExecutorService</span> <span class="variable">scheduler</span> <span class="operator">=</span> Executors.newScheduledThreadPool(<span class="number">4</span>);</span><br><span class="line">scheduler.schedule(task, <span class="number">5</span>, TimeUnit.SECONDS);</span><br><span class="line">scheduler.scheduleAtFixedRate(task, <span class="number">0</span>, <span class="number">1</span>, TimeUnit.MINUTES);</span><br></pre></td></tr></table></figure>
+
+<p><code>ScheduledThreadPoolExecutor</code> 内部就是一个<strong>基于堆的延迟队列</strong>（<code>DelayedWorkQueue</code>），不是 TreeMap，也不是红黑树——堆对”只取最小值”这个操作更友好（O(1) 取顶，O(log n) 插入，且无序遍历需求为零）。</p>
+<blockquote>
+<p><strong>选型经验</strong>：如果你的场景只需要 <code>firstEntry()</code> + <code>pollFirstEntry()</code>，用堆（<code>PriorityQueue</code>）；需要完整的范围查询&#x2F;邻近查询，才用 TreeMap。</p>
+</blockquote>
+<h3 id="5-3-时间区间查询：TreeMap-的正确打开方式"><a href="#5-3-时间区间查询：TreeMap-的正确打开方式" class="headerlink" title="5.3 时间区间查询：TreeMap 的正确打开方式"></a>5.3 时间区间查询：TreeMap 的正确打开方式</h3><p>设备状态快照查询——“查某设备在 14:30 时的状态”，这是 TreeMap 少数真正不可替代的场景：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 设备状态时间线索引：按时间戳存快照，支持任意时刻状态回查</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceStateTimeline</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">TreeMap</span>&lt;Long, DeviceState&gt; <span class="variable">timeline</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TreeMap</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">snapshot</span><span class="params">(DeviceState state)</span> &#123;</span><br><span class="line">        timeline.put(state.getTimestamp(), state);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/** 查询某时刻的状态：不早于该时刻的最早一条记录 */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">DeviceState</span> <span class="title function_">stateAt</span><span class="params">(<span class="type">long</span> timestamp)</span> &#123;</span><br><span class="line">        Map.<span class="type">Entry</span>&lt;Long, DeviceState&gt; <span class="variable">e</span> <span class="operator">=</span> timeline.ceilingEntry(timestamp);</span><br><span class="line">        <span class="keyword">return</span> e != <span class="literal">null</span> ? e.getValue() : <span class="literal">null</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/** 查询某时刻之前最近的状态（回溯最后一次上报） */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">DeviceState</span> <span class="title function_">stateBefore</span><span class="params">(<span class="type">long</span> timestamp)</span> &#123;</span><br><span class="line">        Map.<span class="type">Entry</span>&lt;Long, DeviceState&gt; <span class="variable">e</span> <span class="operator">=</span> timeline.floorEntry(timestamp);</span><br><span class="line">        <span class="keyword">return</span> e != <span class="literal">null</span> ? e.getValue() : <span class="literal">null</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/** 时间区间内的所有快照（注意返回的是视图） */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">NavigableMap</span>&lt;Long, DeviceState&gt; <span class="title function_">range</span><span class="params">(<span class="type">long</span> from, <span class="type">long</span> to)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> timeline.subMap(from, <span class="literal">true</span>, to, <span class="literal">true</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/** 清理过期数据：取出并删除 N 天前的快照 */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">evictBefore</span><span class="params">(<span class="type">long</span> deadline)</span> &#123;</span><br><span class="line">        timeline.headMap(deadline, <span class="literal">false</span>).clear();   <span class="comment">// ✅ 视图的 clear 会作用到原 map</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这个场景 <code>floorEntry</code>&#x2F;<code>ceilingEntry</code> 一次 O(log n) 定位，是 HashMap 做不到的（HashMap 要先全量遍历再过滤，O(n)）。</p>
+<p><code>evictBefore</code> 里 <code>headMap(...).clear()</code> 是个漂亮的惯用法：<strong>对视图 clear 会传导到原 map</strong>，一行完成批量删除。</p>
+<hr>
+<h2 id="六、HashMap-vs-TreeMap-vs-ConcurrentSkipListMap"><a href="#六、HashMap-vs-TreeMap-vs-ConcurrentSkipListMap" class="headerlink" title="六、HashMap vs TreeMap vs ConcurrentSkipListMap"></a>六、HashMap vs TreeMap vs ConcurrentSkipListMap</h2><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>HashMap</th>
+<th>TreeMap</th>
+<th>ConcurrentSkipListMap</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>底层</td>
+<td>数组 + 链表&#x2F;红黑树</td>
+<td>红黑树</td>
+<td>跳表</td>
+</tr>
+<tr>
+<td>get</td>
+<td><strong>O(1)</strong></td>
+<td>O(log n)</td>
+<td>O(log n)</td>
+</tr>
+<tr>
+<td>put</td>
+<td>O(1)</td>
+<td>O(log n)</td>
+<td>O(log n)</td>
+</tr>
+<tr>
+<td>遍历顺序</td>
+<td>无序</td>
+<td><strong>key 升序</strong></td>
+<td>key 升序</td>
+</tr>
+<tr>
+<td>范围查询</td>
+<td>❌ 只能全量过滤</td>
+<td>✅ subMap&#x2F;floor&#x2F;ceiling</td>
+<td>✅ 同 TreeMap</td>
+</tr>
+<tr>
+<td>null key</td>
+<td>允许 1 个</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>线程安全</td>
+<td>❌</td>
+<td>❌</td>
+<td>✅（CAS + 无锁读）</td>
+</tr>
+<tr>
+<td>内存</td>
+<td>数组 + 每节点开销</td>
+<td>每节点 6 字段（含 parent + color）</td>
+<td>每层索引节点</td>
+</tr>
+<tr>
+<td>适用</td>
+<td>通用 KV</td>
+<td><strong>排序 + 范围查询</strong></td>
+<td>并发下的排序 KV</td>
+</tr>
+</tbody></table>
+<h3 id="6-1-为什么并发版用跳表，不用红黑树"><a href="#6-1-为什么并发版用跳表，不用红黑树" class="headerlink" title="6.1 为什么并发版用跳表，不用红黑树"></a>6.1 为什么并发版用跳表，不用红黑树</h3><p>这是个很好的架构问题。红黑树在并发下有两个致命伤：</p>
+<ol>
+<li><strong>旋转是全局操作</strong>。插入&#x2F;删除可能引发从叶到根的连锁旋转，锁粒度无法缩小到单个节点——要么全局锁（性能差），要么复杂度爆炸。</li>
+<li><strong>读操作需要一致性</strong>。红黑树的遍历依赖 <code>left/right/parent</code> 指针的瞬时一致性，无锁读很容易读到”旋转到一半”的树。</li>
+</ol>
+<p>跳表没有这些问题：</p>
+<ul>
+<li><strong>插入&#x2F;删除只影响局部</strong>（一层层向下索引），可以用 CAS 做细粒度无锁更新；</li>
+<li><strong>读操作天然无锁</strong>——遍历链表即使读到并发修改，最坏是漏读或多读，不会崩；</li>
+<li>实现上不需要 parent 指针，内存也省。</li>
+</ul>
+<p>代价是常数项略高（期望 O(log n)，但每层都是链表遍历）。<strong>“允许弱一致性读 + 高并发写”的场景，跳表完胜红黑树。</strong></p>
+<p>这也是为什么 Redis 的 ZSet、LevelDB&#x2F;RocksDB 的 MemTable、Java 的 ConcurrentSkipListMap 全都用跳表——<strong>并发有序结构的事实标准就是跳表</strong>。</p>
+<hr>
+<h2 id="七、避坑清单"><a href="#七、避坑清单" class="headerlink" title="七、避坑清单"></a>七、避坑清单</h2><p><strong>排序语义</strong></p>
+<ol>
+<li>❌ <code>compareTo</code> 返回 0 ≠ <code>equals</code> 返回 true → TreeMap 里同分数据会”消失”</li>
+<li>✅ key 用不可变对象（record &#x2F; final 字段），compareTo 与 equals 保持一致</li>
+<li>❌ 不要用时间戳、分数这类”天然可能重复”的值单独做 key</li>
+<li>✅ 需要复合排序时用 record 实现复合 compareTo，或者 value 挂集合</li>
+</ol>
+<p><strong>key 可变性</strong><br>5. ❌ put 之后修改 key 参与比较的字段 → 排序失效，get 找不到（树的落点已错）<br>6. ✅ key 用 <code>record</code>、<code>String</code>、包装类型等不可变对象<br>7. ✅ 必须修改时：先 <code>remove</code> 旧 key，改完再 <code>put</code> 回去</p>
+<p><strong>API 使用</strong><br>8. ✅ 邻近查询记牢：floor&#x2F;ceiling 闭区间，lower&#x2F;higher 开区间<br>9. ✅ <code>subMap</code>&#x2F;<code>headMap</code>&#x2F;<code>tailMap</code> 返回视图，改视图 &#x3D; 改原 map；要副本就包一层构造器<br>10. ✅ 视图 <code>clear()</code> 会删除原 map 对应区间——这也是批量清理的惯用法<br>11. ✅ <code>remove(key)</code> 返回被删的 value（可能为 null），不是 boolean</p>
+<p><strong>选型</strong><br>12. ✅ 只需要”取最小&#x2F;最大”→ 堆（<code>PriorityQueue</code>），不是 TreeMap<br>13. ✅ 定时任务 → <code>ScheduledThreadPoolExecutor</code>，不要自己用 TreeMap 做<br>14. ✅ 排行榜&#x2F;实时分数 → Redis ZSet（跳表）<br>15. ✅ 并发环境需要排序 → <code>ConcurrentSkipListMap</code>，不是给 TreeMap 加锁</p>
+<hr>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>回到开头那个排行榜事故——两个司机同分，后写的把先写的覆盖了。根因是我把 TreeMap 当成”会排序的 HashMap”，忽略了它的排序语义：<strong>key 是否相等由 <code>compareTo</code> 决定，与 <code>equals</code> 无关</strong>。</p>
+<p>这篇文章的核心结论：</p>
+<ol>
+<li><strong>红黑树的五条规则换来一个可证明的保证：最长路径 ≤ 2 × 最短路径</strong>，所以高度 ≤ 2log n，增删查稳定 O(log n)。</li>
+<li><strong>新节点默认染红</strong>，因为插红只可能违反规则 4（修复代价小），插黑必然违反规则 5（黑高，修复代价大）。</li>
+<li><strong>插入修复最多旋转 2 次，删除修复最多 3 次</strong>——这个上界是 JDK 选红黑树而不是 AVL 的根本原因（AVL 删除可能 O(log n) 次旋转）。</li>
+<li><strong>TreeMap 的杀手锏是 NavigableMap</strong>：floor&#x2F;ceiling&#x2F;lower&#x2F;higher 四个邻近查询 + subMap 区间视图，是 HashMap 完全做不到的能力。排行榜、状态时间线回查这类场景，它是 JDK 里的唯一选择。</li>
+<li><strong><code>subMap</code> 等返回的是视图</strong>，改视图就是改原 map；想要副本要包一层构造器。视图的 <code>clear()</code> 会删除原 map 区间数据——这既是坑也是惯用法。</li>
+<li><strong>key 相等由比较器决定，且 key 必须不可变</strong>——可变 key put 之后再改，树就”找不到”它了。</li>
+<li><strong>并发有序选跳表不选红黑树</strong>：旋转是全局操作锁不住，跳表可以用 CAS 做局部无锁更新。这也是 Redis ZSet、RocksDB MemTable 的共同选择。</li>
+</ol>
+<p>一句话概括：<strong>TreeMap 不是 HashMap 的替代品，而是”范围查询”这个专用问题的专用解。用对场景（排序、邻近查询、时间线）它是神器，用错场景（通用 KV、排行榜、定时任务）就是给自己埋雷。</strong></p>
+<hr>
+<h2 id="相关阅读"><a href="#相关阅读" class="headerlink" title="相关阅读"></a>相关阅读</h2><ul>
+<li><a href="/2022/01/26/308f25db0e24/">HashMap底层原理——面试必问，开发必懂</a></li>
+<li><a href="/2022/02/01/a6e01e402827/">LinkedList底层原理——双向链表的真实面貌</a></li>
+<li><a href="/2022/01/29/d3ae9717d40d/">ArrayList底层原理——动态数组的核心秘密</a></li>
+</ul>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2022/02/06/75a486a7a6c2/">HashSet与LinkedHashSet——去重与顺序的抉择</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2022/02/14/9ffab0e6878c/">泛型入门——类型安全从告别Object开始</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E9%9B%86%E5%90%88/" class="tag" aria-label="标签: #集合">#集合</a>
+            
+                <a href="/tags/TreeMap/" class="tag" aria-label="标签: #TreeMap">#TreeMap</a>
+            
+                <a href="/tags/%E7%BA%A2%E9%BB%91%E6%A0%91/" class="tag" aria-label="标签: #红黑树">#红黑树</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2022/" aria-label="分类: 2022">
+                        2022
+                        <span>(75)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2022/Java%E5%9F%BA%E7%A1%80/" aria-label="分类: Java基础">
+                        Java基础
+                        <span>(32)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

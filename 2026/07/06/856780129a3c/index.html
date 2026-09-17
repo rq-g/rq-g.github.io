@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MQ消息丢失全场景复盘——生产者、Broker、消费者三层排查与Java实战 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2026/07/06/856780129a3c/">
+<meta name="description" content="前言先讲两个真实事故。事故一（智慧矿山无人驾驶调度）：调度中心给12台矿卡下发了”装载区变更”任务，调度大屏上12台全部显示”下发成功”。但现场有3台矿卡一直按旧路线空跑到排土场，直到班组长在电台里喊才发现。事后复盘——消息压根没进Broker。生产者用的是异步发送，回调里只写了一句log.info，异常被吞">
+
+<!-- Open Graph -->
+<meta property="og:title" content="MQ消息丢失全场景复盘——生产者、Broker、消费者三层排查与Java实战">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2026/07/06/856780129a3c/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言先讲两个真实事故。事故一（智慧矿山无人驾驶调度）：调度中心给12台矿卡下发了”装载区变更”任务，调度大屏上12台全部显示”下发成功”。但现场有3台矿卡一直按旧路线空跑到排土场，直到班组长在电台里喊才发现。事后复盘——消息压根没进Broker。生产者用的是异步发送，回调里只写了一句log.info，异常被吞">
+
+<meta property="article:published_time" content="2026-07-06T11:08:01.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="MQ消息丢失全场景复盘——生产者、Broker、消费者三层排查与Java实战">
+<meta name="twitter:description" content="前言先讲两个真实事故。事故一（智慧矿山无人驾驶调度）：调度中心给12台矿卡下发了”装载区变更”任务，调度大屏上12台全部显示”下发成功”。但现场有3台矿卡一直按旧路线空跑到排土场，直到班组长在电台里喊才发现。事后复盘——消息压根没进Broker。生产者用的是异步发送，回调里只写了一句log.info，异常被吞">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"MQ消息丢失全场景复盘——生产者、Broker、消费者三层排查与Java实战","description":"前言先讲两个真实事故。事故一（智慧矿山无人驾驶调度）：调度中心给12台矿卡下发了”装载区变更”任务，调度大屏上12台全部显示”下发成功”。但现场有3台矿卡一直按旧路线空跑到排土场，直到班组长在电台里喊才发现。事后复盘——消息压根没进Broker。生产者用的是异步发送，回调里只写了一句log.info，异常被吞","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2026-07-06T11:08:01.000Z","dateModified":"2026-07-06T11:08:01.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2026/07/06/856780129a3c/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2026-07-06T11:08:01.000Z">
+  <article class="post">
+    <h1 class="post-title">MQ消息丢失全场景复盘——生产者、Broker、消费者三层排查与Java实战</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2026-07-06T11:08:01.000Z">2026-07-06</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/">2026</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/">消息队列</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/%E9%AB%98%E5%B9%B6%E5%8F%91/">高并发</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>先讲两个真实事故。</p>
+<p><strong>事故一（智慧矿山无人驾驶调度）</strong>：调度中心给 12 台矿卡下发了”装载区变更”任务，调度大屏上 12 台全部显示”下发成功”。但现场有 3 台矿卡一直按旧路线空跑到排土场，直到班组长在电台里喊才发现。事后复盘——消息压根没进 Broker。生产者用的是异步发送，回调里只写了一句 <code>log.info</code>，异常被吞了，<code>send()</code> 本身永不抛错。</p>
+<p><strong>事故二（支付回调）</strong>：支付网关回调订单服务，订单状态改成”已支付”，然后发消息通知积分服务加积分。线上跑了一个月，月底财务对账发现 4000 多笔订单积分没到账。根因是发送 MQ 时 Broker 正在做主从切换，几十毫秒的抖动导致发送失败，代码里 <code>send()</code> 之后没校验 <code>SendResult</code>，异常被 catch 住打印了一行日志就结束了。</p>
+<p>很多人以为”用了 MQ，消息就一定能到”。<strong>实际上 MQ 只保证它自己那一段，从业务代码到 Broker、从 Broker 到业务代码这两段，全靠你自己兜。</strong> 消息从产生到消费完，中间至少经过 7 个环节，任何一个环节掉链子，消息就静悄悄地消失了。</p>
+<p>这篇文章把消息丢失拆成 <strong>生产者、Broker、消费者</strong> 三层，逐层讲清楚：为什么会丢、怎么复现、Java 代码怎么写、出事了怎么查。</p>
+<hr>
+<h2 id="一、先建立全局视角：一条消息的-7-次渡劫"><a href="#一、先建立全局视角：一条消息的-7-次渡劫" class="headerlink" title="一、先建立全局视角：一条消息的 7 次渡劫"></a>一、先建立全局视角：一条消息的 7 次渡劫</h2><p>排查消息丢失，最忌讳的就是”凭感觉改配置”。先把链路画出来，你才知道该去哪个环节找证据。</p>
+<pre class="mermaid">flowchart LR
+    A["① 业务线程调用 send()"] --> B["② Producer 客户端缓冲/序列化"]
+    B --> C["③ 网络传输到 Broker"]
+    C --> D["④ Broker 写入 PageCache"]
+    D --> E["⑤ 刷盘 / 副本同步"]
+    E --> F["⑥ Consumer 拉取到内存"]
+    F --> G["⑦ 业务处理完成"]
+    G --> H["⑧ 提交 ACK / Offset"]</pre>
+
+<p>对应每个环节的风险点和”丢失时谁背锅”：</p>
+<table>
+<thead>
+<tr>
+<th>环节</th>
+<th>丢失原因</th>
+<th>责任方</th>
+<th>典型症状</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>① 业务调用 send</td>
+<td>没调用 &#x2F; 异常被吞</td>
+<td>业务代码</td>
+<td>业务库有数据，MQ 完全没这条消息</td>
+</tr>
+<tr>
+<td>② 客户端缓冲</td>
+<td>进程被 kill，缓冲区未 flush</td>
+<td>业务代码</td>
+<td>重启瞬间丢一批</td>
+</tr>
+<tr>
+<td>③ 网络传输</td>
+<td>网络抖动、Broker 主从切换</td>
+<td>中间件</td>
+<td>发送超时 &#x2F; Broker 侧无记录</td>
+</tr>
+<tr>
+<td>④ PageCache</td>
+<td>机器断电、OS crash</td>
+<td>中间件</td>
+<td>Broker 返回成功，重启后消息没了</td>
+</tr>
+<tr>
+<td>⑤ 副本同步</td>
+<td>单副本宕机、异步复制未完成</td>
+<td>运维&#x2F;架构</td>
+<td>磁盘损坏后数据不可恢复</td>
+</tr>
+<tr>
+<td>⑥ 消费者内存</td>
+<td>拉到了但进程崩了</td>
+<td>业务代码</td>
+<td>Offset 已提交但业务逻辑没执行</td>
+</tr>
+<tr>
+<td>⑦ 业务处理</td>
+<td>抛异常但已 ACK</td>
+<td>业务代码</td>
+<td>日志有异常，消息不会重投</td>
+</tr>
+<tr>
+<td>⑧ ACK</td>
+<td>自动提交早于业务完成</td>
+<td>业务代码</td>
+<td>最难查，现象&#x3D;随机丢消息</td>
+</tr>
+</tbody></table>
+<p><strong>一句话排查口诀</strong>：先看生产者有没有发出来，再看 Broker 有没有存下来，最后看消费者有没有真正处理完。顺序不能反，90% 的”MQ 丢消息”最后是第 ⑦⑧ 步的锅。</p>
+<hr>
+<h2 id="二、生产者端：最常见的-4-种丢法"><a href="#二、生产者端：最常见的-4-种丢法" class="headerlink" title="二、生产者端：最常见的 4 种丢法"></a>二、生产者端：最常见的 4 种丢法</h2><h3 id="2-1-同步发送不校验返回结果"><a href="#2-1-同步发送不校验返回结果" class="headerlink" title="2.1 同步发送不校验返回结果"></a>2.1 同步发送不校验返回结果</h3><p>这是排名第一的坑。RocketMQ 的 <code>send()</code> 只有在<strong>网络异常、超时、Broker 明确拒绝</strong>时才抛异常；返回 <code>SendResult</code> 但状态是 <code>FLUSH_DISK_TIMEOUT</code>、<code>SLAVE_NOT_AVAILABLE</code> 时，方法本身是正常返回的。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 反面教材：以为不抛异常就成功了</span></span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    producer.send(msg);</span><br><span class="line">    log.info(<span class="string">&quot;任务下发成功, taskId=&#123;&#125;&quot;</span>, taskId);</span><br><span class="line">&#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">    log.error(<span class="string">&quot;发送失败&quot;</span>, e);   <span class="comment">// 只有极端情况才走到这里</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 正确姿势：校验 SendStatus + 落本地消息表兜底</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">SendResult</span> <span class="title function_">sendReliable</span><span class="params">(String topic, String tag, String bizKey, String body)</span> &#123;</span><br><span class="line">    <span class="type">Message</span> <span class="variable">msg</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Message</span>(topic, tag, bizKey, body.getBytes(StandardCharsets.UTF_8));</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="type">SendResult</span> <span class="variable">result</span> <span class="operator">=</span> producer.send(msg, <span class="number">3000</span>);</span><br><span class="line">        <span class="keyword">switch</span> (result.getSendStatus()) &#123;</span><br><span class="line">            <span class="keyword">case</span> SEND_OK:</span><br><span class="line">                <span class="keyword">return</span> result;</span><br><span class="line">            <span class="keyword">case</span> FLUSH_DISK_TIMEOUT:</span><br><span class="line">            <span class="keyword">case</span> FLUSH_SLAVE_TIMEOUT:</span><br><span class="line">            <span class="keyword">case</span> SLAVE_NOT_AVAILABLE:</span><br><span class="line">                <span class="comment">// 消息已进 Broker 内存，但刷盘/主从同步未完成 —— 有丢的风险，必须兜底</span></span><br><span class="line">                log.warn(<span class="string">&quot;消息状态异常, bizKey=&#123;&#125;, status=&#123;&#125;&quot;</span>, bizKey, result.getSendStatus());</span><br><span class="line">                localMessageService.savePending(bizKey, topic, tag, body);</span><br><span class="line">                <span class="keyword">return</span> result;</span><br><span class="line">            <span class="keyword">default</span>:</span><br><span class="line">                localMessageService.savePending(bizKey, topic, tag, body);</span><br><span class="line">                <span class="keyword">return</span> result;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">        log.error(<span class="string">&quot;消息发送异常, bizKey=&#123;&#125;&quot;</span>, bizKey, e);</span><br><span class="line">        <span class="comment">// 发送失败落库，由定时任务补偿，绝不静默丢弃</span></span><br><span class="line">        localMessageService.saveFailed(bizKey, topic, tag, body, e.getMessage());</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BizException</span>(<span class="string">&quot;消息发送失败，已记录待补偿&quot;</span>, e);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p><strong>注意 <code>FLUSH_DISK_TIMEOUT</code> 这类”半成功”状态</strong>：很多同学看到返回了 <code>SendResult</code> 就认为万事大吉。异步刷盘下，Broker 写 PageCache 成功就会返回 <code>SEND_OK</code>，此时机器掉电，消息照样丢。核心业务要么开同步刷盘，要么靠本地消息表兜底。</p>
+</blockquote>
+<h3 id="2-2-异步发送回调吞异常"><a href="#2-2-异步发送回调吞异常" class="headerlink" title="2.2 异步发送回调吞异常"></a>2.2 异步发送回调吞异常</h3><p>异步发送性能好，但回调是在<strong>独立的 IO 线程</strong>里执行的，异常不会抛到业务线程，最容易被忽略。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 反面教材：回调里只打日志，失败消息石沉大海</span></span><br><span class="line">producer.send(msg, <span class="keyword">new</span> <span class="title class_">SendCallback</span>() &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">onSuccess</span><span class="params">(SendResult sendResult)</span> &#123;</span><br><span class="line">        log.info(<span class="string">&quot;发送成功&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">onException</span><span class="params">(Throwable e)</span> &#123;</span><br><span class="line">        log.error(<span class="string">&quot;发送失败&quot;</span>, e);   <span class="comment">// 日志打完，消息没了</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 正确姿势：回调内做闭环 + 有限次重试 + 最终落库</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">sendAsync</span><span class="params">(String topic, String tag, String bizKey, String body)</span> &#123;</span><br><span class="line">    <span class="type">Message</span> <span class="variable">msg</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Message</span>(topic, tag, bizKey, body.getBytes(StandardCharsets.UTF_8));</span><br><span class="line">    producer.send(msg, <span class="keyword">new</span> <span class="title class_">SendCallback</span>() &#123;</span><br><span class="line">        <span class="meta">@Override</span></span><br><span class="line">        <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">onSuccess</span><span class="params">(SendResult sendResult)</span> &#123;</span><br><span class="line">            <span class="keyword">if</span> (!SendStatus.SEND_OK.equals(sendResult.getSendStatus())) &#123;</span><br><span class="line">                <span class="comment">// 半成功状态同样要兜底</span></span><br><span class="line">                localMessageService.savePending(bizKey, topic, tag, body);</span><br><span class="line">                <span class="keyword">return</span>;</span><br><span class="line">            &#125;</span><br><span class="line">            localMessageService.markSent(bizKey);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="meta">@Override</span></span><br><span class="line">        <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">onException</span><span class="params">(Throwable e)</span> &#123;</span><br><span class="line">            log.error(<span class="string">&quot;异步发送失败, bizKey=&#123;&#125;&quot;</span>, bizKey, e);</span><br><span class="line">            <span class="comment">// 注意：回调线程里不要做耗时操作，直接落库交给补偿任务</span></span><br><span class="line">            localMessageService.markFailed(bizKey, e.getMessage());</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-3-无脑使用-sendOneway"><a href="#2-3-无脑使用-sendOneway" class="headerlink" title="2.3 无脑使用 sendOneway"></a>2.3 无脑使用 sendOneway</h3><p><code>sendOneway</code> 只负责把消息写进 Socket 缓冲区，<strong>不等任何响应，完全没有可靠性保证</strong>。它只适合日志采集、埋点上报这类”丢一条无所谓”的场景。</p>
+<table>
+<thead>
+<tr>
+<th>发送方式</th>
+<th>吞吐量</th>
+<th>可靠性</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>sendOneway</code></td>
+<td>最高</td>
+<td>无保证</td>
+<td>日志、埋点、监控数据</td>
+</tr>
+<tr>
+<td>异步 <code>send + callback</code></td>
+<td>高</td>
+<td>回调可感知</td>
+<td>设备高频上报、通知类</td>
+</tr>
+<tr>
+<td>同步 <code>send</code></td>
+<td>中</td>
+<td>可感知返回状态</td>
+<td>订单、支付、任务下发</td>
+</tr>
+<tr>
+<td>事务消息</td>
+<td>低</td>
+<td>最高（与本地事务原子）</td>
+<td>强一致业务</td>
+</tr>
+</tbody></table>
+<h3 id="2-4-事务消息用错：本地事务提交了，半消息没确认"><a href="#2-4-事务消息用错：本地事务提交了，半消息没确认" class="headerlink" title="2.4 事务消息用错：本地事务提交了，半消息没确认"></a>2.4 事务消息用错：本地事务提交了，半消息没确认</h3><p>RocketMQ 事务消息的正确流程是：<strong>发送 Half 消息 → 执行本地事务 → 根据本地事务结果 Commit&#x2F;Rollback → 事务回查兜底</strong>。</p>
+<p>最容易写错的地方：<code>executeLocalTransaction</code> 里返回 <code>UNKNOW</code> 又没有有效的回查逻辑，或者本地事务抛了异常导致连 <code>execute</code> 都没进。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ RocketMQ 事务消息正确写法</span></span><br><span class="line"><span class="type">TransactionListener</span> <span class="variable">txListener</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TransactionListener</span>() &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 半消息发送成功后执行本地事务</span></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">LocalTransactionState</span> <span class="title function_">executeLocalTransaction</span><span class="params">(Message msg, Object arg)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">taskId</span> <span class="operator">=</span> msg.getKeys();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="comment">// 本地事务：改任务状态 + 写任务流水</span></span><br><span class="line">            dispatchTaskService.confirmTask(taskId, arg);</span><br><span class="line">            <span class="keyword">return</span> LocalTransactionState.COMMIT_MESSAGE;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;本地事务执行失败, taskId=&#123;&#125;&quot;</span>, taskId, e);</span><br><span class="line">            <span class="keyword">return</span> LocalTransactionState.ROLLBACK_MESSAGE;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 关键：网络抖动/Producer 重启导致没收到 COMMIT/ROLLBACK 时，Broker 会回查</span></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">LocalTransactionState</span> <span class="title function_">checkLocalTransaction</span><span class="params">(MessageExt msg)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">taskId</span> <span class="operator">=</span> msg.getKeys();</span><br><span class="line">        <span class="type">DispatchTask</span> <span class="variable">task</span> <span class="operator">=</span> dispatchTaskService.getById(taskId);</span><br><span class="line">        <span class="keyword">if</span> (task == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="comment">// 本地事务都没落地，说明本地事务失败 —— 回滚</span></span><br><span class="line">            <span class="keyword">return</span> LocalTransactionState.ROLLBACK_MESSAGE;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> TaskStatusEnum.EFFECTIVE.equals(task.getStatus())</span><br><span class="line">                ? LocalTransactionState.COMMIT_MESSAGE</span><br><span class="line">                : LocalTransactionState.ROLLBACK_MESSAGE;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p><strong>踩坑提醒</strong>：事务回查默认回查 15 次（<code>transactionCheckMax</code>），间隔可配置。如果你的 <code>checkLocalTransaction</code> 里查的是从库，主从延迟会导致”本地事务已提交但回查查不到”，从而误回滚。回查必须查主库或强一致存储。</p>
+<h3 id="2-5-Kafka-RabbitMQ-生产端的对应配置"><a href="#2-5-Kafka-RabbitMQ-生产端的对应配置" class="headerlink" title="2.5 Kafka &#x2F; RabbitMQ 生产端的对应配置"></a>2.5 Kafka &#x2F; RabbitMQ 生产端的对应配置</h3><p><strong>Kafka</strong> —— 关键是 <code>acks</code> + 幂等 + 重试：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Bean</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">ProducerFactory</span>&lt;String, String&gt; <span class="title function_">producerFactory</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">Map</span>&lt;String, Object&gt; <span class="variable">cfg</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line">    cfg.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);</span><br><span class="line">    <span class="comment">// acks=all：ISR 中所有副本都写入才算成功（不是 all 副本，是 ISR 集合）</span></span><br><span class="line">    cfg.put(ProducerConfig.ACKS_CONFIG, <span class="string">&quot;all&quot;</span>);</span><br><span class="line">    <span class="comment">// 开启幂等，避免重试导致消息重复（配合 max.in.flight=5 可保证分区内有序）</span></span><br><span class="line">    cfg.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, <span class="literal">true</span>);</span><br><span class="line">    cfg.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);</span><br><span class="line">    cfg.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, <span class="number">5</span>);</span><br><span class="line">    cfg.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, <span class="number">120_000</span>);</span><br><span class="line">    cfg.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, <span class="string">&quot;lz4&quot;</span>);</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">DefaultKafkaProducerFactory</span>&lt;&gt;(cfg);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p><code>acks=all</code> 有个经典误区：<strong>它只在 <code>min.insync.replicas &gt;= 2</code> 时才有意义</strong>。如果 <code>min.insync.replicas=1</code>，ISR 里只剩 Leader 一个，<code>acks=all</code> 等价于 <code>acks=1</code>，Leader 宕机照样丢。生产环境必须 <code>replication.factor=3</code> + <code>min.insync.replicas=2</code> + <code>acks=all</code> 三件套一起配。</p>
+</blockquote>
+<p><strong>RabbitMQ</strong> —— 关键是 publisher confirm + mandatory + 交换机&#x2F;队列持久化：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Bean</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">RabbitTemplate</span> <span class="title function_">rabbitTemplate</span><span class="params">(ConnectionFactory connectionFactory)</span> &#123;</span><br><span class="line">    <span class="type">RabbitTemplate</span> <span class="variable">template</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">RabbitTemplate</span>(connectionFactory);</span><br><span class="line">    template.setMandatory(<span class="literal">true</span>);   <span class="comment">// 路由不可达时触发 ReturnsCallback，而不是静默丢弃</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// confirm：消息是否到达交换机</span></span><br><span class="line">    template.setConfirmCallback((correlationData, ack, cause) -&gt; &#123;</span><br><span class="line">        <span class="keyword">if</span> (correlationData == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">return</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (!ack) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;消息未到达交换机, id=&#123;&#125;, cause=&#123;&#125;&quot;</span>, correlationData.getId(), cause);</span><br><span class="line">            localMessageService.markFailed(correlationData.getId(), cause);</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            localMessageService.markSent(correlationData.getId());</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// returns：到达交换机但没有队列接收（routingKey 写错 / 队列被删）</span></span><br><span class="line">    template.setReturnsCallback(returned -&gt; &#123;</span><br><span class="line">        log.error(<span class="string">&quot;消息路由失败, exchange=&#123;&#125;, routingKey=&#123;&#125;, code=&#123;&#125;, text=&#123;&#125;&quot;</span>,</span><br><span class="line">                returned.getExchange(), returned.getRoutingKey(),</span><br><span class="line">                returned.getReplyCode(), returned.getReplyText());</span><br><span class="line">        <span class="type">String</span> <span class="variable">bizKey</span> <span class="operator">=</span> returned.getMessage().getMessageProperties().getMessageId();</span><br><span class="line">        localMessageService.markFailed(bizKey, <span class="string">&quot;路由不可达&quot;</span>);</span><br><span class="line">    &#125;);</span><br><span class="line">    <span class="keyword">return</span> template;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<table>
+<thead>
+<tr>
+<th>中间件</th>
+<th>生产者可靠性三要素</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>RocketMQ</strong></td>
+<td>校验 <code>SendStatus</code> + 事务消息&#x2F;本地消息表 + 同步刷盘（核心业务）</td>
+</tr>
+<tr>
+<td><strong>Kafka</strong></td>
+<td><code>acks=all</code> + <code>enable.idempotence=true</code> + <code>min.insync.replicas≥2</code></td>
+</tr>
+<tr>
+<td><strong>RabbitMQ</strong></td>
+<td>publisher confirm + mandatory&#x2F;returns + 交换机&#x2F;队列&#x2F;消息三重持久化</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="三、Broker-端：写入了内存不等于落了地"><a href="#三、Broker-端：写入了内存不等于落了地" class="headerlink" title="三、Broker 端：写入了内存不等于落了地"></a>三、Broker 端：写入了内存不等于落了地</h2><h3 id="3-1-刷盘策略的取舍"><a href="#3-1-刷盘策略的取舍" class="headerlink" title="3.1 刷盘策略的取舍"></a>3.1 刷盘策略的取舍</h3><table>
+<thead>
+<tr>
+<th>中间件</th>
+<th>配置项</th>
+<th>可靠</th>
+<th>性能</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>RocketMQ</td>
+<td><code>flushDiskType=SYNC_FLUSH</code></td>
+<td>高（写入即落盘）</td>
+<td>低，TPS 下降约 30%~50%</td>
+</tr>
+<tr>
+<td>RocketMQ</td>
+<td><code>flushDiskType=ASYNC_FLUSH</code></td>
+<td>掉电丢 PageCache 内数据</td>
+<td>高</td>
+</tr>
+<tr>
+<td>Kafka</td>
+<td>依赖 OS PageCache + 副本</td>
+<td>靠副本数保证，不建议 <code>log.flush.interval.messages=1</code></td>
+<td>高</td>
+</tr>
+<tr>
+<td>RabbitMQ</td>
+<td>Quorum Queue（Raft）</td>
+<td>高，多数派确认</td>
+<td>中</td>
+</tr>
+</tbody></table>
+<p><strong>实践建议</strong>：</p>
+<ul>
+<li>Kafka 的设计哲学就是”不靠刷盘靠副本”，所以 Kafka 生产环境不要去改刷盘参数，把 <code>replication.factor=3</code> + <code>min.insync.replicas=2</code> 配好即可；</li>
+<li>RocketMQ 核心业务（订单、任务下发）建议 <code>SYNC_FLUSH</code> + 同步复制（<code>brokerRole=SYNC_MASTER</code>），日志类 Topic 用 <code>ASYNC_FLUSH</code>；</li>
+<li>RabbitMQ 3.8+ 优先用 <strong>Quorum Queue</strong> 替代镜像队列，避免经典的”镜像队列网络分区后丢消息”问题。</li>
+</ul>
+<h3 id="3-2-单副本-定时炸弹"><a href="#3-2-单副本-定时炸弹" class="headerlink" title="3.2 单副本 &#x3D; 定时炸弹"></a>3.2 单副本 &#x3D; 定时炸弹</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">事故场景（真实）：</span><br><span class="line">某项目 RabbitMQ 单节点部署，磁盘阵列故障。</span><br><span class="line">队列里的 200 万条设备上报消息全部丢失，且因为没开持久化，重启后队列是空的。</span><br><span class="line">监控上只看到队列深度瞬间归零 —— 不是消费完了，是没了。</span><br></pre></td></tr></table></figure>
+
+<p><strong>硬性要求</strong>：生产环境任何业务 Topic，副本数 ≥ 2（推荐 3）。只有一个副本的 Topic 应该被 JMX&#x2F;巡检脚本自动告警出来。</p>
+<hr>
+<h2 id="四、消费者端：90-的”丢消息”都发生在这里"><a href="#四、消费者端：90-的”丢消息”都发生在这里" class="headerlink" title="四、消费者端：90% 的”丢消息”都发生在这里"></a>四、消费者端：90% 的”丢消息”都发生在这里</h2><h3 id="4-1-头号杀手：自动-ACK"><a href="#4-1-头号杀手：自动-ACK" class="headerlink" title="4.1 头号杀手：自动 ACK"></a>4.1 头号杀手：自动 ACK</h3><p>自动 ACK 的语义是”<strong>消息投递到消费者就算成功</strong>“，而不是”业务处理完才算成功”。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ RabbitMQ 自动 ACK（默认就是 AUTO）：消息一到就 ack，</span></span><br><span class="line"><span class="comment">//    业务抛异常、进程被 kill -9、机器重启，消息都不会再回来</span></span><br><span class="line"><span class="meta">@RabbitListener(queues = &quot;order.pay.queue&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">onMessage</span><span class="params">(String body)</span> &#123;</span><br><span class="line">    payCallbackService.handle(body);  <span class="comment">// 这里抛异常，消息已经被 ack 了</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 手动 ACK：业务成功才确认</span></span><br><span class="line"><span class="meta">@RabbitListener(queues = &quot;order.pay.queue&quot;, ackMode = &quot;MANUAL&quot;, concurrency = &quot;4-8&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">onMessage</span><span class="params">(Message message, Channel channel)</span> <span class="keyword">throws</span> IOException &#123;</span><br><span class="line">    <span class="type">long</span> <span class="variable">deliveryTag</span> <span class="operator">=</span> message.getMessageProperties().getDeliveryTag();</span><br><span class="line">    <span class="type">String</span> <span class="variable">bizKey</span> <span class="operator">=</span> message.getMessageProperties().getMessageId();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        payCallbackService.handle(<span class="keyword">new</span> <span class="title class_">String</span>(message.getBody(), StandardCharsets.UTF_8));</span><br><span class="line">        channel.basicAck(deliveryTag, <span class="literal">false</span>);       <span class="comment">// 单条确认</span></span><br><span class="line">    &#125; <span class="keyword">catch</span> (BizException e) &#123;</span><br><span class="line">        <span class="comment">// 业务异常：拒绝并重新入队，但要防止无限循环</span></span><br><span class="line">        log.error(<span class="string">&quot;业务处理失败, bizKey=&#123;&#125;&quot;</span>, bizKey, e);</span><br><span class="line">        channel.basicNack(deliveryTag, <span class="literal">false</span>, <span class="literal">true</span>);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">        <span class="comment">// 未知异常：进入死信，避免脏数据把队列堵死</span></span><br><span class="line">        log.error(<span class="string">&quot;未知异常，转入死信, bizKey=&#123;&#125;&quot;</span>, bizKey, e);</span><br><span class="line">        channel.basicNack(deliveryTag, <span class="literal">false</span>, <span class="literal">false</span>); <span class="comment">// requeue=false → 进死信队列</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p><code>basicNack(tag, false, true)</code> 的 <code>requeue=true</code> 会把消息放回<strong>队头</strong>，如果这条消息永远处理失败，它会<strong>无限循环</strong>霸占消费线程，把整个队列拖死。生产上要么限制重试次数（用 Redis 计数 + 超过阈值丢死信），要么直接 <code>requeue=false</code> 走死信。</p>
+</blockquote>
+<p><strong>RocketMQ</strong> —— 只有手动确认，但要防止”吞异常后返回成功”：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">consumer.registerMessageListener((MessageListenerConcurrently) (msgs, context) -&gt; &#123;</span><br><span class="line">    <span class="keyword">for</span> (MessageExt msg : msgs) &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">bizKey</span> <span class="operator">=</span> msg.getKeys();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            dispatchTaskService.handle(msg);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;消费失败, bizKey=&#123;&#125;, reconsumeTimes=&#123;&#125;&quot;</span>, bizKey, msg.getReconsumeTimes(), e);</span><br><span class="line">            <span class="comment">// 关键：直接返回 RECONSUME_LATER，RocketMQ 会延迟重投（默认 16 次后进入死信）</span></span><br><span class="line">            <span class="keyword">return</span> ConsumeConcurrentlyStatus.RECONSUME_LATER;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> ConsumeConcurrentlyStatus.CONSUME_SUCCESS;</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 最危险的反面教材：catch 住异常返回 SUCCESS，消息被&quot;成功消费&quot;了</span></span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    handle(msg);</span><br><span class="line">&#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">    log.error(<span class="string">&quot;处理失败&quot;</span>, e);</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">return</span> ConsumeConcurrentlyStatus.CONSUME_SUCCESS;   <span class="comment">// 消息永久丢失！</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>Kafka</strong> —— 关闭自动提交，业务做完才提交 offset：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 自动提交（默认 5s 一批）：可能业务还没处理完，offset 已经提交过去了</span></span><br><span class="line">props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, <span class="string">&quot;true&quot;</span>);</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 手动提交 + 失败转死信，保证&quot;处理完才提交&quot;</span></span><br><span class="line"><span class="meta">@KafkaListener(topics = &quot;vehicle-gps&quot;, groupId = &quot;dispatch-group&quot;, concurrency = &quot;6&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">consume</span><span class="params">(List&lt;ConsumerRecord&lt;String, String&gt;&gt; records, Acknowledgment ack)</span> &#123;</span><br><span class="line">    <span class="keyword">for</span> (ConsumerRecord&lt;String, String&gt; record : records) &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            gpsService.handle(record.value());</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;消费失败, topic=&#123;&#125;, partition=&#123;&#125;, offset=&#123;&#125;&quot;</span>,</span><br><span class="line">                    record.topic(), record.partition(), record.offset(), e);</span><br><span class="line">            <span class="comment">// 转死信 topic，保证主链路不被单条脏数据阻塞，也不丢消息</span></span><br><span class="line">            dlqProducer.send(<span class="string">&quot;vehicle-gps-DLQ&quot;</span>, record.key(), buildDlqBody(record, e));</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 全部处理完（含转死信的）才提交 —— 不丢消息，也不重复消费</span></span><br><span class="line">    ack.acknowledge();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p>这里有个细节：如果某条处理失败直接 <code>throw</code>，Spring Kafka 会触发 <code>SeekToCurrentErrorHandler</code>，整个批次的消息都会重投（包括已经成功的），必须靠幂等兜住。上面的”转死信 + 继续 + 最后提交”是更稳的模式。</p>
+</blockquote>
+<h3 id="4-2-被忽略的盲区：死信队列没人管"><a href="#4-2-被忽略的盲区：死信队列没人管" class="headerlink" title="4.2 被忽略的盲区：死信队列没人管"></a>4.2 被忽略的盲区：死信队列没人管</h3><p><strong>消息进入死信队列，如果没人处理、没有告警，效果等同于消息丢失</strong>，而且是”看起来一切正常”的丢失。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 死信队列必须：1. 单独消费者 2. 落库 3. 告警 4. 支持人工重投</span></span><br><span class="line"><span class="meta">@RocketMQMessageListener(topic = &quot;%DLQ%dispatch-consumer-group&quot;,</span></span><br><span class="line"><span class="meta">        consumerGroup = &quot;dlq-monitor-group&quot;, consumeThreadMax = 4)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DlqConsumer</span> <span class="keyword">implements</span> <span class="title class_">RocketMQListener</span>&lt;MessageExt&gt; &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">onMessage</span><span class="params">(MessageExt msg)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">bizKey</span> <span class="operator">=</span> msg.getKeys();</span><br><span class="line">        <span class="comment">// 1. 落库留痕，方便排查和补数</span></span><br><span class="line">        dlqRecordMapper.insert(DlqRecord.from(msg));</span><br><span class="line">        <span class="comment">// 2. 告警通知到值班群（做下抑制，避免刷屏）</span></span><br><span class="line">        alertService.sendThrottled(<span class="string">&quot;DLQ_ALERT&quot;</span>,</span><br><span class="line">                String.format(<span class="string">&quot;死信消息 topic=%s bizKey=%s 次数=%d&quot;</span>, msg.getTopic(), bizKey, msg.getReconsumeTimes()));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>死信处理的三条铁律：</p>
+<ol>
+<li><strong>死信必须有告警</strong>，堆积数量超过阈值立刻通知到人；</li>
+<li><strong>死信必须可追溯</strong>：原始 topic、body、失败原因、重试次数全部落库；</li>
+<li><strong>死信必须可重投</strong>：提供一个管理后台”一键重发”按钮，别让人去写 SQL 补数。</li>
+</ol>
+<hr>
+<h2 id="五、兜底方案：本地消息表（最朴素也最可靠）"><a href="#五、兜底方案：本地消息表（最朴素也最可靠）" class="headerlink" title="五、兜底方案：本地消息表（最朴素也最可靠）"></a>五、兜底方案：本地消息表（最朴素也最可靠）</h2><p>事务消息虽好，但依赖中间件支持、有回查开销。<strong>本地消息表是通用性最强、最好落地的方案</strong>——用数据库事务保证”业务数据”和”待发消息”原子写入，再由定时任务保证最终投递。</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">CREATE TABLE</span> `local_message` (</span><br><span class="line">  `id`              <span class="type">BIGINT</span> UNSIGNED <span class="keyword">NOT NULL</span> AUTO_INCREMENT,</span><br><span class="line">  `biz_key`         <span class="type">VARCHAR</span>(<span class="number">64</span>)  <span class="keyword">NOT NULL</span> COMMENT <span class="string">&#x27;业务唯一键，如订单号/任务ID&#x27;</span>,</span><br><span class="line">  `topic`           <span class="type">VARCHAR</span>(<span class="number">128</span>) <span class="keyword">NOT NULL</span>,</span><br><span class="line">  `tag`             <span class="type">VARCHAR</span>(<span class="number">64</span>)  <span class="keyword">DEFAULT</span> <span class="keyword">NULL</span>,</span><br><span class="line">  `body`            JSON         <span class="keyword">NOT NULL</span>,</span><br><span class="line">  `status`          TINYINT      <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="number">0</span> COMMENT <span class="string">&#x27;0待发送 1已发送 2发送失败 3已作废&#x27;</span>,</span><br><span class="line">  `retry_count`     <span class="type">INT</span>          <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="number">0</span>,</span><br><span class="line">  `next_retry_time` DATETIME     <span class="keyword">DEFAULT</span> <span class="keyword">NULL</span>,</span><br><span class="line">  `error_msg`       <span class="type">VARCHAR</span>(<span class="number">512</span>) <span class="keyword">DEFAULT</span> <span class="keyword">NULL</span>,</span><br><span class="line">  `create_time`     DATETIME     <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="built_in">CURRENT_TIMESTAMP</span>,</span><br><span class="line">  `update_time`     DATETIME     <span class="keyword">NOT NULL</span> <span class="keyword">DEFAULT</span> <span class="built_in">CURRENT_TIMESTAMP</span> <span class="keyword">ON</span> <span class="keyword">UPDATE</span> <span class="built_in">CURRENT_TIMESTAMP</span>,</span><br><span class="line">  <span class="keyword">PRIMARY KEY</span> (`id`),</span><br><span class="line">  <span class="keyword">UNIQUE</span> KEY `uk_biz_topic` (`biz_key`, `topic`),</span><br><span class="line">  KEY `idx_status_retry` (`status`, `next_retry_time`)</span><br><span class="line">) ENGINE<span class="operator">=</span>InnoDB <span class="keyword">DEFAULT</span> CHARSET<span class="operator">=</span>utf8mb4 COMMENT<span class="operator">=</span><span class="string">&#x27;本地消息表&#x27;</span>;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 1. 业务事务内同时写入业务数据和消息 —— 同库同事务，不存在&quot;业务成功消息没落库&quot;</span></span><br><span class="line"><span class="meta">@Transactional(rollbackFor = Exception.class)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">Long</span> <span class="title function_">createDispatchTask</span><span class="params">(DispatchTaskCreateCmd cmd)</span> &#123;</span><br><span class="line">    <span class="type">DispatchTask</span> <span class="variable">task</span> <span class="operator">=</span> DispatchTask.of(cmd);</span><br><span class="line">    dispatchTaskMapper.insert(task);</span><br><span class="line"></span><br><span class="line">    <span class="type">LocalMessage</span> <span class="variable">msg</span> <span class="operator">=</span> LocalMessage.pending(</span><br><span class="line">            task.getTaskId(), <span class="string">&quot;DISPATCH_TASK_TOPIC&quot;</span>, <span class="string">&quot;TASK_CREATE&quot;</span>,</span><br><span class="line">            JsonUtils.toJson(TaskMqDTO.from(task)));</span><br><span class="line">    localMessageMapper.insert(msg);</span><br><span class="line">    <span class="keyword">return</span> task.getId();</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 2. 定时任务扫描补偿（建议用 xxl-job 分片广播，多实例不重复）</span></span><br><span class="line"><span class="meta">@XxlJob(&quot;localMessageCompensateJob&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">compensate</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">List</span>&lt;LocalMessage&gt; <span class="variable">pending</span> <span class="operator">=</span> localMessageMapper.selectPending(<span class="number">200</span>, LocalDateTime.now());</span><br><span class="line">    <span class="keyword">for</span> (LocalMessage m : pending) &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">SendResult</span> <span class="variable">r</span> <span class="operator">=</span> producer.send(buildMessage(m), <span class="number">3000</span>);</span><br><span class="line">            <span class="keyword">if</span> (SendStatus.SEND_OK.equals(r.getSendStatus())) &#123;</span><br><span class="line">                localMessageMapper.markSent(m.getId());</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                localMessageMapper.markRetry(m.getId(), <span class="string">&quot;状态异常:&quot;</span> + r.getSendStatus());</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            <span class="comment">// 指数退避：1min → 5min → 30min → 2h ... 避免重试风暴</span></span><br><span class="line">            localMessageMapper.markRetry(m.getId(), e.getMessage());</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>重试一定要有退避</strong>。我见过最惨的一次：某服务因为 DB 连接池打满导致发送失败，定时任务每 5 秒全量扫描重试，结果把 MQ 和 DB 一起打挂了。退避间隔建议 <code>min(2^n * 60s, 2h)</code>，最大重试次数 8~10 次，超过就告警让人介入。</p>
+<hr>
+<h2 id="六、排查手册：消息丢了怎么快速定位"><a href="#六、排查手册：消息丢了怎么快速定位" class="headerlink" title="六、排查手册：消息丢了怎么快速定位"></a>六、排查手册：消息丢了怎么快速定位</h2><pre class="mermaid">flowchart TD
+    A["用户投诉：消息没生效"] --> B{"生产者日志有 send 记录？"}
+    B -- 无 --> C["业务代码没发 / 事务回滚了<br/>查业务库 & 本地消息表"]
+    B -- 有 --> D{"SendResult 是 SEND_OK？"}
+    D -- 否 --> E["生产者发送失败<br/>查网络/超时/Broker 状态"]
+    D -- 是 --> F{"Broker 按 bizKey 查询能查到？"}
+    F -- 查不到 --> G["Broker 侧丢失<br/>查刷盘策略/副本数/磁盘故障"]
+    F -- 能查到 --> H{"消费者日志有这条消息的入参？"}
+    H -- 无 --> I["消费位点/分组问题<br/>查 consumer group、tag 过滤、订阅关系"]
+    H -- 有 --> J{"消费日志里有异常？"}
+    J -- 无异常但没生效 --> K["检查是否 catch 后返回 SUCCESS<br/>检查幂等是否误判为已处理"]
+    J -- 有异常 --> L["查是否进死信队列<br/>查重试次数是否耗尽"]</pre>
+
+<p>常用排查命令：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>命令</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>RocketMQ 查消息</td>
+<td><code>mqadmin queryMsgByKey -n nsaddr:9876 -t TOPIC -k bizKey</code></td>
+</tr>
+<tr>
+<td>RocketMQ 查堆积</td>
+<td><code>mqadmin consumerProgress -n nsaddr:9876 -g consumerGroup</code></td>
+</tr>
+<tr>
+<td>RocketMQ 查死信</td>
+<td><code>mqadmin queryMsgByTopic -n nsaddr:9876 -t %DLQ%consumerGroup</code></td>
+</tr>
+<tr>
+<td>Kafka 查消费位点</td>
+<td><code>kafka-consumer-groups.sh --bootstrap-server x:9092 --describe --group g</code></td>
+</tr>
+<tr>
+<td>Kafka 查最早消息</td>
+<td><code>kafka-console-consumer.sh --topic t --from-beginning --max-messages 1</code></td>
+</tr>
+<tr>
+<td>RabbitMQ 查队列</td>
+<td><code>rabbitmqctl list_queues name messages messages_ready messages_unacknowledged</code></td>
+</tr>
+<tr>
+<td>RabbitMQ 查未确认</td>
+<td><code>rabbitmqctl list_consumers</code></td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>RabbitMQ 里 <code>messages_unacknowledged</code> 长期不降，几乎等价于”消费者卡住或者手动 ACK 漏了”，是排查消费者问题最直接的指标。</p>
+</blockquote>
+<hr>
+<h2 id="复盘方法论：为什么”三层排查”比”逐个试”快十倍"><a href="#复盘方法论：为什么”三层排查”比”逐个试”快十倍" class="headerlink" title="复盘方法论：为什么”三层排查”比”逐个试”快十倍"></a>复盘方法论：为什么”三层排查”比”逐个试”快十倍</h2><p>消息丢失排查最容易犯的错是从生产者开始逐层打日志重放，一小时过去可能还卡在第一层。三层框架的价值在于<strong>每层有独立的”丢失判定信号”</strong>，可以先定位层再定位点：<strong>生产者层</strong>，看发送结果确认状态（ACK&#x2F;重试日志）——发送方拿到 ACK 了，消息就肯定到了 Broker，排查直接跳到 Broker 层，这一步就能砍掉一半时间；<strong>Broker 层</strong>，看消息是否落盘（RocketMQ 查 ConsumeQueue 索引、Kafka 查 log segment 的 offset 区间），落盘了就是”在”，查清理策略（retention）和刷盘配置；<strong>消费者层</strong>，看 offset 提交记录与业务处理日志的时间差——offset 提交了但业务日志没有，几乎必然是<strong>消费者先提交后处理</strong>的反模式或处理异常被吞。再补一个实战利器：<strong>消息轨迹（message trace）</strong>，RocketMQ Admin 工具和自建的发送-存储-消费三张流水表，能把”哪一层丢的”从推理变成查询。我们团队最终固化了一条规矩：<strong>消息量大的核心链路必须建消息轨迹表</strong>，一个月一次的排查收益就超过它的存储成本。</p>
+<h2 id="七、防丢清单（建议贴到团队-Wiki）"><a href="#七、防丢清单（建议贴到团队-Wiki）" class="headerlink" title="七、防丢清单（建议贴到团队 Wiki）"></a>七、防丢清单（建议贴到团队 Wiki）</h2><table>
+<thead>
+<tr>
+<th>层</th>
+<th>检查项</th>
+<th>是否必须</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>生产者</td>
+<td>同步发送校验 <code>SendStatus</code>，不只看是否抛异常</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>生产者</td>
+<td>异步发送回调处理 <code>onException</code> + 半成功状态</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>生产者</td>
+<td>核心业务使用事务消息或本地消息表</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>生产者</td>
+<td>重试带指数退避 + 最大次数，禁止无限重试</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>生产者</td>
+<td>禁止核心业务使用 <code>sendOneway</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Broker</td>
+<td>副本数 ≥ 3（至少 2）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Broker</td>
+<td>核心 Topic 同步刷盘 + 同步复制</td>
+<td>推荐</td>
+</tr>
+<tr>
+<td>Broker</td>
+<td>Kafka <code>min.insync.replicas ≥ 2</code> 配合 <code>acks=all</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Broker</td>
+<td>磁盘使用率告警（&gt;75% 预警，&gt;85% 严重）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>消费者</td>
+<td>关闭自动 ACK &#x2F; 自动提交 offset</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>消费者</td>
+<td>业务成功后才确认，异常返回重投</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>消费者</td>
+<td>禁止 catch 异常后返回消费成功</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>消费者</td>
+<td>死信队列有消费者 + 落库 + 告警 + 可重投</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>全局</td>
+<td>消费逻辑幂等（重试必然带来重复）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>全局</td>
+<td>消息轨迹&#x2F;链路追踪打通（bizKey 贯穿全链路）</td>
+<td>推荐</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="“丢了”还是”慢了”：一个被严重低估的区分"><a href="#“丢了”还是”慢了”：一个被严重低估的区分" class="headerlink" title="“丢了”还是”慢了”：一个被严重低估的区分"></a>“丢了”还是”慢了”：一个被严重低估的区分</h2><p>复盘消息丢失时最危险的认知偏差是把”消费延迟”当成”消息丢失”。真实案例：业务方报障”订单消息丢了”，排查一小时后发现消费堆积了 40 万条，那条消息排在第 39 万位——<strong>消息没丢，是迟到 2 小时</strong>。区分两者的判据很明确：拿消息的 msgId 查 Broker 轨迹，存在且 offset 已被消费组提交过 → 走”慢了”的堆积排查；Broker 里没有且发送方有 ACK → 才是真的丢了。这个区分直接决定处置动作：丢了要启动补偿和防丢加固，慢了要扩容消费者或降级非核心消费。对业务方的话术也要变：”丢消息”会触发全链路恐慌，”消费积压、预计 X 分钟内追平”是可接受的服务波动——<strong>工程师对故障的命名方式，直接影响组织的响应方式</strong>。经验法则：收到”消息丢失”报障，第一动作永远是查堆积曲线，这个顺序能省掉大部分无效排查。</p>
+<h2 id="八、总结与思考"><a href="#八、总结与思考" class="headerlink" title="八、总结与思考"></a>八、总结与思考</h2><p>消息丢失这件事，<strong>从来不是”配一个参数”能解决的</strong>，它是生产者、Broker、消费者、业务存储、监控告警这一整条链路的工程问题。我的经验排序：</p>
+<ol>
+<li><strong>先把消费者自动 ACK 关掉</strong>——这是投入产出比最高的一步，一个改动能消掉一大半”幽灵丢消息”；</li>
+<li><strong>再给核心业务上本地消息表</strong>——把”消息”当成业务数据的一部分来管理，用数据库事务兜底；</li>
+<li><strong>最后补死信告警和幂等</strong>——保证出问题能发现、能补偿、重复消费不出错。</li>
+</ol>
+<p>最后留个思考题：<strong>你的项目里，MQ 消息丢失是通过什么手段发现的？</strong> 如果是靠用户投诉或者对账才发现，说明监控和可观测性还缺一块——真正可靠的系统，消息异常应该是告警先响，而不是业务先炸。</p>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/07/08/20317779d9c4/" title="MQ消息堆积排查与治理——从定位到根治的高并发实战">MQ消息堆积排查与治理——从定位到根治的高并发实战</a></li>
+<li><a href="/2026/07/10/aa78a5f9baf2/" title="高并发系统MQ架构设计——不丢不重不堆积的完整链路">高并发系统MQ架构设计——不丢不重不堆积的完整链路</a></li>
+</ul>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2026/06/30/cd1f15403fbc/">微服务项目JDK8升级到JDK21全流程——依赖治理、虚拟线程迁移与灰度回滚</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2026/07/08/20317779d9c4/">MQ消息堆积排查与治理——从定位到根治的高并发实战</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/" class="tag" aria-label="标签: #消息队列">#消息队列</a>
+            
+                <a href="/tags/%E6%99%BA%E6%85%A7%E7%9F%BF%E5%B1%B1/" class="tag" aria-label="标签: #智慧矿山">#智慧矿山</a>
+            
+                <a href="/tags/%E9%AB%98%E5%B9%B6%E5%8F%91/" class="tag" aria-label="标签: #高并发">#高并发</a>
+            
+                <a href="/tags/RocketMQ/" class="tag" aria-label="标签: #RocketMQ">#RocketMQ</a>
+            
+                <a href="/tags/RabbitMQ/" class="tag" aria-label="标签: #RabbitMQ">#RabbitMQ</a>
+            
+                <a href="/tags/Kafka/" class="tag" aria-label="标签: #Kafka">#Kafka</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/" aria-label="分类: 2026">
+                        2026
+                        <span>(52)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/" aria-label="分类: 消息队列">
+                        消息队列
+                        <span>(3)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/%E9%AB%98%E5%B9%B6%E5%8F%91/" aria-label="分类: 高并发">
+                        高并发
+                        <span>(2)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

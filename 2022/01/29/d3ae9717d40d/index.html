@@ -1,0 +1,1490 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>ArrayList底层原理——动态数组的核心秘密 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2022/01/29/d3ae9717d40d/">
+<meta name="description" content="前言在智慧矿山项目里做过一次设备数据导出：从数据库查出20万条设备状态记录，循环add到一个ArrayList里，然后批量落库。功能没问题，但上线后监控显示这段导出耗时3.2秒，其中GC频繁。用JProfiler一抓，发现ArrayList.grow()被调用了24次，最后一次要拷贝71140个引用，期间产生">
+
+<!-- Open Graph -->
+<meta property="og:title" content="ArrayList底层原理——动态数组的核心秘密">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2022/01/29/d3ae9717d40d/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言在智慧矿山项目里做过一次设备数据导出：从数据库查出20万条设备状态记录，循环add到一个ArrayList里，然后批量落库。功能没问题，但上线后监控显示这段导出耗时3.2秒，其中GC频繁。用JProfiler一抓，发现ArrayList.grow()被调用了24次，最后一次要拷贝71140个引用，期间产生">
+
+<meta property="article:published_time" content="2022-01-29T13:04:06.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ArrayList底层原理——动态数组的核心秘密">
+<meta name="twitter:description" content="前言在智慧矿山项目里做过一次设备数据导出：从数据库查出20万条设备状态记录，循环add到一个ArrayList里，然后批量落库。功能没问题，但上线后监控显示这段导出耗时3.2秒，其中GC频繁。用JProfiler一抓，发现ArrayList.grow()被调用了24次，最后一次要拷贝71140个引用，期间产生">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"ArrayList底层原理——动态数组的核心秘密","description":"前言在智慧矿山项目里做过一次设备数据导出：从数据库查出20万条设备状态记录，循环add到一个ArrayList里，然后批量落库。功能没问题，但上线后监控显示这段导出耗时3.2秒，其中GC频繁。用JProfiler一抓，发现ArrayList.grow()被调用了24次，最后一次要拷贝71140个引用，期间产生","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2022-01-29T13:04:06.000Z","dateModified":"2022-01-29T13:04:06.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2022/01/29/d3ae9717d40d/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2022-01-29T13:04:06.000Z">
+  <article class="post">
+    <h1 class="post-title">ArrayList底层原理——动态数组的核心秘密</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2022-01-29T13:04:06.000Z">2022-01-29</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2022/">2022</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2022/Java%E5%9F%BA%E7%A1%80/">Java基础</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>在智慧矿山项目里做过一次设备数据导出：从数据库查出 20 万条设备状态记录，循环 <code>add</code> 到一个 <code>ArrayList</code> 里，然后批量落库。功能没问题，但上线后监控显示这段导出耗时 3.2 秒，其中 GC 频繁。</p>
+<p>用 JProfiler 一抓，发现 <code>ArrayList.grow()</code> 被调用了 24 次，最后一次要拷贝 71140 个引用，期间产生了 24 个废弃的 <code>Object[]</code> 数组——最大的那个 106710 长度，约 420KB。这些”临时尸体”全部进了老年代。</p>
+<p>改成 <code>new ArrayList&lt;&gt;(200000)</code> 之后，扩容次数从 24 次降到 1 次，耗时降到 0.7 秒，GC 次数归零。</p>
+<p><strong>一行构造参数的差别，4.5 倍性能差。</strong></p>
+<p>这就是理解底层的价值。ArrayList 是 Java 里最常用的集合，但绝大多数人对它的认知停留在”数组实现的 List，会自动扩容”。这篇文章要把下面这些问题讲透：</p>
+<ol>
+<li>为什么源码里有两个长得一模一样的空数组常量？</li>
+<li>为什么扩容是 <strong>1.5 倍</strong>而不是 2 倍、3 倍？</li>
+<li><code>MAX_ARRAY_SIZE</code> 为什么要 <code>Integer.MAX_VALUE - 8</code>？减的 8 是什么？</li>
+<li>为什么 <code>foreach</code> 里 <code>remove</code> 会抛 <code>ConcurrentModificationException</code>，但<strong>删倒数第二个元素就不抛</strong>？</li>
+<li><code>elementData</code> 为什么要加 <code>transient</code>，还非要自己写 <code>writeObject</code>？</li>
+</ol>
+<hr>
+<h2 id="一、底层数据结构：一个数组-一个计数器"><a href="#一、底层数据结构：一个数组-一个计数器" class="headerlink" title="一、底层数据结构：一个数组 + 一个计数器"></a>一、底层数据结构：一个数组 + 一个计数器</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ArrayList</span>&lt;E&gt; <span class="keyword">extends</span> <span class="title class_">AbstractList</span>&lt;E&gt;</span><br><span class="line">        <span class="keyword">implements</span> <span class="title class_">List</span>&lt;E&gt;, RandomAccess, Cloneable, java.io.Serializable &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">int</span> <span class="variable">DEFAULT_CAPACITY</span> <span class="operator">=</span> <span class="number">10</span>;                  <span class="comment">// 默认初始容量</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Object</span>[] <span class="variable">EMPTY_ELEMENTDATA</span> <span class="operator">=</span> &#123;&#125;;            <span class="comment">// ① 显式指定容量为 0 时用</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Object</span>[] <span class="variable">DEFAULTCAPACITY_EMPTY_ELEMENTDATA</span> <span class="operator">=</span> &#123;&#125;;  <span class="comment">// ② 无参构造时用</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">transient</span> Object[] elementData;   <span class="comment">// 真正存元素的数组（非私有，便于内部类访问）</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> size;                 <span class="comment">// 实际元素个数，≠ elementData.length</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="1-1-内存布局"><a href="#1-1-内存布局" class="headerlink" title="1.1 内存布局"></a>1.1 内存布局</h3><p><code>size</code> 和 <code>elementData.length</code> 是两个完全不同的概念：</p>
+<pre class="mermaid">flowchart LR
+    subgraph E["elementData (capacity = 10)"]
+        direction TB
+        A1["[0] D1"] --- A2["[1] D2"] --- A3["[2] D3"] --- A4["[3] D4"] --- A5["[4] D5"]
+        A5 --- A6["[5] D6"] --- A7["[6] D7"] --- A8["[7] null"] --- A9["[8] null"] --- A10["[9] null"]
+    end
+    S["size = 7"]
+    E --- S</pre>
+
+<ul>
+<li><strong><code>size</code></strong>：逻辑长度，你 <code>add</code> 了几个就是几个，<code>size()</code> 返回它。</li>
+<li><strong><code>capacity</code></strong>：物理长度，即 <code>elementData.length</code>，是 JVM 真实分配的空间。</li>
+<li><code>capacity - size</code> 就是<strong>被浪费的空间</strong>。<code>trimToSize()</code> 可以把 <code>capacity</code> 压到 <code>size</code>。</li>
+</ul>
+<h3 id="1-2-为什么要有两个”一模一样”的空数组？"><a href="#1-2-为什么要有两个”一模一样”的空数组？" class="headerlink" title="1.2 为什么要有两个”一模一样”的空数组？"></a>1.2 为什么要有两个”一模一样”的空数组？</h3><p>这是 ArrayList 源码里最容易被忽略、但设计得很精巧的一个细节。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Object</span>[] <span class="variable">EMPTY_ELEMENTDATA</span> <span class="operator">=</span> &#123;&#125;;</span><br><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Object</span>[] <span class="variable">DEFAULTCAPACITY_EMPTY_ELEMENTDATA</span> <span class="operator">=</span> &#123;&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>两个都是空数组，<strong>内容完全相同</strong>。区别只在于：它们被用来<strong>区分”这个 ArrayList 是怎么创建出来的”</strong>，从而决定首次扩容扩到多大。</p>
+<table>
+<thead>
+<tr>
+<th>创建方式</th>
+<th>使用的空数组</th>
+<th>首次 add 后容量</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>new ArrayList&lt;&gt;()</code></td>
+<td><code>DEFAULTCAPACITY_EMPTY_ELEMENTDATA</code></td>
+<td><strong>10</strong>（用 <code>DEFAULT_CAPACITY</code>）</td>
+</tr>
+<tr>
+<td><code>new ArrayList&lt;&gt;(0)</code></td>
+<td><code>EMPTY_ELEMENTDATA</code></td>
+<td><strong>1</strong>（按 1.5 倍规则：0 → 1）</td>
+</tr>
+</tbody></table>
+<p>源码里这个分支：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="type">int</span> <span class="title function_">calculateCapacity</span><span class="params">(Object[] elementData, <span class="type">int</span> minCapacity)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (elementData == DEFAULTCAPACITY_EMPTY_ELEMENTDATA) &#123;</span><br><span class="line">        <span class="keyword">return</span> Math.max(DEFAULT_CAPACITY, minCapacity);   <span class="comment">// 无参构造 → 至少给 10</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> minCapacity;                                    <span class="comment">// 指定容量 → 老老实实按 1 开始</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>为什么这么设计？</strong> 因为语义不同：</p>
+<ul>
+<li><code>new ArrayList&lt;&gt;()</code>：用户没表态，JDK 认为”你大概率要放不少东西”，给个合理的默认值 10，避免一开始就频繁扩容。</li>
+<li><code>new ArrayList&lt;&gt;(0)</code>：用户<strong>明确</strong>说”我要一个容量为 0 的列表”，JDK 应当尊重这个显式指定，不能自作主张扩到 10。</li>
+</ul>
+<p>这是一个用”空数组的身份”来携带状态的小技巧——<strong>省掉了一个 boolean 字段</strong>。</p>
+<blockquote>
+<p>提示：JDK 7 及之前没有这个区分，无参构造直接 <code>this(10)</code> 分配 10 个长度的数组。JDK 8 改成延迟初始化，配合这两个常量，让”创建了但从不使用”的 ArrayList 不占任何额外内存。如果你有上万个空 List 对象（比如 ORM 映射出来的空集合字段），这个优化能省下可观的内存。</p>
+</blockquote>
+<h3 id="1-3-三种构造方式"><a href="#1-3-三种构造方式" class="headerlink" title="1.3 三种构造方式"></a>1.3 三种构造方式</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list1</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();            <span class="comment">// 延迟初始化，首次 add 才分配</span></span><br><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list2</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(<span class="number">100</span>);         <span class="comment">// 立即分配 100</span></span><br><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list3</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(anotherList); <span class="comment">// 按 anotherList.size() 分配</span></span><br></pre></td></tr></table></figure>
+
+<p>源码：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">public</span> <span class="title function_">ArrayList</span><span class="params">(<span class="type">int</span> initialCapacity)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (initialCapacity &gt; <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="built_in">this</span>.elementData = <span class="keyword">new</span> <span class="title class_">Object</span>[initialCapacity];</span><br><span class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (initialCapacity == <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="built_in">this</span>.elementData = EMPTY_ELEMENTDATA;          <span class="comment">// ← 注意是 EMPTY_ 那个</span></span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">IllegalArgumentException</span>(<span class="string">&quot;Illegal Capacity: &quot;</span> + initialCapacity);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">public</span> <span class="title function_">ArrayList</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="built_in">this</span>.elementData = DEFAULTCAPACITY_EMPTY_ELEMENTDATA;  <span class="comment">// ← 是 DEFAULTCAPACITY_ 那个</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="二、扩容机制：1-5-倍背后的数学"><a href="#二、扩容机制：1-5-倍背后的数学" class="headerlink" title="二、扩容机制：1.5 倍背后的数学"></a>二、扩容机制：1.5 倍背后的数学</h2><h3 id="2-1-完整调用链"><a href="#2-1-完整调用链" class="headerlink" title="2.1 完整调用链"></a>2.1 完整调用链</h3><pre class="mermaid">flowchart TD
+    A["add(e)"] --> B["ensureCapacityInternal(size + 1)"]
+    B --> C["calculateCapacity(elementData, minCapacity)<br/>区分两种空数组"]
+    C --> D["ensureExplicitCapacity(minCapacity)<br/>modCount++ ← fail-fast 埋点"]
+    D -->|"minCapacity - elementData.length > 0"| E["grow(minCapacity)"]
+    D -->|"容量足够"| F["elementData[size++] = e"]
+    E --> G["newCapacity = oldCapacity + (oldCapacity >> 1)<br/>即 1.5 倍"]
+    G --> H{"newCapacity < minCapacity ?"}
+    H -->|是| I["newCapacity = minCapacity<br/>(addAll 大集合时走这里)"]
+    H -->|否| J{"newCapacity > MAX_ARRAY_SIZE ?"}
+    J -->|是| K["hugeCapacity(minCapacity)"]
+    J -->|否| L["Arrays.copyOf(elementData, newCapacity)"]
+    I --> L
+    K --> L
+    L --> F</pre>
+
+<h3 id="2-2-grow-逐行精读"><a href="#2-2-grow-逐行精读" class="headerlink" title="2.2 grow() 逐行精读"></a>2.2 grow() 逐行精读</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="type">void</span> <span class="title function_">grow</span><span class="params">(<span class="type">int</span> minCapacity)</span> &#123;</span><br><span class="line">    <span class="type">int</span> <span class="variable">oldCapacity</span> <span class="operator">=</span> elementData.length;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ① 1.5 倍：oldCapacity &gt;&gt; 1 等价于 oldCapacity / 2</span></span><br><span class="line">    <span class="type">int</span> <span class="variable">newCapacity</span> <span class="operator">=</span> oldCapacity + (oldCapacity &gt;&gt; <span class="number">1</span>);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ② 1.5 倍还不够（典型场景：addAll 一次性塞进来很多）</span></span><br><span class="line">    <span class="keyword">if</span> (newCapacity - minCapacity &lt; <span class="number">0</span>)</span><br><span class="line">        newCapacity = minCapacity;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ③ 超过数组容量上限，走 hugeCapacity</span></span><br><span class="line">    <span class="keyword">if</span> (newCapacity - MAX_ARRAY_SIZE &gt; <span class="number">0</span>)</span><br><span class="line">        newCapacity = hugeCapacity(minCapacity);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// ④ 真正扩容：native 方法，O(n)</span></span><br><span class="line">    elementData = Arrays.copyOf(elementData, newCapacity);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>四个分支逐个说：</p>
+<p><strong>① <code>oldCapacity + (oldCapacity &gt;&gt; 1)</code></strong></p>
+<p>用移位而不是 <code>/ 2</code>，一是性能（移位指令比整除快），二是 <code>&gt;&gt;</code> 对正整数就是整除 2。这里有个小细节：如果 <code>oldCapacity</code> 是 1，那么 <code>1 + (1&gt;&gt;1) = 1 + 0 = 1</code>，<strong>扩不动</strong>。所以从 0 或 1 开始时，靠分支 ② 兜底到 <code>minCapacity</code>。</p>
+<p><strong>② <code>addAll</code> 场景</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();          <span class="comment">// 容量 0</span></span><br><span class="line">list.addAll(otherListWith1000000Elements);      <span class="comment">// 一次要 100 万</span></span><br></pre></td></tr></table></figure>
+
+<p>如果只按 1.5 倍扩，得扩 30 多次。分支 ② 直接一步到位：<code>newCapacity = minCapacity = 1000000</code>。</p>
+<p><strong>③ <code>MAX_ARRAY_SIZE</code></strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">int</span> <span class="variable">MAX_ARRAY_SIZE</span> <span class="operator">=</span> Integer.MAX_VALUE - <span class="number">8</span>;</span><br></pre></td></tr></table></figure>
+
+<p><strong>为什么减 8？</strong> 源码注释写得很清楚：</p>
+<blockquote>
+<p>Some VMs reserve some header words in an array. Attempts to allocate larger arrays may result in <code>OutOfMemoryError: Requested array size exceeds VM limit</code>.</p>
+</blockquote>
+<p>部分 JVM 会在数组对象里<strong>保留一些 header words</strong>（对象头。HotSpot 里普通对象头是 8 字节（Mark Word）+ 4 字节（Klass Pointer，开启压缩指针时），还有 4 字节数组长度）。JDK 保守地预留 8 字节，避免分配到 VM 的实际限制边界导致 OOM。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="type">int</span> <span class="title function_">hugeCapacity</span><span class="params">(<span class="type">int</span> minCapacity)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (minCapacity &lt; <span class="number">0</span>)                    <span class="comment">// 整数溢出了，minCapacity 变成负数</span></span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">OutOfMemoryError</span>();</span><br><span class="line">    <span class="keyword">return</span> (minCapacity &gt; MAX_ARRAY_SIZE)</span><br><span class="line">        ? Integer.MAX_VALUE                 <span class="comment">// 真要那么多，就顶到 int 最大值（很可能还是 OOM）</span></span><br><span class="line">        : MAX_ARRAY_SIZE;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>④ <code>Arrays.copyOf</code></strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> &lt;T&gt; <span class="type">T</span>[] <span class="title function_">copyOf</span><span class="params">(T[] original, <span class="type">int</span> newLength)</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> (T[]) copyOf(original, newLength, original.getClass());</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 最终落到 System.arraycopy()，这是 native 方法</span></span><br></pre></td></tr></table></figure>
+
+<p><code>System.arraycopy</code> 是 JVM  intrinsics（JIT 会直接替换成高效的内存操作，本质上是 <code>memmove</code>），比手写 for 循环快得多。但<strong>它依然是 O(n)</strong>，而且扩容时还要额外分配一个新数组——代价是双重的。</p>
+<h3 id="2-3-为什么是-1-5-倍，不是-2-倍？"><a href="#2-3-为什么是-1-5-倍，不是-2-倍？" class="headerlink" title="2.3 为什么是 1.5 倍，不是 2 倍？"></a>2.3 为什么是 1.5 倍，不是 2 倍？</h3><p>这是最有意思的一个问题。答案不在 Java 里，在内存分配器里。</p>
+<p>设增长因子为 <code>k</code>。每次扩容，旧数组被释放。假设我们希望<strong>新分配的数组能复用之前释放的旧数组内存块</strong>，那么需要：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">新容量 ≤ 之前释放过的所有块的总和</span><br><span class="line">k × old ≤ old/k + old/k² + old/k³ + ...</span><br></pre></td></tr></table></figure>
+
+<p>右边是等比数列求和：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">old/k + old/k² + ... = old × (1/k) / (1 - 1/k) = old / (k - 1)</span><br></pre></td></tr></table></figure>
+
+<p>代入：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">k × old ≤ old / (k - 1)</span><br><span class="line">k ≤ 1 / (k - 1)</span><br><span class="line">k² - k - 1 ≤ 0</span><br><span class="line">k ≤ (1 + √5) / 2 ≈ 1.618</span><br></pre></td></tr></table></figure>
+
+<p><strong>临界值是黄金分割比 φ ≈ 1.618。</strong></p>
+<ul>
+<li><code>k = 2</code>：<strong>2 &gt; 1.618</strong>，新数组永远比所有旧块加起来还大 → 旧内存永远无法复用，只能不断向 OS 要新内存，产生大量内存碎片。</li>
+<li><code>k = 1.5</code>：<strong>1.5 &lt; 1.618</strong> → 新数组可以放进之前释放的内存里，内存友好。</li>
+</ul>
+<p>同时 <code>k</code> 又不能太小：太小会导致扩容次数暴增（拷贝总代价上升）。1.5 正好卡在”扩容次数可接受”和”内存可复用”之间。</p>
+<blockquote>
+<p>这也解释了为什么不同实现取值不同：MSVC 的 <code>std::vector</code> 用 1.5，GCC 用 2（它做了别的优化），Java 的 <code>ArrayList</code> 用 1.5。</p>
+</blockquote>
+<h3 id="2-4-扩容的真实代价"><a href="#2-4-扩容的真实代价" class="headerlink" title="2.4 扩容的真实代价"></a>2.4 扩容的真实代价</h3><p>下面是我按源码逻辑实算的数据（不是估算）：</p>
+<table>
+<thead>
+<tr>
+<th>元素数</th>
+<th>扩容次数</th>
+<th>累计元素拷贝次数</th>
+<th>最终 capacity</th>
+<th>浪费空间</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>100</td>
+<td>7</td>
+<td>202</td>
+<td>109</td>
+<td>9</td>
+</tr>
+<tr>
+<td>1,000</td>
+<td>13</td>
+<td>2,456</td>
+<td>1,234</td>
+<td>234</td>
+</tr>
+<tr>
+<td>10,000</td>
+<td>19</td>
+<td>28,096</td>
+<td>14,053</td>
+<td>4,053</td>
+</tr>
+<tr>
+<td>100,000</td>
+<td>24</td>
+<td>213,413</td>
+<td>106,710</td>
+<td>6,710</td>
+</tr>
+<tr>
+<td>1,000,000</td>
+<td>30</td>
+<td>2,430,972</td>
+<td>1,215,487</td>
+<td>215,487</td>
+</tr>
+</tbody></table>
+<p><strong>关键观察：</strong></p>
+<ol>
+<li><strong>拷贝总量约 2~3 倍于元素数</strong>。这正是”均摊 O(1)”的含义——n 次 <code>add</code> 总拷贝 O(n) 次，均摊下来每次 <code>add</code> 是 O(1)。</li>
+<li><strong>最坏情况浪费接近 50%</strong>。100 万元素时最终容量 1,215,487，白白多占 215,487 × 4 字节 ≈ <strong>843KB</strong>（64 位压缩指针下每个引用 4 字节）。</li>
+<li><strong>24 个废弃数组</strong>是 GC 压力的主要来源——它们大小不一，容易触发老年代 GC。</li>
+</ol>
+<h3 id="2-5-均摊复杂度为什么是-O-1"><a href="#2-5-均摊复杂度为什么是-O-1" class="headerlink" title="2.5 均摊复杂度为什么是 O(1)"></a>2.5 均摊复杂度为什么是 O(1)</h3><p>扩容序列是等比数列，总拷贝量：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">10 + 15 + 22 + ... + C  （C 是最终容量，约等于 1.5 × n / 1.5 = n 到 1.5n 之间）</span><br><span class="line">  = C × (1 + 1/1.5 + 1/1.5² + ...)</span><br><span class="line">  = C × 1/(1 - 2/3)</span><br><span class="line">  = 3C  ≤  4.5n</span><br></pre></td></tr></table></figure>
+
+<p>n 次 <code>add</code> 总代价 O(n)，<strong>均摊每次 O(1)</strong>。但注意：<strong>单次 <code>add</code> 最坏仍是 O(n)</strong>。如果你的服务有严格的 P99 延迟要求，单次扩容的 O(n) 拷贝 + 大对象分配可能就是那个尖刺——这又是预分配容量的理由。</p>
+<hr>
+<h2 id="三、常用操作与时间复杂度"><a href="#三、常用操作与时间复杂度" class="headerlink" title="三、常用操作与时间复杂度"></a>三、常用操作与时间复杂度</h2><table>
+<thead>
+<tr>
+<th>操作</th>
+<th>时间复杂度</th>
+<th>底层发生了什么</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>get(int index)</code></td>
+<td><strong>O(1)</strong></td>
+<td><code>elementData[index]</code>，一次数组下标寻址</td>
+</tr>
+<tr>
+<td><code>set(int index, E e)</code></td>
+<td><strong>O(1)</strong></td>
+<td>直接替换，返回旧值</td>
+</tr>
+<tr>
+<td><code>add(E e)</code></td>
+<td><strong>均摊 O(1)</strong>，最坏 O(n)</td>
+<td>尾部追加，可能触发扩容</td>
+</tr>
+<tr>
+<td><code>add(int index, E e)</code></td>
+<td><strong>O(n)</strong></td>
+<td>从 index 起所有元素后移一位（<code>arraycopy</code>）</td>
+</tr>
+<tr>
+<td><code>remove(int index)</code></td>
+<td><strong>O(n)</strong></td>
+<td>从 index+1 起所有元素前移一位</td>
+</tr>
+<tr>
+<td><code>remove(Object o)</code></td>
+<td><strong>O(n)</strong></td>
+<td>先 O(n) 找到位置，再 O(n) 移动</td>
+</tr>
+<tr>
+<td><code>contains(Object o)</code></td>
+<td><strong>O(n)</strong></td>
+<td><code>indexOf(o) &gt;= 0</code>，遍历 + <code>equals</code></td>
+</tr>
+<tr>
+<td><code>indexOf(Object o)</code></td>
+<td><strong>O(n)</strong></td>
+<td>遍历；注意<strong>用 <code>equals</code> 而非 <code>==</code></strong></td>
+</tr>
+<tr>
+<td><code>size()</code></td>
+<td><strong>O(1)</strong></td>
+<td>返回 <code>size</code> 字段，不是遍历</td>
+</tr>
+</tbody></table>
+<h3 id="3-1-remove-源码：为什么最后要置-null"><a href="#3-1-remove-源码：为什么最后要置-null" class="headerlink" title="3.1 remove 源码：为什么最后要置 null"></a>3.1 remove 源码：为什么最后要置 null</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">E</span> <span class="title function_">remove</span><span class="params">(<span class="type">int</span> index)</span> &#123;</span><br><span class="line">    rangeCheck(index);                       <span class="comment">// 越界检查</span></span><br><span class="line"></span><br><span class="line">    modCount++;                              <span class="comment">// 结构性修改计数（fail-fast 用）</span></span><br><span class="line">    <span class="type">E</span> <span class="variable">oldValue</span> <span class="operator">=</span> elementData(index);</span><br><span class="line"></span><br><span class="line">    <span class="type">int</span> <span class="variable">numMoved</span> <span class="operator">=</span> size - index - <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">if</span> (numMoved &gt; <span class="number">0</span>)</span><br><span class="line">        System.arraycopy(elementData, index + <span class="number">1</span>, elementData, index, numMoved);</span><br><span class="line"></span><br><span class="line">    elementData[--size] = <span class="literal">null</span>;              <span class="comment">// ← 关键！clear to let GC do its work</span></span><br><span class="line">    <span class="keyword">return</span> oldValue;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>最后一行 <code>elementData[--size] = null</code> 看似多余，其实是<strong>必须</strong>的。</p>
+<p>如果不置 null：<code>size</code> 减了 1，逻辑上元素已删除，但 <code>elementData[size]</code> 这个槽位<strong>仍然持有该对象的强引用</strong>。只要 ArrayList 本身还活着，这个对象就永远无法被 GC 回收 —— 这就是经典的<strong>内存泄漏（游离对象，loitering objects）</strong>。</p>
+<p>对于存大对象的 List（比如缓存的图片、报表数据），漏掉这一行会让内存只增不减。Effective Java 里专门有一节讲这个问题。</p>
+<pre class="mermaid">flowchart TB
+    A["删除前<br/>[A, B, C, D, E]<br/>size = 5"] --> B["System.arraycopy(elementData, 3, elementData, 2, 2)<br/>把 D、E 前移"]
+    B --> C["[A, B, D, E, E]<br/>size = 5"]
+    C --> D["elementData[--size] = null<br/>即 elementData[4] = null"]
+    D --> E["删除后<br/>[A, B, D, E, null]<br/>size = 4"]</pre>
+
+<h3 id="3-2-add-int-index-E-e-与-remove-的对称性"><a href="#3-2-add-int-index-E-e-与-remove-的对称性" class="headerlink" title="3.2 add(int index, E e) 与 remove 的对称性"></a>3.2 add(int index, E e) 与 remove 的对称性</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">add</span><span class="params">(<span class="type">int</span> index, E element)</span> &#123;</span><br><span class="line">    rangeCheckForAdd(index);</span><br><span class="line">    ensureCapacityInternal(size + <span class="number">1</span>);</span><br><span class="line">    System.arraycopy(elementData, index, elementData, index + <span class="number">1</span>, size - index);</span><br><span class="line">    elementData[index] = element;</span><br><span class="line">    size++;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>注意顺序：<strong>先扩容，再移动</strong>。如果先移动再扩容，移动的源数组和目标数组就不是同一个了。</p>
+<hr>
+<h2 id="四、遍历删除：为什么-foreach-里-remove-会炸"><a href="#四、遍历删除：为什么-foreach-里-remove-会炸" class="headerlink" title="四、遍历删除：为什么 foreach 里 remove 会炸"></a>四、遍历删除：为什么 foreach 里 remove 会炸</h2><p>这是 ArrayList 最高频的面试题，也是最容易踩的坑。</p>
+<h3 id="4-1-现象"><a href="#4-1-现象" class="headerlink" title="4.1 现象"></a>4.1 现象</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(Arrays.asList(<span class="string">&quot;a&quot;</span>, <span class="string">&quot;b&quot;</span>, <span class="string">&quot;c&quot;</span>, <span class="string">&quot;d&quot;</span>));</span><br><span class="line"><span class="keyword">for</span> (String s : list) &#123;</span><br><span class="line">    <span class="keyword">if</span> (<span class="string">&quot;b&quot;</span>.equals(s)) &#123;</span><br><span class="line">        list.remove(s);      <span class="comment">// 抛 ConcurrentModificationException</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="4-2-根因：modCount-与-expectedModCount"><a href="#4-2-根因：modCount-与-expectedModCount" class="headerlink" title="4.2 根因：modCount 与 expectedModCount"></a>4.2 根因：modCount 与 expectedModCount</h3><p>ArrayList 继承了 <code>AbstractList</code> 的 <code>modCount</code> 字段，记录<strong>结构性修改次数</strong>（add&#x2F;remove&#x2F;clear 等改变结构的操作会 <code>modCount++</code>；<code>set</code> 不改结构，不计数）。</p>
+<p>迭代器 <code>Itr</code> 在创建时会<strong>快照</strong>当时的 <code>modCount</code>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">class</span> <span class="title class_">Itr</span> <span class="keyword">implements</span> <span class="title class_">Iterator</span>&lt;E&gt; &#123;</span><br><span class="line">    <span class="type">int</span> cursor;              <span class="comment">// 下一个要返回的元素下标</span></span><br><span class="line">    <span class="type">int</span> <span class="variable">lastRet</span> <span class="operator">=</span> -<span class="number">1</span>;        <span class="comment">// 上一次返回的元素下标</span></span><br><span class="line">    <span class="type">int</span> <span class="variable">expectedModCount</span> <span class="operator">=</span> modCount;    <span class="comment">// ← 快照</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">final</span> <span class="type">void</span> <span class="title function_">checkForComodification</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (modCount != expectedModCount)</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">ConcurrentModificationException</span>();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">E</span> <span class="title function_">next</span><span class="params">()</span> &#123;</span><br><span class="line">        checkForComodification();     <span class="comment">// ← 每次 next() 都检查</span></span><br><span class="line">        ...</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">remove</span><span class="params">()</span> &#123;</span><br><span class="line">        ...</span><br><span class="line">        expectedModCount = modCount;  <span class="comment">// ← it.remove() 会同步，所以不报错</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>foreach</code> 语法糖编译后就是 <code>Iterator</code>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">Iterator</span>&lt;String&gt; <span class="variable">it</span> <span class="operator">=</span> list.iterator();</span><br><span class="line"><span class="keyword">while</span> (it.hasNext()) &#123;</span><br><span class="line">    <span class="type">String</span> <span class="variable">s</span> <span class="operator">=</span> it.next();        <span class="comment">// ← 这里检查 modCount</span></span><br><span class="line">    <span class="keyword">if</span> (<span class="string">&quot;b&quot;</span>.equals(s)) &#123;</span><br><span class="line">        list.remove(s);          <span class="comment">// list.remove 使 modCount++，但 expectedModCount 没变</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>list.remove()</code> 让 <code>modCount</code> 从 0 变 1，而 <code>expectedModCount</code> 还是 0，下一轮 <code>next()</code> 检查失败 → 抛异常。</p>
+<p><strong>为什么 <code>it.remove()</code> 不抛？</strong> 因为 <code>Itr.remove()</code> 内部主动做了 <code>expectedModCount = modCount</code> 同步。</p>
+<h3 id="4-3-经典陷阱：删倒数第二个元素不抛异常"><a href="#4-3-经典陷阱：删倒数第二个元素不抛异常" class="headerlink" title="4.3 经典陷阱：删倒数第二个元素不抛异常"></a>4.3 经典陷阱：删倒数第二个元素不抛异常</h3><p>这个细节很多人不知道。看这段代码：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(Arrays.asList(<span class="string">&quot;a&quot;</span>, <span class="string">&quot;b&quot;</span>, <span class="string">&quot;c&quot;</span>));</span><br><span class="line"><span class="keyword">for</span> (String s : list) &#123;</span><br><span class="line">    <span class="keyword">if</span> (<span class="string">&quot;b&quot;</span>.equals(s)) &#123;</span><br><span class="line">        list.remove(s);      <span class="comment">// ← 不抛异常！但结果是错的</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line">System.out.println(list);    <span class="comment">// [a, c]</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>为什么不抛？</strong> 因为 <code>hasNext()</code> 的实现：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">hasNext</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> cursor != size;      <span class="comment">// ← 注意：这里没有 checkForComodification()</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>执行过程：</p>
+<table>
+<thead>
+<tr>
+<th>轮次</th>
+<th>cursor</th>
+<th>size</th>
+<th>hasNext</th>
+<th>next()</th>
+<th>modCount</th>
+<th>expectedModCount</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>0</td>
+<td>3</td>
+<td>true</td>
+<td>返回 “a”</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>2</td>
+<td>1</td>
+<td>3</td>
+<td>true</td>
+<td>返回 “b”</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>—</td>
+<td>2</td>
+<td><strong>2</strong></td>
+<td><strong>2 !&#x3D; 2 → false</strong></td>
+<td>循环结束</td>
+<td>1</td>
+<td>0</td>
+</tr>
+</tbody></table>
+<p>删除 “b” 后 <code>size</code> 从 3 变 2，<code>cursor</code> 恰好也是 2，<code>hasNext()</code> 返回 false，<strong>循环直接结束，永远走不到下一次 <code>checkForComodification()</code></strong>。</p>
+<p><strong>结论：不抛异常不代表代码是对的。</strong> 元素 “c” 被静默跳过了，从未被判断过是否需要删除。这比抛异常更危险——<strong>静默错误比崩溃难查一百倍</strong>。</p>
+<h3 id="4-4-四种正确写法"><a href="#4-4-四种正确写法" class="headerlink" title="4.4 四种正确写法"></a>4.4 四种正确写法</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 方案一：倒序 for 循环（最快，无迭代器开销）</span></span><br><span class="line"><span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> list.size() - <span class="number">1</span>; i &gt;= <span class="number">0</span>; i--) &#123;</span><br><span class="line">    <span class="keyword">if</span> (shouldRemove(list.get(i))) &#123;</span><br><span class="line">        list.remove(i);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 方案二：Iterator.remove()</span></span><br><span class="line"><span class="type">Iterator</span>&lt;String&gt; <span class="variable">it</span> <span class="operator">=</span> list.iterator();</span><br><span class="line"><span class="keyword">while</span> (it.hasNext()) &#123;</span><br><span class="line">    <span class="keyword">if</span> (shouldRemove(it.next())) &#123;</span><br><span class="line">        it.remove();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 方案三：removeIf（JDK 8+，最简洁，内部是批量删除，性能最好）</span></span><br><span class="line">list.removeIf(<span class="built_in">this</span>::shouldRemove);</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 方案四：收集待删元素，遍历结束后 removeAll</span></span><br><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">toRemove</span> <span class="operator">=</span> list.stream().filter(<span class="built_in">this</span>::shouldRemove).collect(toList());</span><br><span class="line">list.removeAll(toRemove);</span><br></pre></td></tr></table></figure>
+
+<p><strong>推荐 <code>removeIf</code></strong>。它内部不是”找到一个删一个”（那样是 O(n²)），而是<strong>一次遍历标记、一次批量移动</strong>，时间复杂度 O(n)：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ArrayList.removeIf 核心逻辑（简化）</span></span><br><span class="line"><span class="comment">// 用 BitSet 标记要删除的位置，最后只做一次 System.arraycopy 压缩</span></span><br></pre></td></tr></table></figure>
+
+<p>对比：在 10 万元素、删除 1 万的场景下，<code>Iterator.remove()</code> 需要移动约 1 万 × 5 万 &#x3D; 5 亿次元素，而 <code>removeIf</code> 只需移动 10 万次量级。</p>
+<h3 id="4-5-fail-fast-的局限性"><a href="#4-5-fail-fast-的局限性" class="headerlink" title="4.5 fail-fast 的局限性"></a>4.5 fail-fast 的局限性</h3><p><code>modCount</code> 机制叫 <strong>fail-fast（快速失败）</strong>，但它有个重要前提：</p>
+<blockquote>
+<p><strong>它只在单线程下可靠，不能作为并发安全的保证。</strong></p>
+</blockquote>
+<p>原因：<code>modCount</code> 是<strong>普通 int，没有 <code>volatile</code></strong>，也没有任何同步。多线程下：</p>
+<ul>
+<li>线程 B 的修改，线程 A 可能根本看不到 <code>modCount</code> 变化 → 不抛异常，但数据已经错了；</li>
+<li>也可能在 <code>next()</code> 里读到过期值 → 数组越界 &#x2F; 返回 null。</li>
+</ul>
+<p>JDK 文档原话：</p>
+<blockquote>
+<p>Note that the fail-fast behavior of an iterator cannot be guaranteed as it is, generally speaking, impossible to make any hard guarantees in the presence of unsynchronized concurrent modification. <strong>Fail-fast iterators throw ConcurrentModificationException on a best-effort basis.</strong></p>
+</blockquote>
+<p><strong>“best-effort”（尽力而为）</strong>—— 所以别指望它帮你兜住并发 bug。并发场景请用第五节里的线程安全容器。</p>
+<hr>
+<h2 id="五、ArrayList-vs-LinkedList：为什么-LinkedList-几乎不该用"><a href="#五、ArrayList-vs-LinkedList：为什么-LinkedList-几乎不该用" class="headerlink" title="五、ArrayList vs LinkedList：为什么 LinkedList 几乎不该用"></a>五、ArrayList vs LinkedList：为什么 LinkedList 几乎不该用</h2><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>ArrayList</th>
+<th>LinkedList</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>底层</td>
+<td>动态数组</td>
+<td>双向链表</td>
+</tr>
+<tr>
+<td><code>get(i)</code></td>
+<td><strong>O(1)</strong></td>
+<td>O(n)（要遍历到 i）</td>
+</tr>
+<tr>
+<td><code>add(e)</code> 尾部</td>
+<td>均摊 O(1)</td>
+<td>O(1)</td>
+</tr>
+<tr>
+<td><code>add(0, e)</code> 头部</td>
+<td>O(n)（整体后移）</td>
+<td><strong>O(1)</strong></td>
+</tr>
+<tr>
+<td><code>remove(i)</code></td>
+<td>O(n)</td>
+<td>定位 O(n) + 删除 O(1)</td>
+</tr>
+<tr>
+<td>内存占用（100 万元素）</td>
+<td>约 <strong>4 MB</strong>（仅引用数组）</td>
+<td>约 <strong>24 MB</strong>（每个节点带对象头和前后指针）</td>
+</tr>
+<tr>
+<td>缓存友好度</td>
+<td><strong>高</strong>（内存连续，CPU 预取命中）</td>
+<td>低（节点分散，cache miss 严重）</td>
+</tr>
+<tr>
+<td>随机访问</td>
+<td>支持（<code>RandomAccess</code> 标记）</td>
+<td>不支持</td>
+</tr>
+</tbody></table>
+<h3 id="5-1-LinkedList-的内存成本"><a href="#5-1-LinkedList-的内存成本" class="headerlink" title="5.1 LinkedList 的内存成本"></a>5.1 LinkedList 的内存成本</h3><p>每个 <code>Node</code>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">class</span> <span class="title class_">Node</span>&lt;E&gt; &#123;</span><br><span class="line">    E item;          <span class="comment">// 4 字节（压缩指针）</span></span><br><span class="line">    Node&lt;E&gt; next;    <span class="comment">// 4 字节</span></span><br><span class="line">    Node&lt;E&gt; prev;    <span class="comment">// 4 字节</span></span><br><span class="line">    Node(<span class="type">int</span> idx, E element, Node&lt;E&gt; next) &#123; ... &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>加上对象头 16 字节 → 每个节点 <strong>24 字节 + 4 字节对齐 &#x3D; 24 字节</strong>（64 位 JVM 开启压缩指针）。</p>
+<p>ArrayList 每个元素只占 <strong>4 字节</strong>（一个引用槽）。</p>
+<p>100 万元素：</p>
+<ul>
+<li>ArrayList：<code>4 MB</code> + 数组对象头</li>
+<li>LinkedList：<code>24 MB</code> + 100 万个节点对象的 GC 压力</li>
+</ul>
+<p><strong>5~6 倍内存差距。</strong></p>
+<h3 id="5-2-被忽略的关键：缓存局部性"><a href="#5-2-被忽略的关键：缓存局部性" class="headerlink" title="5.2 被忽略的关键：缓存局部性"></a>5.2 被忽略的关键：缓存局部性</h3><p>这是比时间复杂度更重要的实战因素。</p>
+<p>CPU 读取内存时会把**相邻的一整块（cache line，通常 64 字节）**加载进 L1&#x2F;L2 缓存。ArrayList 的元素在内存里连续存放，遍历时一次 cache line 能拿到 16 个引用（64&#x2F;4），<strong>后续 15 次访问全部命中缓存</strong>。</p>
+<p>LinkedList 的节点分散在堆各处，几乎每次访问都是一次 <strong>cache miss</strong>（约 100 个 CPU 周期，比缓存命中慢 ~100 倍）。</p>
+<p><strong>实测结果</strong>：即使是在 LinkedList 理论占优的”头部插入”场景，当数据量超过几千时，ArrayList 的 <code>add(0, e)</code> 往往还是比 LinkedList 快——因为 <code>arraycopy</code> 是连续内存的高效 <code>memmove</code>，而 LinkedList 每次都要 new 一个节点对象（分配 + GC）并 cache miss。</p>
+<h3 id="5-3-什么时候该用-LinkedList"><a href="#5-3-什么时候该用-LinkedList" class="headerlink" title="5.3 什么时候该用 LinkedList"></a>5.3 什么时候该用 LinkedList</h3><p>坦白说，很少：</p>
+<ul>
+<li>✅ 需要频繁在<strong>已知位置</strong>（通过迭代器持有）做插入&#x2F;删除，且数据量不大</li>
+<li>✅ 需要当作 <strong>Deque &#x2F; 队列</strong>用（此时用 <code>ArrayDeque</code> 通常更好）</li>
+<li>❌ 不要因为”要频繁增删”就选它——先测，大概率 ArrayList 更快</li>
+<li>❌ 不要用它做队列，用 <code>ArrayDeque</code>（无界）或 <code>LinkedBlockingQueue</code>（有界&#x2F;并发）</li>
+</ul>
+<blockquote>
+<p><code>ArrayDeque</code> 是循环数组实现的双端队列，在绝大多数”栈&#x2F;队列”场景下都比 <code>LinkedList</code> 快且省内存。</p>
+</blockquote>
+<hr>
+<h2 id="六、线程安全：三个方案怎么选"><a href="#六、线程安全：三个方案怎么选" class="headerlink" title="六、线程安全：三个方案怎么选"></a>六、线程安全：三个方案怎么选</h2><p>ArrayList <strong>不是线程安全的</strong>。并发 <code>add</code> 可能：</p>
+<ul>
+<li>元素覆盖（<code>elementData[size++] = e</code> 不是原子操作，两个线程可能写到同一个位置）</li>
+<li><code>size</code> 计数错误</li>
+<li>扩容时数组引用错乱，甚至 <code>ArrayIndexOutOfBoundsException</code></li>
+</ul>
+<p>三个替代方案对比：</p>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>原理</th>
+<th>读性能</th>
+<th>写性能</th>
+<th>迭代时修改</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Vector</code></td>
+<td>所有方法 <code>synchronized</code></td>
+<td>差</td>
+<td>差</td>
+<td>抛 CME</td>
+<td>❌ 已过时，别用</td>
+</tr>
+<tr>
+<td><code>Collections.synchronizedList</code></td>
+<td>装饰器，方法级 <code>synchronized</code></td>
+<td>中</td>
+<td>中</td>
+<td><strong>必须手动同步</strong></td>
+<td>低并发的兼容场景</td>
+</tr>
+<tr>
+<td><code>CopyOnWriteArrayList</code></td>
+<td>写时复制整个数组</td>
+<td><strong>极高</strong>（无锁）</td>
+<td>极差（O(n) 且加锁）</td>
+<td>✅ 安全（快照迭代）</td>
+<td><strong>读多写极少</strong>，如监听器列表、配置缓存</td>
+</tr>
+</tbody></table>
+<h3 id="6-1-CopyOnWriteArrayList-深入"><a href="#6-1-CopyOnWriteArrayList-深入" class="headerlink" title="6.1 CopyOnWriteArrayList 深入"></a>6.1 CopyOnWriteArrayList 深入</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">add</span><span class="params">(E e)</span> &#123;</span><br><span class="line">    <span class="keyword">final</span> <span class="type">ReentrantLock</span> <span class="variable">lock</span> <span class="operator">=</span> <span class="built_in">this</span>.lock;</span><br><span class="line">    lock.lock();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="type">Object</span>[] <span class="variable">elements</span> <span class="operator">=</span> getArray();</span><br><span class="line">        <span class="type">int</span> <span class="variable">len</span> <span class="operator">=</span> elements.length;</span><br><span class="line">        <span class="type">Object</span>[] <span class="variable">newElements</span> <span class="operator">=</span> Arrays.copyOf(elements, len + <span class="number">1</span>);   <span class="comment">// 复制一份，长度 +1</span></span><br><span class="line">        newElements[len] = e;</span><br><span class="line">        setArray(newElements);        <span class="comment">// volatile 写，替换引用</span></span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        lock.unlock();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>三个要点：</p>
+<ol>
+<li><strong>每次写都复制整个数组</strong> —— 100 万元素的 List 做一次 <code>add</code>，要拷贝 4MB。绝对不能用来做高频写入。</li>
+<li><strong>读操作完全不加锁</strong>，读的是 <code>volatile</code> 数组引用，所以极快。</li>
+<li><strong>迭代器是快照</strong>：创建迭代器时持有当时的数组引用，之后原 List 怎么改都不影响迭代，<strong>永不抛 CME</strong>。代价是<strong>读不到最新数据</strong>（弱一致性）。</li>
+</ol>
+<p><strong>典型误用</strong>：用 <code>CopyOnWriteArrayList</code> 存设备实时上报数据（高频写）→ 每次写入 O(n) 拷贝 + 大量垃圾对象 → CPU 和 GC 双杀。这种场景应该用 <code>ConcurrentLinkedQueue</code> 或 <code>LinkedBlockingQueue</code>。</p>
+<h3 id="6-2-synchronizedList-的坑"><a href="#6-2-synchronizedList-的坑" class="headerlink" title="6.2 synchronizedList 的坑"></a>6.2 synchronizedList 的坑</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> Collections.synchronizedList(<span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;());</span><br><span class="line"></span><br><span class="line"><span class="comment">// ❌ 迭代时仍然不安全！必须手动锁</span></span><br><span class="line"><span class="keyword">synchronized</span> (list) &#123;           <span class="comment">// ← 必须锁在 list 对象上</span></span><br><span class="line">    <span class="type">Iterator</span>&lt;String&gt; <span class="variable">it</span> <span class="operator">=</span> list.iterator();</span><br><span class="line">    <span class="keyword">while</span> (it.hasNext()) &#123; ... &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>JDK 文档明确要求：迭代 <code>synchronizedList</code> 时，<strong>必须手动在返回的 list 上同步</strong>。忘记这一步，迭代期间被其他线程修改，照样抛 CME。</p>
+<hr>
+<h2 id="七、序列化：为什么-elementData-是-transient"><a href="#七、序列化：为什么-elementData-是-transient" class="headerlink" title="七、序列化：为什么 elementData 是 transient"></a>七、序列化：为什么 elementData 是 transient</h2><h3 id="7-1-问题"><a href="#7-1-问题" class="headerlink" title="7.1 问题"></a>7.1 问题</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">transient</span> Object[] elementData;</span><br></pre></td></tr></table></figure>
+
+<p><code>transient</code> 意味着<strong>默认序列化机制会跳过这个字段</strong>。但 <code>elementData</code> 里装着全部数据，跳过了还怎么序列化？</p>
+<h3 id="7-2-原因：capacity-≠-size"><a href="#7-2-原因：capacity-≠-size" class="headerlink" title="7.2 原因：capacity ≠ size"></a>7.2 原因：capacity ≠ size</h3><p>如果直接序列化 <code>elementData</code>，会把数组里<strong>所有 <code>capacity</code> 个槽位</strong>都写进去，包括大量 <code>null</code>。</p>
+<p>一个 <code>size = 7</code>、<code>capacity = 106710</code> 的 ArrayList，直接序列化要写 106710 个引用（其中 106703 个是 null），浪费极其严重。</p>
+<p>所以 ArrayList 自己实现了序列化：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">private</span> <span class="type">void</span> <span class="title function_">writeObject</span><span class="params">(java.io.ObjectOutputStream s)</span> <span class="keyword">throws</span> java.io.IOException &#123;</span><br><span class="line">    <span class="type">int</span> <span class="variable">expectedModCount</span> <span class="operator">=</span> modCount;</span><br><span class="line">    s.defaultWriteObject();               <span class="comment">// 先序列化 size 等非 transient 字段</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 只写 size 个有效元素</span></span><br><span class="line">    <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; size; i++) &#123;</span><br><span class="line">        s.writeObject(elementData[i]);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (modCount != expectedModCount) &#123;   <span class="comment">// 序列化期间被修改了</span></span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">ConcurrentModificationException</span>();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">private</span> <span class="type">void</span> <span class="title function_">readObject</span><span class="params">(java.io.ObjectInputStream s)</span> <span class="keyword">throws</span> java.io.IOException, ClassNotFoundException &#123;</span><br><span class="line">    elementData = EMPTY_ELEMENTDATA;</span><br><span class="line">    s.defaultReadObject();</span><br><span class="line">    s.readInt();                          <span class="comment">// 忽略 capacity（兼容旧版本）</span></span><br><span class="line">    <span class="keyword">if</span> (size &gt; <span class="number">0</span>) &#123;</span><br><span class="line">        ensureCapacityInternal(size);</span><br><span class="line">        <span class="type">Object</span>[] <span class="variable">a</span> <span class="operator">=</span> elementData;</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; size; i++) &#123;</span><br><span class="line">            a[i] = s.readObject();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>只写 <code>size</code> 个元素</strong>。这就是 <code>transient</code> + 自定义 <code>writeObject/readObject</code> 的经典配合——<code>transient</code> 表示”别用默认规则处理我”，<code>writeObject</code> 表示”我自己来”。</p>
+<blockquote>
+<p>注意 <code>writeObject</code> 里也做了 <code>modCount</code> 检查：序列化过程中如果 List 被修改，直接抛 CME。</p>
+</blockquote>
+<hr>
+<h2 id="八、四个高危-API-陷阱"><a href="#八、四个高危-API-陷阱" class="headerlink" title="八、四个高危 API 陷阱"></a>八、四个高危 API 陷阱</h2><h3 id="8-1-Arrays-asList：返回的不是-ArrayList"><a href="#8-1-Arrays-asList：返回的不是-ArrayList" class="headerlink" title="8.1 Arrays.asList：返回的不是 ArrayList"></a>8.1 <code>Arrays.asList</code>：返回的不是 ArrayList</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> Arrays.asList(<span class="string">&quot;a&quot;</span>, <span class="string">&quot;b&quot;</span>, <span class="string">&quot;c&quot;</span>);</span><br><span class="line">list.add(<span class="string">&quot;d&quot;</span>);      <span class="comment">// ❌ UnsupportedOperationException</span></span><br><span class="line">list.remove(<span class="number">0</span>);     <span class="comment">// ❌ UnsupportedOperationException</span></span><br><span class="line">list.set(<span class="number">0</span>, <span class="string">&quot;x&quot;</span>);   <span class="comment">// ✅ 可以！而且会修改原始数组</span></span><br></pre></td></tr></table></figure>
+
+<p><code>Arrays.asList</code> 返回的是 <code>java.util.Arrays$ArrayList</code>——一个<strong>固定长度的 List 视图</strong>，不是 <code>java.util.ArrayList</code>。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">String</span>[] <span class="variable">arr</span> <span class="operator">=</span> &#123;<span class="string">&quot;a&quot;</span>, <span class="string">&quot;b&quot;</span>, <span class="string">&quot;c&quot;</span>&#125;;</span><br><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> Arrays.asList(arr);</span><br><span class="line">list.set(<span class="number">0</span>, <span class="string">&quot;x&quot;</span>);</span><br><span class="line">System.out.println(arr[<span class="number">0</span>]);   <span class="comment">// &quot;x&quot; —— 原数组被改了！</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>正确做法</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(Arrays.asList(<span class="string">&quot;a&quot;</span>, <span class="string">&quot;b&quot;</span>, <span class="string">&quot;c&quot;</span>));   <span class="comment">// 包一层，可变</span></span><br></pre></td></tr></table></figure>
+
+<p>JDK 9+ 更推荐不可变集合：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> List.of(<span class="string">&quot;a&quot;</span>, <span class="string">&quot;b&quot;</span>, <span class="string">&quot;c&quot;</span>);   <span class="comment">// 真正不可变，set 也抛异常，且不允许 null</span></span><br></pre></td></tr></table></figure>
+
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>Arrays.asList</code></th>
+<th><code>List.of</code> (JDK9+)</th>
+<th><code>new ArrayList&lt;&gt;(...)</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>长度</td>
+<td>固定</td>
+<td>固定</td>
+<td>可变</td>
+</tr>
+<tr>
+<td><code>set</code></td>
+<td>✅（改原数组）</td>
+<td>❌</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>add</code>&#x2F;<code>remove</code></td>
+<td>❌</td>
+<td>❌</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>允许 null 元素</td>
+<td>✅</td>
+<td>❌ 抛 NPE</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>与原数组关联</td>
+<td>✅ 是视图</td>
+<td>❌</td>
+<td>❌ 独立副本</td>
+</tr>
+</tbody></table>
+<h3 id="8-2-subList：返回的是视图，不是新-List"><a href="#8-2-subList：返回的是视图，不是新-List" class="headerlink" title="8.2 subList：返回的是视图，不是新 List"></a>8.2 <code>subList</code>：返回的是视图，不是新 List</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">list</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(Arrays.asList(<span class="string">&quot;a&quot;</span>,<span class="string">&quot;b&quot;</span>,<span class="string">&quot;c&quot;</span>,<span class="string">&quot;d&quot;</span>,<span class="string">&quot;e&quot;</span>));</span><br><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">sub</span> <span class="operator">=</span> list.subList(<span class="number">1</span>, <span class="number">4</span>);      <span class="comment">// [b, c, d]</span></span><br><span class="line"></span><br><span class="line">sub.set(<span class="number">0</span>, <span class="string">&quot;X&quot;</span>);</span><br><span class="line">System.out.println(list);                   <span class="comment">// [a, X, c, d, e] ← 原列表被改了！</span></span><br><span class="line"></span><br><span class="line">list.add(<span class="string">&quot;f&quot;</span>);</span><br><span class="line">System.out.println(sub);                    <span class="comment">// ❌ ConcurrentModificationException</span></span><br></pre></td></tr></table></figure>
+
+<p><code>subList</code> 返回的是 <code>ArrayList</code> 的内部类 <code>SubList</code>，它<strong>持有一个指向父 List 的引用</strong>，所有操作代理回原数组的对应区间。</p>
+<p>两个后果：</p>
+<ol>
+<li>改 <code>subList</code> &#x3D; 改原 List（反之亦然）。</li>
+<li>对<strong>原 List 做结构性修改</strong>后，再用 <code>subList</code> 就会抛 CME（因为 <code>modCount</code> 变了）。</li>
+</ol>
+<p><strong>想拿到独立的子列表，必须拷贝：</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;String&gt; <span class="variable">sub</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(list.subList(<span class="number">1</span>, <span class="number">4</span>));   <span class="comment">// ✅ 包一层</span></span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p>另一个坑：<code>subList</code> 的 <code>subList</code> 再 <code>subList</code>……嵌套过深会导致 <code>StackOverflowError</code>，因为每次访问都要逐层代理。</p>
+</blockquote>
+<h3 id="8-3-clone-是浅拷贝"><a href="#8-3-clone-是浅拷贝" class="headerlink" title="8.3 clone() 是浅拷贝"></a>8.3 <code>clone()</code> 是浅拷贝</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">a</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">a.add(device);</span><br><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">b</span> <span class="operator">=</span> (List&lt;Device&gt;) a.clone();</span><br><span class="line"></span><br><span class="line">b.get(<span class="number">0</span>).setName(<span class="string">&quot;changed&quot;</span>);</span><br><span class="line">System.out.println(a.get(<span class="number">0</span>).getName());    <span class="comment">// &quot;changed&quot; —— 原对象被改了！</span></span><br></pre></td></tr></table></figure>
+
+<p><code>clone()</code> 只复制了 <code>elementData</code> 数组本身（引用数组），<strong>元素对象还是同一批</strong>。要深拷贝必须手动复制每个元素。</p>
+<h3 id="8-4-toArray-的两种写法"><a href="#8-4-toArray-的两种写法" class="headerlink" title="8.4 toArray() 的两种写法"></a>8.4 <code>toArray()</code> 的两种写法</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 返回 Object[]，强转会 ClassCastException</span></span><br><span class="line"><span class="type">String</span>[] <span class="variable">arr</span> <span class="operator">=</span> (String[]) list.toArray();</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 正确</span></span><br><span class="line"><span class="type">String</span>[] <span class="variable">arr</span> <span class="operator">=</span> list.toArray(<span class="keyword">new</span> <span class="title class_">String</span>[<span class="number">0</span>]);</span><br><span class="line"><span class="comment">// 或提前分配（性能略好，JDK 11+ 差别极小）</span></span><br><span class="line"><span class="type">String</span>[] <span class="variable">arr</span> <span class="operator">=</span> list.toArray(<span class="keyword">new</span> <span class="title class_">String</span>[list.size()]);</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="九、生产环境最佳实践"><a href="#九、生产环境最佳实践" class="headerlink" title="九、生产环境最佳实践"></a>九、生产环境最佳实践</h2><h3 id="9-1-容量预估：一行的性能收益"><a href="#9-1-容量预估：一行的性能收益" class="headerlink" title="9.1 容量预估：一行的性能收益"></a>9.1 容量预估：一行的性能收益</h3><p><strong>核心原则：如果事先知道大概要放多少元素，就在构造时指定。</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 20 万数据：扩容 24 次，拷贝 21 万次，产生 24 个废弃大数组</span></span><br><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">list</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line"><span class="keyword">for</span> (...) list.add(device);</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 一次分配到位</span></span><br><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">list</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(<span class="number">200000</span>);</span><br></pre></td></tr></table></figure>
+
+<p>回到前言的例子：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th><code>new ArrayList&lt;&gt;()</code></th>
+<th><code>new ArrayList&lt;&gt;(200000)</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>扩容次数</td>
+<td>24</td>
+<td>1</td>
+</tr>
+<tr>
+<td>元素拷贝总量</td>
+<td>213,413</td>
+<td>0</td>
+</tr>
+<tr>
+<td>废弃数组个数</td>
+<td>24（最大 ~420KB）</td>
+<td>0</td>
+</tr>
+<tr>
+<td>实测耗时</td>
+<td>3.2 s</td>
+<td>0.7 s</td>
+</tr>
+</tbody></table>
+<p><strong>预估公式</strong>（留 25% 余量防止意外扩容）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">initialCapacity = 预计元素数 × 1.25</span><br></pre></td></tr></table></figure>
+
+<p>如果是 <code>addAll</code>，直接用 <code>target.size()</code> 即可，无需余量（<code>addAll</code> 走分支 ②，一次到位）。</p>
+<p>常见场景的估算：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 分页查询：已知每页大小和总页数</span></span><br><span class="line"><span class="type">int</span> <span class="variable">total</span> <span class="operator">=</span> countTotal();</span><br><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">all</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(total);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 批量导入：已知文件大小/行数</span></span><br><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">batch</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;((<span class="type">int</span>) (fileLineCount * <span class="number">1.1</span>));</span><br><span class="line"></span><br><span class="line"><span class="comment">// HashMap 的 values 转 List</span></span><br><span class="line"><span class="type">List</span>&lt;V&gt; <span class="variable">values</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(map.size());</span><br></pre></td></tr></table></figure>
+
+<p><strong>反向操作</strong>：如果一个大 List 用完后要长期持有（比如放进缓存），调用 <code>trimToSize()</code> 把多余容量释放掉：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">list.trimToSize();     <span class="comment">// capacity 压缩到 size</span></span><br></pre></td></tr></table></figure>
+
+<p>注意：<code>trimToSize()</code> 会触发一次 <code>Arrays.copyOf</code>，且之后 <code>add</code> 又会重新扩容。<strong>只在”构建完成、之后不再修改”时调用</strong>。</p>
+<h3 id="9-2-大数据量处理"><a href="#9-2-大数据量处理" class="headerlink" title="9.2 大数据量处理"></a>9.2 大数据量处理</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 一次性加载 100 万条到内存</span></span><br><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">all</span> <span class="operator">=</span> deviceMapper.selectAll();      <span class="comment">// 可能 OOM</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 分页流式处理</span></span><br><span class="line"><span class="type">int</span> <span class="variable">pageSize</span> <span class="operator">=</span> <span class="number">2000</span>;</span><br><span class="line"><span class="keyword">for</span> (<span class="type">int</span> <span class="variable">page</span> <span class="operator">=</span> <span class="number">1</span>; ; page++) &#123;</span><br><span class="line">    <span class="type">List</span>&lt;Device&gt; <span class="variable">pageData</span> <span class="operator">=</span> deviceMapper.selectPage(page, pageSize);</span><br><span class="line">    <span class="keyword">if</span> (pageData.isEmpty()) <span class="keyword">break</span>;</span><br><span class="line">    process(pageData);                             <span class="comment">// 处理完该页即可被 GC</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 或者用游标（MyBatis Cursor）</span></span><br><span class="line"><span class="keyword">try</span> (<span class="type">Cursor</span>&lt;Device&gt; <span class="variable">cursor</span> <span class="operator">=</span> deviceMapper.scanAll()) &#123;</span><br><span class="line">    <span class="keyword">for</span> (Device d : cursor) &#123; process(d); &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="9-3-初始化时避免”边遍历边查库”"><a href="#9-3-初始化时避免”边遍历边查库”" class="headerlink" title="9.3 初始化时避免”边遍历边查库”"></a>9.3 初始化时避免”边遍历边查库”</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ N+1 查询 + List 反复重建</span></span><br><span class="line"><span class="type">List</span>&lt;DeviceVO&gt; <span class="variable">vos</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line"><span class="keyword">for</span> (Device d : devices) &#123;</span><br><span class="line">    vos.add(<span class="keyword">new</span> <span class="title class_">DeviceVO</span>(d, queryExtra(d.getId())));   <span class="comment">// 每次一个 SQL</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 批量查询后组装</span></span><br><span class="line"><span class="type">List</span>&lt;Long&gt; <span class="variable">ids</span> <span class="operator">=</span> devices.stream().map(Device::getId).collect(Collectors.toList());</span><br><span class="line"><span class="type">Map</span>&lt;Long, Extra&gt; <span class="variable">extraMap</span> <span class="operator">=</span> queryExtraBatch(ids);        <span class="comment">// 一条 SQL</span></span><br><span class="line"><span class="type">List</span>&lt;DeviceVO&gt; <span class="variable">vos</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(devices.size());    <span class="comment">// 预分配</span></span><br><span class="line"><span class="keyword">for</span> (Device d : devices) &#123;</span><br><span class="line">    vos.add(<span class="keyword">new</span> <span class="title class_">DeviceVO</span>(d, extraMap.get(d.getId())));</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h2 id="十、JDK-版本演进"><a href="#十、JDK-版本演进" class="headerlink" title="十、JDK 版本演进"></a>十、JDK 版本演进</h2><table>
+<thead>
+<tr>
+<th>版本</th>
+<th>变化</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>JDK 1.2</td>
+<td>ArrayList 诞生，作为 <code>Vector</code> 的非同步替代</td>
+</tr>
+<tr>
+<td>JDK 1.5</td>
+<td>引入泛型，<code>Object[] elementData</code> 变为泛型容器</td>
+</tr>
+<tr>
+<td>JDK 1.7</td>
+<td>无参构造直接 <code>new Object[10]</code>（<strong>饿汉式</strong>）</td>
+</tr>
+<tr>
+<td>JDK 1.8</td>
+<td>改为<strong>延迟初始化</strong> + 两个空数组常量区分；新增 <code>removeIf</code>、<code>forEach</code>、<code>stream</code></td>
+</tr>
+<tr>
+<td>JDK 9</td>
+<td>新增 <code>List.of()</code> 不可变工厂方法；<code>new ArrayList&lt;&gt;(0)</code> 等场景复用共享空数组</td>
+</tr>
+<tr>
+<td>JDK 11+</td>
+<td><code>toArray(T[]::new)</code> 等函数式写法</td>
+</tr>
+</tbody></table>
+<p><strong>JDK 7 → JDK 8 的改动值得单独说</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// JDK 7</span></span><br><span class="line"><span class="type">public</span> <span class="title function_">ArrayList</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="built_in">this</span>(<span class="number">10</span>);       <span class="comment">// 直接分配 10 个长度的数组</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// JDK 8</span></span><br><span class="line"><span class="type">public</span> <span class="title function_">ArrayList</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="built_in">this</span>.elementData = DEFAULTCAPACITY_EMPTY_ELEMENTDATA;   <span class="comment">// 共享的空数组，零开销</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>对于一个有大量空 List 字段的系统（典型如 ORM 查询结果里的空集合、JSON 反序列化后的空数组），这个改动能<strong>显著降低内存占用</strong>——因为所有空 ArrayList <strong>共享同一个静态空数组实例</strong>，而不是每个都持有一个 10 长度的数组。</p>
+<hr>
+<h2 id="十一、避坑清单"><a href="#十一、避坑清单" class="headerlink" title="十一、避坑清单"></a>十一、避坑清单</h2><p><strong>扩容与容量</strong></p>
+<ol>
+<li>✅ 已知元素数量时，构造时指定 <code>initialCapacity</code>（× 1.25 余量）</li>
+<li>✅ 长期持有且不再修改的大 List，调用 <code>trimToSize()</code></li>
+<li>❌ 不要在循环里 <code>new ArrayList&lt;&gt;()</code> 再 <code>addAll</code>，直接复用或预分配</li>
+<li>✅ <code>addAll</code> 大集合时无需担心，JDK 会一步扩到位</li>
+</ol>
+<p><strong>遍历与删除</strong><br>5. ❌ 禁止在 <code>foreach</code> 里调用 <code>list.remove()</code><br>6. ✅ 优先用 <code>removeIf</code>（O(n) 批量删除，且可读性最好）<br>7. ⚠️ 删除倒数第二个元素不抛 CME，但结果是错的——<strong>别靠”没报错”判断代码正确</strong><br>8. ✅ 需要按索引删除时用<strong>倒序</strong> for 循环</p>
+<p><strong>API 陷阱</strong><br>9. ❌ <code>Arrays.asList()</code> 返回的不是 <code>ArrayList</code>，不能 <code>add</code>&#x2F;<code>remove</code>；且 <code>set</code> 会改原数组<br>10. ❌ <code>subList()</code> 返回视图，不是副本；需要独立副本要 <code>new ArrayList&lt;&gt;(subList(...))</code><br>11. ❌ <code>clone()</code> 是浅拷贝，元素对象仍共享<br>12. ✅ <code>toArray()</code> 必须传入类型数组：<code>list.toArray(new String[0])</code></p>
+<p><strong>并发</strong><br>13. ❌ ArrayList 不是线程安全的，并发 <code>add</code> 会丢数据甚至越界<br>14. ❌ <code>fail-fast</code> 是 best-effort，不能当并发安全保证<br>15. ✅ 读多写极少 → <code>CopyOnWriteArrayList</code><br>16. ✅ 高频写并发 → <code>ConcurrentLinkedQueue</code> &#x2F; <code>LinkedBlockingQueue</code><br>17. ❌ 别用 <code>Vector</code></p>
+<p><strong>选型</strong><br>18. ✅ 默认选 ArrayList，绝大多数场景它比 LinkedList 快<br>19. ✅ 需要队列&#x2F;栈时选 <code>ArrayDeque</code> 而不是 <code>LinkedList</code><br>20. ✅ 元素数量巨大且内存敏感时，先算 ArrayList 与 LinkedList 的内存差（约 6 倍）</p>
+<hr>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>回到开头那个 3.2 秒的导出——根因不是数据库慢，是 ArrayList 扩容了 24 次，每次都要分配新数组、拷贝全部元素，并丢弃一个越来越大的旧数组。改一个构造参数就解决了。</p>
+<p>这篇文章的核心结论：</p>
+<ol>
+<li><strong><code>size</code> 和 <code>capacity</code> 是两回事</strong>，<code>capacity - size</code> 就是被浪费的内存，最多可达元素数的 50%。</li>
+<li><strong>两个空数组常量是为了区分创建方式</strong>：<code>new ArrayList&lt;&gt;()</code> 首次扩到 10，<code>new ArrayList&lt;&gt;(0)</code> 老实从 1 开始。这是用”对象身份”代替 boolean 字段的技巧。</li>
+<li><strong>扩容 1.5 倍不是拍脑袋</strong>：数学上增长因子必须 &lt; 黄金分割比 φ ≈ 1.618，旧数组内存才有机会被复用；2 倍做不到。</li>
+<li><strong><code>MAX_ARRAY_SIZE = Integer.MAX_VALUE - 8</code></strong> 减的 8 字节是给 JVM 数组对象头预留的。</li>
+<li><strong>均摊 O(1) ≠ 每次 O(1)</strong>：单次扩容仍是 O(n)，对延迟敏感的服务要预分配容量。</li>
+<li><strong><code>foreach</code> 删除抛 CME 的根因是 <code>modCount != expectedModCount</code></strong>；但删倒数第二个元素时 <code>hasNext()</code> 提前返回 false，不抛异常——<strong>静默错误比崩溃更危险</strong>。</li>
+<li><strong>LinkedList 几乎总是错的选择</strong>：内存占用 5~6 倍，且缓存局部性极差，实测常比 ArrayList 慢。</li>
+<li><strong><code>elementData</code> 用 <code>transient</code> + 自定义 <code>writeObject</code></strong>，是为了只序列化 <code>size</code> 个有效元素，而不是整个 <code>capacity</code>。</li>
+</ol>
+<p>一句话概括 ArrayList 的本质：<strong>它用”空间换时间”（预留容量）和”均摊”（1.5 倍增长）把动态数组做到接近静态数组的性能，代价是最多 50% 的内存浪费和偶发的 O(n) 扩容尖刺。理解这两笔账，就知道什么时候该预分配、什么时候该 trimToSize、什么时候该换个容器。</strong></p>
+<hr>
+<h2 id="相关阅读"><a href="#相关阅读" class="headerlink" title="相关阅读"></a>相关阅读</h2><ul>
+<li><a href="/2022/01/26/308f25db0e24/">HashMap底层原理——面试必问，开发必懂</a></li>
+<li><a href="/2022/07/15/86c0c8293db8/">Java并发基础——线程创建与同步机制</a></li>
+<li><a href="/2022/12/11/5cd426b3e1dd/">常见设计模式入门——从硬编码到设计模式</a></li>
+</ul>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2022/01/26/308f25db0e24/">HashMap底层原理——面试必问，开发必懂</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2022/02/01/a6e01e402827/">LinkedList底层原理——双向链表的真实面貌</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E9%9B%86%E5%90%88/" class="tag" aria-label="标签: #集合">#集合</a>
+            
+                <a href="/tags/ArrayList/" class="tag" aria-label="标签: #ArrayList">#ArrayList</a>
+            
+                <a href="/tags/%E6%BA%90%E7%A0%81/" class="tag" aria-label="标签: #源码">#源码</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2022/" aria-label="分类: 2022">
+                        2022
+                        <span>(75)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2022/Java%E5%9F%BA%E7%A1%80/" aria-label="分类: Java基础">
+                        Java基础
+                        <span>(32)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

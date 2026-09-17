@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>RocketMQ原理与实战——存储模型、事务消息与延迟消息深度解析 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2026/05/12/d8952f1c197b/">
+<meta name="description" content="MQ系列的原理补完篇。Kafka篇讲过高吞吐实战，本篇聚焦RocketMQ：它为什么选择CommitLog混合存储、ConsumeQueue如何加速消费、事务消息与延迟消息的底层实现，以及矿卡调度系统里”告警投递、设备状态同步、订单超时”三个场景的真实落地。一、定位：RocketMQ与Kafka的分野两者架构">
+
+<!-- Open Graph -->
+<meta property="og:title" content="RocketMQ原理与实战——存储模型、事务消息与延迟消息深度解析">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2026/05/12/d8952f1c197b/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="MQ系列的原理补完篇。Kafka篇讲过高吞吐实战，本篇聚焦RocketMQ：它为什么选择CommitLog混合存储、ConsumeQueue如何加速消费、事务消息与延迟消息的底层实现，以及矿卡调度系统里”告警投递、设备状态同步、订单超时”三个场景的真实落地。一、定位：RocketMQ与Kafka的分野两者架构">
+
+<meta property="article:published_time" content="2026-05-12T02:57:44.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="RocketMQ原理与实战——存储模型、事务消息与延迟消息深度解析">
+<meta name="twitter:description" content="MQ系列的原理补完篇。Kafka篇讲过高吞吐实战，本篇聚焦RocketMQ：它为什么选择CommitLog混合存储、ConsumeQueue如何加速消费、事务消息与延迟消息的底层实现，以及矿卡调度系统里”告警投递、设备状态同步、订单超时”三个场景的真实落地。一、定位：RocketMQ与Kafka的分野两者架构">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"RocketMQ原理与实战——存储模型、事务消息与延迟消息深度解析","description":"MQ系列的原理补完篇。Kafka篇讲过高吞吐实战，本篇聚焦RocketMQ：它为什么选择CommitLog混合存储、ConsumeQueue如何加速消费、事务消息与延迟消息的底层实现，以及矿卡调度系统里”告警投递、设备状态同步、订单超时”三个场景的真实落地。一、定位：RocketMQ与Kafka的分野两者架构","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2026-05-12T02:57:44.000Z","dateModified":"2026-05-12T02:57:44.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2026/05/12/d8952f1c197b/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2026-05-12T02:57:44.000Z">
+  <article class="post">
+    <h1 class="post-title">RocketMQ原理与实战——存储模型、事务消息与延迟消息深度解析</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2026-05-12T02:57:44.000Z">2026-05-12</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/">2026</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/%E4%B8%AD%E9%97%B4%E4%BB%B6/">中间件</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <blockquote>
+<p>MQ 系列的原理补完篇。Kafka 篇讲过高吞吐实战，本篇聚焦 RocketMQ：它为什么选择 CommitLog 混合存储、ConsumeQueue 如何加速消费、事务消息与延迟消息的底层实现，以及矿卡调度系统里”告警投递、设备状态同步、订单超时”三个场景的真实落地。</p>
+</blockquote>
+<h2 id="一、定位：RocketMQ-与-Kafka-的分野"><a href="#一、定位：RocketMQ-与-Kafka-的分野" class="headerlink" title="一、定位：RocketMQ 与 Kafka 的分野"></a>一、定位：RocketMQ 与 Kafka 的分野</h2><p>两者架构同源（顺序写 + 拉模式消费），选型差异在功能与场景：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>RocketMQ</th>
+<th>Kafka</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>事务消息</td>
+<td>原生支持（半消息+回查）</td>
+<td>无（需事务型 Producer 幂等配合，非真正事务）</td>
+</tr>
+<tr>
+<td>延迟消息</td>
+<td>原生支持（18个等级 &#x2F; 5.x 任意延迟）</td>
+<td>无原生支持</td>
+</tr>
+<tr>
+<td>消息重试&#x2F;死信</td>
+<td>原生支持（%RETRY%&#x2F;%DLQ% 主题）</td>
+<td>需自建</td>
+</tr>
+<tr>
+<td>消费模式</td>
+<td>队列内有序 + 重试</td>
+<td>分区内有序</td>
+</tr>
+<tr>
+<td>单机主题数</td>
+<td>数万个（ConsumeQueue 轻量）</td>
+<td>数百个（分区文件句柄瓶颈）</td>
+</tr>
+<tr>
+<td>典型场景</td>
+<td>业务消息（交易&#x2F;订单&#x2F;告警）</td>
+<td>日志流&#x2F;大数据管道</td>
+</tr>
+</tbody></table>
+<p>一句话：<strong>Kafka 是数据管道，RocketMQ 是业务消息中间件</strong>。业务系统要的事务、延迟、重试、死信，RocketMQ 全部原生给。</p>
+<h2 id="二、存储模型：CommitLog-与-ConsumeQueue-的分离设计"><a href="#二、存储模型：CommitLog-与-ConsumeQueue-的分离设计" class="headerlink" title="二、存储模型：CommitLog 与 ConsumeQueue 的分离设计"></a>二、存储模型：CommitLog 与 ConsumeQueue 的分离设计</h2><h3 id="2-1-核心结构"><a href="#2-1-核心结构" class="headerlink" title="2.1 核心结构"></a>2.1 核心结构</h3><pre class="mermaid">flowchart LR
+    P1[Producer] -->|所有Topic的消息| C[CommitLog<br>1GB/文件的单一追加日志]
+    C -->|异步ReputMessageService| Q1[ConsumeQueue topicA-queue0<br>定长20B索引条目]
+    C -->|异步构建| Q2[ConsumeQueue topicA-queue1]
+    C -->|异步构建| I[IndexFile<br>按Key/时间查询]
+    Q1 --> C1[Consumer Group A]
+    Q2 --> C1
+    I --> Q[Key查询]</pre>
+
+<p>设计精髓在”<strong>写路径极致简化 + 读路径索引化</strong>“：</p>
+<ul>
+<li><strong>CommitLog 是所有 Topic 共享的单一顺序文件</strong>。无论什么主题的消息，都追加写同一个文件序列——顺序写盘是磁盘最快的操作（SSD 上可打满 2GB&#x2F;s+）。如果每个 Topic 独立文件，Topic 数一多（业务系统几十个主题很正常），写入就变成随机写，Kafka 主题数上千后性能崩塌正是这个原因；</li>
+<li><strong>ConsumeQueue 是消费索引</strong>：每个 Topic 的每个队列一个文件，条目定长 20 字节（offset 8B + size 4B + tag hash 8B），消费者按位点直接 <code>mmap</code> 定位。CommitLog 里再按 offset 找到完整消息；</li>
+<li><strong>IndexFile 支撑按消息 Key 查询</strong>（如按订单号查消息），哈希槽 + 链表结构。</li>
+</ul>
+<p>这个分离的代价是<strong>读放大</strong>：消费一条消息要查 ConsumeQueue 再查 CommitLog，两次读。但受益于页缓存（PageCache）——热点消息都在内存里，实际读盘极少。这也解释了 RocketMQ 的一个生产铁律：<strong>ConsumeQueue 的 mmap 与 CommitLog 的 PageCache 是性能生命线，机器内存别抠</strong>。</p>
+<h3 id="2-2-刷盘与复制：可靠性档位"><a href="#2-2-刷盘与复制：可靠性档位" class="headerlink" title="2.2 刷盘与复制：可靠性档位"></a>2.2 刷盘与复制：可靠性档位</h3><table>
+<thead>
+<tr>
+<th>配置</th>
+<th>语义</th>
+<th>丢数据风险</th>
+<th>性能</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>同步刷盘 + 同步复制（SYNC_FLUSH + SYNC_MASTER）</td>
+<td>写入成功&#x3D;已落盘且至少两节点有副本</td>
+<td>几乎不丢</td>
+<td>最差（每条消息等磁盘）</td>
+</tr>
+<tr>
+<td>异步刷盘 + 同步复制</td>
+<td>写入成功&#x3D;已在主节点内存页缓存，副本已收到</td>
+<td>主机断电可能丢少量</td>
+<td>中</td>
+</tr>
+<tr>
+<td>异步刷盘 + 异步复制</td>
+<td>纯内存确认</td>
+<td>主节点故障可能丢</td>
+<td>最好</td>
+</tr>
+</tbody></table>
+<p><strong>业务消息的默认选择是异步刷盘 + 同步复制</strong>：磁盘故障由复制兜底，主机断电的小概率丢失由上层”对账 + 补偿”兜底——比同步刷盘快一个数量级，可靠性够用。同步刷盘留给”丢一条就出大事”的场景（交易资金类），且必须配合压测确认吞吐可承受。</p>
+<h3 id="2-3-PageCache-繁忙：RocketMQ-最经典的生产故障"><a href="#2-3-PageCache-繁忙：RocketMQ-最经典的生产故障" class="headerlink" title="2.3 PageCache 繁忙：RocketMQ 最经典的生产故障"></a>2.3 PageCache 繁忙：RocketMQ 最经典的生产故障</h3><p>CommitLog 写入依赖 PageCache，当消费冷数据（几小时前的消息）触发大量磁盘读、把 PageCache 挤掉时，写入路径从”内存写”退化成”磁盘读+写”，整个 Broker 卡顿——这就是 <code>PAGE_CACHE_BUSY</code> 告警。治理三板斧：<strong>冷热分离</strong>（历史数据 consumer 单独机器消费）、<strong>限制单个消费组的拉取频率</strong>、<strong>5.x 的冷读降级开关</strong>（<code>coldReadFlowControl</code>）。</p>
+<h2 id="三、事务消息：半消息与回查"><a href="#三、事务消息：半消息与回查" class="headerlink" title="三、事务消息：半消息与回查"></a>三、事务消息：半消息与回查</h2><h3 id="3-1-解决什么问题"><a href="#3-1-解决什么问题" class="headerlink" title="3.1 解决什么问题"></a>3.1 解决什么问题</h3><p>“本地事务 + 发消息”的原子性：扣库存成功但消息没发出去（下游永远不知道），或消息发了但本地事务回滚（下游白忙）。本地消息表方案（见已有实战篇）侵入业务代码；事务消息把这个模式下沉到 MQ，业务侧只留一个回查接口。</p>
+<h3 id="3-2-两阶段流程与回查"><a href="#3-2-两阶段流程与回查" class="headerlink" title="3.2 两阶段流程与回查"></a>3.2 两阶段流程与回查</h3><pre class="mermaid">sequenceDiagram
+    participant P as 生产者
+    participant B as Broker
+    participant L as 本地事务
+    participant C as 消费者
+    P->>B: 1. 发送半消息(对消费者不可见)
+    B-->>P: 半消息写入成功
+    P->>L: 2. 执行本地事务(扣库存)
+    alt 本地事务成功
+        P->>B: 3a. 提交半消息 → 消息可见
+        B->>C: 投递给消费者
+    else 本地事务失败
+        P->>B: 3b. 回滚半消息 → 删除
+    else 状态未知(网络断/超时)
+        B->>P: 4. 回查(最多15次,间隔递增)
+        P->>B: 5. 返回本地事务最终状态
+    end</pre>
+
+<h3 id="3-3-实现代码与三个纪律"><a href="#3-3-实现代码与三个纪律" class="headerlink" title="3.3 实现代码与三个纪律"></a>3.3 实现代码与三个纪律</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 生产端</span></span><br><span class="line"><span class="meta">@TransactionalTransactionListener</span> 不用注解，直接两件套：</span><br><span class="line"><span class="type">TransactionMQProducer</span> <span class="variable">producer</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TransactionMQProducer</span>(<span class="string">&quot;order-group&quot;</span>);</span><br><span class="line">producer.setTransactionListener(<span class="keyword">new</span> <span class="title class_">TransactionListener</span>() &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">LocalTransactionState</span> <span class="title function_">executeLocalTransaction</span><span class="params">(Message msg, Object arg)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            orderService.createWithDeduct((OrderBO) arg);   <span class="comment">// 本地事务</span></span><br><span class="line">            <span class="keyword">return</span> LocalTransactionState.COMMIT_MESSAGE;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            <span class="keyword">return</span> LocalTransactionState.ROLLBACK_MESSAGE;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 返回UNKNOW → 触发回查</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">LocalTransactionState</span> <span class="title function_">checkLocalTransaction</span><span class="params">(MessageExt msg)</span> &#123;</span><br><span class="line">        <span class="comment">// 回查：查本地事务的&quot;结果状态&quot;而不是重新执行</span></span><br><span class="line">        <span class="keyword">return</span> orderService.existsById(msg.getKeys())</span><br><span class="line">                ? LocalTransactionState.COMMIT_MESSAGE</span><br><span class="line">                : LocalTransactionState.ROLLBACK_MESSAGE;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<p>三个纪律，每条都是事故模式：<strong>回查必须查状态不能重新执行</strong>（重新执行会重复扣库存——回查接口是幂等查询，不是事务重试）；<strong>业务表必须有与消息关联的状态字段或唯一键</strong>（回查的依据，设计事务消息前先设计它）；<strong>回查 15 次仍 UNKNOWN 的消息被丢弃进预留目录</strong>，监控要覆盖这个目录（正常业务不应该出现，出现说明回查逻辑有 bug）。</p>
+<h3 id="3-4-与本地消息表的选型"><a href="#3-4-与本地消息表的选型" class="headerlink" title="3.4 与本地消息表的选型"></a>3.4 与本地消息表的选型</h3><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>事务消息</th>
+<th>本地消息表</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>业务侵入</td>
+<td>低（一个回查接口）</td>
+<td>高（建表+扫描任务）</td>
+</tr>
+<tr>
+<td>依赖</td>
+<td>绑定 RocketMQ</td>
+<td>只依赖本地 DB，MQ 可换</td>
+</tr>
+<tr>
+<td>一致性窗口</td>
+<td>回查间隙（秒级）</td>
+<td>扫描周期（可控）</td>
+</tr>
+<tr>
+<td>适用</td>
+<td>已用 RocketMQ 的团队</td>
+<td>需要 MQ 无关性&#x2F;跨 MQ 场景</td>
+</tr>
+</tbody></table>
+<h2 id="四、延迟消息：从等级制到任意延迟"><a href="#四、延迟消息：从等级制到任意延迟" class="headerlink" title="四、延迟消息：从等级制到任意延迟"></a>四、延迟消息：从等级制到任意延迟</h2><h3 id="4-1-4-x-的实现：SCHEDULE-TOPIC-XXXX-中转"><a href="#4-1-4-x-的实现：SCHEDULE-TOPIC-XXXX-中转" class="headerlink" title="4.1 4.x 的实现：SCHEDULE_TOPIC_XXXX 中转"></a>4.1 4.x 的实现：SCHEDULE_TOPIC_XXXX 中转</h3><p>4.x 支持 18 个固定等级（1s 5s 10s 30s 1m … 2h）。原理是<strong>时间换空间的中转主题</strong>：延迟消息先写入 <code>SCHEDULE_TOPIC_XXXX</code>（保留原 Topic&#x2F;QueueId 属性），定时任务按等级调度，到期后恢复属性写回原队列投递。<strong>所有延迟消息都在 CommitLog 里真实存储</strong>，等级越多文件越大——这就是 4.x 不开放任意延迟的约束来源。</p>
+<p>订单超时关闭场景（见订单超时设计篇）的标准用法：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">Message</span> <span class="variable">msg</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Message</span>(<span class="string">&quot;order-timeout&quot;</span>, orderId.getBytes());</span><br><span class="line">msg.setDelayTimeLevel(<span class="number">14</span>);   <span class="comment">// 等级14 = 10分钟</span></span><br><span class="line">producer.send(msg);</span><br><span class="line"><span class="comment">// 10分钟后消费者收到，检查订单状态，未支付则关闭</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="4-2-5-x-的任意延迟：时间轮-定时文件"><a href="#4-2-5-x-的任意延迟：时间轮-定时文件" class="headerlink" title="4.2 5.x 的任意延迟：时间轮 + 定时文件"></a>4.2 5.x 的任意延迟：时间轮 + 定时文件</h3><p>5.x 支持毫秒级任意延迟（最长 30 天），底层换成<strong>时间轮 + TimerWheel&#x2F;TimerLog</strong>：延迟消息先写 <code>rmq_sys_wheel_timer</code> 系统 Topic，时间轮按到期时间组织，到期后写回目标队列。改进的本质与 Netty 时间轮同源——<strong>用 O(1) 插入的哈希轮代替按等级枚举</strong>，延迟点从 18 个变成任意。</p>
+<p>选型提醒：订单超时用 4.x 等级 14（10min）完全够；精确到分钟的 SLA 承诺（如”15 分钟准点退款”）才需要 5.x 任意延迟，且要评估时间轮文件的增长与清理策略。</p>
+<h2 id="五、消费可靠性：重试、死信与位点"><a href="#五、消费可靠性：重试、死信与位点" class="headerlink" title="五、消费可靠性：重试、死信与位点"></a>五、消费可靠性：重试、死信与位点</h2><h3 id="5-1-重试队列与死信队列的自动流转"><a href="#5-1-重试队列与死信队列的自动流转" class="headerlink" title="5.1 重试队列与死信队列的自动流转"></a>5.1 重试队列与死信队列的自动流转</h3><p>消费失败的处理链路是 RocketMQ 原生的状态机：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">消费失败 → 重试队列 %RETRY%&#123;consumerGroup&#125;（延迟等级递增：10s 30s 1m 2m...最长2h）</span><br><span class="line">         → 重试16次仍失败 → 死信队列 %DLQ%&#123;consumerGroup&#125;</span><br><span class="line">         → 人工/定时任务介入处理</span><br></pre></td></tr></table></figure>
+
+<p>生产纪律三条：<strong>消费逻辑必须幂等</strong>（重试必然带来重复投递，这是 at-least-once 语义的代价）；<strong>死信必须有监控告警</strong>（死信&#x3D;业务受损，不是”最终一致性的一部分”）；<strong>禁止用重试掩盖 bug</strong>（NPE 反复重试 16 次毫无意义还放大故障，不可恢复异常直接记录 + 告警，别 retry）。</p>
+<h3 id="5-2-消费位点与重复消费的边界"><a href="#5-2-消费位点与重复消费的边界" class="headerlink" title="5.2 消费位点与重复消费的边界"></a>5.2 消费位点与重复消费的边界</h3><p>位点（offset）由消费组维护在 Broker 端。<code>CONSUME_FROM_LAST_OFFSET</code> 等语义只在<strong>首次上线</strong>时生效——消费组一旦提交过位点，换启动参数不会重放历史。需要”重放最近一小时数据”的运维动作：<code>resetOffsetByTime</code>（CLI&#x2F;控制台），配合消费暂停窗口执行。<strong>重放前必须确认消费逻辑幂等</strong>，否则重放&#x3D;重复业务动作（重放场景是幂等性的终极考验）。</p>
+<h2 id="六、矿卡调度系统的三个落地场景"><a href="#六、矿卡调度系统的三个落地场景" class="headerlink" title="六、矿卡调度系统的三个落地场景"></a>六、矿卡调度系统的三个落地场景</h2><p><strong>1. 告警投递（事务消息）</strong>。预警记录写库 + 推送消息（短信&#x2F;大屏&#x2F;MQTT 下发）用事务消息绑定：预警事务提交后消息才可见，回查接口查预警表状态。替代了此前的”写库后 send”模式，消灭了”库里有预警但推送丢失”的 3 起 P2 故障。</p>
+<p><strong>2. 设备状态同步（普通消息 + 顺序）</strong>。设备状态变更按 <code>MessageQueueSelector</code> 以 deviceId 哈希到固定队列，同一设备的状态演进（在线→作业→离线）严格有序；消费端单队列内天然有序，无需额外锁。</p>
+<p><strong>3. 订单超时（延迟消息）</strong>。见 4.1，与已有订单超时篇互为印证：延迟消息替代了原方案里的”ZSet 轮询”，少维护一套扫描器，代价是依赖 RocketMQ 的等级精度。</p>
+<h2 id="七、排障实战：从消息轨迹到积压定位"><a href="#七、排障实战：从消息轨迹到积压定位" class="headerlink" title="七、排障实战：从消息轨迹到积压定位"></a>七、排障实战：从消息轨迹到积压定位</h2><p>生产排障的核心是”<strong>一条消息的完整旅程可查</strong>“。RocketMQ 的消息轨迹（Message Trace）开启后记录生产&#x2F;存储&#x2F;消费三个阶段的轨迹点，但默认不开且有性能开销——推荐只对关键 Topic 开启（告警、交易类），日志类不开。轨迹之外，四条手工排障路径覆盖绝大多数工单：</p>
+<p><strong>1. “消费者说没收到消息”</strong>。按顺序查三层：消息是否真的发出（生产端 send 结果与 msgId）→ Broker 是否存储（<code>queryMsgById</code>，能看到消息状态与投递到的队列）→ 消费位点是否已越过（<code>consumerProgress</code> 看各队列的 brokerOffset&#x2F;consumerOffset&#x2F;diff）。最常见的真相是第三层：消费组订阅关系不一致（两个实例订阅了不同 Topic&#x2F;Tag），Broker 侧订阅组互相覆盖导致部分队列无人消费——这是 RocketMQ 排障第一高频问题，新消费者实例上线时订阅关系必须全组一致。</p>
+<p><strong>2. 消息重复消费</strong>。先确认 at-least-once 语义（重试必然重复，幂等是义务），再查真正的异常重复：Rebalance 期间位点提交滞后（长消费任务超过 maxRebalanceInterval，被 rebalance 后位点未提交，新消费者重投）。治理方向：单条消费时长控制（超长任务异步化 + 先提交位点语义评估）、<code>suspendingPullTime</code> 调整、消费幂等兜底（业务唯一键 + 去重表，见幂等设计篇）。</p>
+<p><strong>3. 积压定位三板斧</strong>。控制台看 diff 总量定级（万级观察、十万级干预、百万级应急预案）；按队列看 diff 分布（集中在个别队列 &#x3D; 单队列热点，典型于顺序消息按 Key 哈希后 Key 倾斜）；看消费 TPS 与生产 TPS 的差值判断趋势（收敛中还是恶化中）。扩容消费者时记住上限公式：<strong>消费并发 ≤ 队列数 × 每队列消费线程数</strong>，队列数不够时先扩队列（新 Topic 预设 16~32 队列是容量规划的一部分）。</p>
+<p><strong>4. 发送慢</strong>。Broker 端先看 <code>PAGE_CACHE_BUSY</code> 与磁盘 util（第二章的冷读问题），客户端看是否用了同步发送且 RTT 高（跨机房部署 RocketMQ 时同步发送的 RTT 直接叠加到业务延迟——<strong>生产者与 Broker 同机房</strong>是部署铁律）。</p>
+<h2 id="八、面试高频问题速答"><a href="#八、面试高频问题速答" class="headerlink" title="八、面试高频问题速答"></a>八、面试高频问题速答</h2><p><strong>Q1: RocketMQ 为什么用单一 CommitLog 而不是 Kafka 式分区文件？</strong><br>所有主题消息追加写同一文件序列，保证极致顺序写；消费索引由轻量的 ConsumeQueue 承担。Topic 数扩展时写路径不变，解决了 Kafka 多 Topic 文件句柄与随机写的瓶颈，代价是读放大（ConsumeQueue + CommitLog 两次定位）。</p>
+<p><strong>Q2: 事务消息的原理？</strong><br>半消息（消费者不可见）→ 本地事务 → 提交&#x2F;回滚半消息；状态未知时 Broker 主动回查（最多 15 次）。回查接口必须查”事务结果状态”而非重新执行，依赖业务表的事务状态字段。</p>
+<p><strong>Q3: 延迟消息怎么实现？</strong><br>4.x：18 个等级，消息先写 SCHEDULE_TOPIC 中转主题，定时任务到期后恢复属性投递，本质是真实存储换调度简单；5.x：时间轮 + 定时文件，支持任意毫秒延迟。</p>
+<p><strong>Q4: 如何保证消息不丢？</strong><br>三段各设防：生产端同步发送 + 失败重试；Broker 同步复制 + 按可靠性要求选刷盘；消费端手动 ACK（返回 CONSUME_SUCCESS 前完成业务）。任何一段用异步&#x2F;自动 ACK，就引入丢失窗口。</p>
+<p><strong>Q5: 消费积压怎么办？</strong><br>先定位是消费慢还是生产突增。消费慢：批量消费（List<MessageExt>）+ 提高消费并发度（受队列数限制，必要时扩队列）+ 下游扩容；生产突增：限流源头 + 临时扩容消费者 + 对可丢弃消息（如心跳&#x2F;统计）开丢弃。根治靠容量规划（见全链路压测篇）。</p>
+<h2 id="九、总结"><a href="#九、总结" class="headerlink" title="九、总结"></a>九、总结</h2><p>RocketMQ 的设计关键词是”<strong>业务友好</strong>“：CommitLog 分离存储把多 Topic 写入变成顺序写，事务消息把”本地事务+发消息”原子性下沉到中间件，延迟&#x2F;重试&#x2F;死信把业务消息的通用需求做成了原生能力。与 Kafka 的关系不是替代而是分工——数据管道归 Kafka，业务消息归 RocketMQ。选型的判断标准从来不是”哪个更强”，而是”你的消息长什么样子”。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2026/05/08/ead99bd14dd1/">2026面试场景题——高并发分布式篇（智慧矿山实战）</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2026/05/18/717bd0fd6a42/">2026面试场景题——系统设计篇（智慧矿山实战）</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/" class="tag" aria-label="标签: #分布式">#分布式</a>
+            
+                <a href="/tags/RocketMQ/" class="tag" aria-label="标签: #RocketMQ">#RocketMQ</a>
+            
+                <a href="/tags/MQ/" class="tag" aria-label="标签: #MQ">#MQ</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/" aria-label="分类: 2026">
+                        2026
+                        <span>(52)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E4%B8%AD%E9%97%B4%E4%BB%B6/" aria-label="分类: 中间件">
+                        中间件
+                        <span>(1)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

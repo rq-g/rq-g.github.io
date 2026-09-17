@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MyBatis批量操作深度优化——从逐条到批量 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2023/10/22/0a9ee1061a30/">
+<meta name="description" content="前言实际项目有个传感器数据导入功能，运维人员每月需要将采集设备导出的Excel数据（约2万条）导入系统。最初用逐条insert实现，2万条数据耗时5分钟，期间数据库连接池被打满，其他接口全部超时。后来逐步优化：拼接VALUES8秒、BatchExecutor6秒、BatchExecutor+rewriteBa">
+
+<!-- Open Graph -->
+<meta property="og:title" content="MyBatis批量操作深度优化——从逐条到批量">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2023/10/22/0a9ee1061a30/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言实际项目有个传感器数据导入功能，运维人员每月需要将采集设备导出的Excel数据（约2万条）导入系统。最初用逐条insert实现，2万条数据耗时5分钟，期间数据库连接池被打满，其他接口全部超时。后来逐步优化：拼接VALUES8秒、BatchExecutor6秒、BatchExecutor+rewriteBa">
+
+<meta property="article:published_time" content="2023-10-22T10:21:57.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="MyBatis批量操作深度优化——从逐条到批量">
+<meta name="twitter:description" content="前言实际项目有个传感器数据导入功能，运维人员每月需要将采集设备导出的Excel数据（约2万条）导入系统。最初用逐条insert实现，2万条数据耗时5分钟，期间数据库连接池被打满，其他接口全部超时。后来逐步优化：拼接VALUES8秒、BatchExecutor6秒、BatchExecutor+rewriteBa">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"MyBatis批量操作深度优化——从逐条到批量","description":"前言实际项目有个传感器数据导入功能，运维人员每月需要将采集设备导出的Excel数据（约2万条）导入系统。最初用逐条insert实现，2万条数据耗时5分钟，期间数据库连接池被打满，其他接口全部超时。后来逐步优化：拼接VALUES8秒、BatchExecutor6秒、BatchExecutor+rewriteBa","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2023-10-22T10:21:57.000Z","dateModified":"2023-10-22T10:21:57.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2023/10/22/0a9ee1061a30/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2023-10-22T10:21:57.000Z">
+  <article class="post">
+    <h1 class="post-title">MyBatis批量操作深度优化——从逐条到批量</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-10-22T10:21:57.000Z">2023-10-22</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/MyBatis%E6%BA%90%E7%A0%81/">MyBatis源码</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>实际项目有个传感器数据导入功能，运维人员每月需要将采集设备导出的Excel数据（约2万条）导入系统。最初用逐条insert实现，2万条数据耗时5分钟，期间数据库连接池被打满，其他接口全部超时。后来逐步优化：拼接VALUES 8秒、BatchExecutor 6秒、BatchExecutor+rewriteBatchedStatements 3秒。最终实现了500条&#x2F;批+分批提交+失败重试的完整方案，导入2万条数据稳定在3秒以内。</p>
+<p>这次优化让我深入理解了MyBatis批量操作的底层原理：逐条操作的网络往返和事务开销是性能杀手，拼接VALUES减少了网络往返，BatchExecutor利用JDBC的addBatch&#x2F;executeBatch只编译一次SQL，rewriteBatchedStatements让MySQL驱动自动将多条INSERT重写为多值INSERT，性能最优。</p>
+<h3 id="追根溯源：为什么”逐条”这么慢"><a href="#追根溯源：为什么”逐条”这么慢" class="headerlink" title="追根溯源：为什么”逐条”这么慢"></a>追根溯源：为什么”逐条”这么慢</h3><p>要理解批量为什么快，得先看清一次 <code>insert</code> 背后到底发生了什么。一条 SQL 从应用发到 MySQL 并落库，至少要经过四层开销：</p>
+<ol>
+<li><strong>网络往返（RTT）</strong>：应用与数据库通常不在同一进程，每次 <code>executeUpdate()</code> 都是一次”请求—响应”。即使内网，单次 RTT 也有 0.2~0.5ms。2 万条逐条插入 &#x3D; 2 万次 RTT，仅网络就吃掉近 10 秒。</li>
+<li><strong>SQL 解析与执行计划编译</strong>：MySQL 接到 SQL 后要先做词法&#x2F;语法解析、权限校验、生成执行计划。相同 SQL 反复解析是纯浪费——这正是 <code>prepareStatement</code> + 参数绑定的价值所在。</li>
+<li><strong>事务提交开销</strong>：每条独立 <code>insert</code> 若各自提交，要刷 redo log、binlog，fsync 落盘本身是毫秒级磁盘 IO。2 万次提交就是 2 万次 fsync。</li>
+<li><strong>连接获取与释放</strong>：每条都从连接池借还连接，连接池竞争会把其他业务请求也拖垮（我们当时就是连接池被打满导致接口全超时）。</li>
+</ol>
+<p><strong>核心认知</strong>：批量优化的本质，就是用”更少的网络往返 + 更少的 SQL 编译 + 更少的事务提交”去换同样的写入量。下面三套方案，本质上是在这三个维度上逐步做减法。</p>
+<h2 id="逐条操作的问题"><a href="#逐条操作的问题" class="headerlink" title="逐条操作的问题"></a>逐条操作的问题</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 逐条插入：2万次网络往返+2万次事务提交</span></span><br><span class="line"><span class="keyword">for</span> (SensorData data : sensorDataList) &#123;</span><br><span class="line">    sensorDataMapper.insert(data);</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 2万条 → 5分钟</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 问题分析：</span></span><br><span class="line"><span class="comment">// 1. 每次insert一次网络往返 → 2万次网络IO</span></span><br><span class="line"><span class="comment">// 2. 每次insert单独事务 → 2万次事务开启/提交</span></span><br><span class="line"><span class="comment">// 3. 每次insert解析一次SQL → 2万次SQL编译</span></span><br><span class="line"><span class="comment">// 4. 每次insert获取一次连接 → 连接池压力大</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="逐条操作性能瓶颈分析"><a href="#逐条操作性能瓶颈分析" class="headerlink" title="逐条操作性能瓶颈分析"></a>逐条操作性能瓶颈分析</h3><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    N1["逐条操作性能瓶颈2万条数据 网络往返20000次  0.5ms"]
+    N2["事务开销"]
+    N3["60  网络往返 30"]
+    N4["SQL编译 6  实际执行 4"]
+    N5["次  10s 事务开销20000次  1ms"]
+    N6["次  20s SQL编译 20000次  0.1ms"]
+    N7["次  2s 参数设置20000次  0.01ms"]
+    N8["次  0.2s 实际执行20000次  0.05ms"]
+    N1 --> N2
+    N1 --> N3
+    N1 --> N4
+    N5 --> N2
+    N5 --> N3
+    N5 --> N4
+    N6 --> N2
+    N6 --> N3
+    N6 --> N4
+    N7 --> N2
+    N7 --> N3
+    N7 --> N4
+    N8 --> N2
+    N8 --> N3
+    N8 --> N4</pre>
+
+<h2 id="优化方案1：拼接VALUES"><a href="#优化方案1：拼接VALUES" class="headerlink" title="优化方案1：拼接VALUES"></a>优化方案1：拼接VALUES</h2><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">&lt;!-- 批量插入：一条SQL插入多行 --&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">insert</span> <span class="attr">id</span>=<span class="string">&quot;batchInsert&quot;</span>&gt;</span></span><br><span class="line">    INSERT INTO sensor_data_$&#123;month&#125; </span><br><span class="line">        (device_id, sensor_value, collect_time)</span><br><span class="line">    VALUES</span><br><span class="line">    <span class="tag">&lt;<span class="name">foreach</span> <span class="attr">collection</span>=<span class="string">&quot;list&quot;</span> <span class="attr">item</span>=<span class="string">&quot;item&quot;</span> <span class="attr">separator</span>=<span class="string">&quot;,&quot;</span>&gt;</span></span><br><span class="line">        (#&#123;item.deviceId&#125;, #&#123;item.sensorValue&#125;, #&#123;item.collectTime&#125;)</span><br><span class="line">    <span class="tag">&lt;/<span class="name">foreach</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">insert</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 分批执行，每批500条</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">batchInsert</span><span class="params">(List&lt;SensorData&gt; dataList)</span> &#123;</span><br><span class="line">    <span class="type">List</span>&lt;List&lt;SensorData&gt;&gt; <span class="variable">batches</span> <span class="operator">=</span> Lists.partition(dataList, <span class="number">500</span>);</span><br><span class="line">    <span class="keyword">for</span> (List&lt;SensorData&gt; batch : batches) &#123;</span><br><span class="line">        sensorDataMapper.batchInsert(batch);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="拼接VALUES性能分析"><a href="#拼接VALUES性能分析" class="headerlink" title="拼接VALUES性能分析"></a>拼接VALUES性能分析</h3><p><strong>拼接VALUES性能分析（2万条数据，500条&#x2F;批）</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>开销项</th>
+<th>次数</th>
+<th>单次耗时</th>
+<th>合计</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>网络往返</td>
+<td>40次</td>
+<td>0.5ms</td>
+<td>0.02s</td>
+</tr>
+<tr>
+<td>事务开销</td>
+<td>40次</td>
+<td>1ms</td>
+<td>0.04s</td>
+</tr>
+<tr>
+<td>SQL编译</td>
+<td>40次</td>
+<td>0.2ms</td>
+<td>0.008s</td>
+</tr>
+<tr>
+<td>参数设置</td>
+<td>20000次</td>
+<td>0.01ms</td>
+<td>0.2s</td>
+</tr>
+<tr>
+<td>实际执行</td>
+<td>40次</td>
+<td>150ms</td>
+<td>6s</td>
+</tr>
+<tr>
+<td><strong>总计</strong></td>
+<td></td>
+<td></td>
+<td><strong>约8s</strong></td>
+</tr>
+</tbody></table>
+<p>对比逐条：8s vs 300s，<strong>提升37.5倍</strong>。大头是”实际执行”——即使批量，MySQL写入磁盘的开销省不掉，批量省的是往返、编译和事务这层”手续”。</p>
+<p><strong>三个注意事项</strong>：</p>
+<ol>
+<li><strong>max_allowed_packet 限制</strong>（默认4MB）：单条SQL超限直接报 <code>SQLSyntaxErrorException</code>，提前调大：</li>
+</ol>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> max_allowed_packet <span class="operator">=</span> <span class="number">64</span>M;</span><br></pre></td></tr></table></figure>
+<ol start="2">
+<li><strong>分批大小建议500~1000条</strong>：SQL文本过长反而降低解析效率，还会放大第1条的风险。</li>
+<li><strong>拼接VALUES与Batch Executor的取舍</strong>：拼接VALUES一条SQL解决、速度快，但SQL长度不可控；Batch Executor稳妥、可控，但依赖JDBC批次机制（建议同时开 <code>rewriteBatchedStatements=true</code>，否则MySQL驱动仍是逐条发送）。</li>
+</ol>
+<h2 id="优化方案2：Batch-Executor"><a href="#优化方案2：Batch-Executor" class="headerlink" title="优化方案2：Batch Executor"></a>优化方案2：Batch Executor</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// MyBatis的BatchExecutor：JDBC的addBatch+executeBatch</span></span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BatchSensorDataService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlSessionFactory sqlSessionFactory;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">batchInsert</span><span class="params">(List&lt;SensorData&gt; dataList)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> (<span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession(ExecutorType.BATCH)) &#123;</span><br><span class="line">            <span class="type">SensorDataMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> session.getMapper(SensorDataMapper.class);</span><br><span class="line"></span><br><span class="line">            <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; dataList.size(); i++) &#123;</span><br><span class="line">                mapper.insert(dataList.get(i));</span><br><span class="line">                <span class="keyword">if</span> (i % <span class="number">500</span> == <span class="number">0</span> || i == dataList.size() - <span class="number">1</span>) &#123;</span><br><span class="line">                    session.flushStatements();  <span class="comment">// 批量提交</span></span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">            session.commit();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="BatchExecutor源码分析"><a href="#BatchExecutor源码分析" class="headerlink" title="BatchExecutor源码分析"></a>BatchExecutor源码分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BatchExecutor — 批量执行器</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BatchExecutor</span> <span class="keyword">extends</span> <span class="title class_">BaseExecutor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">List</span>&lt;Statement&gt; <span class="variable">statementList</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">List</span>&lt;BatchResult&gt; <span class="variable">batchResultList</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    <span class="keyword">private</span> String currentSql;</span><br><span class="line">    <span class="keyword">private</span> MappedStatement currentStatement;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">doUpdate</span><span class="params">(MappedStatement ms, Object parameterObject)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">        <span class="keyword">final</span> <span class="type">Configuration</span> <span class="variable">configuration</span> <span class="operator">=</span> ms.getConfiguration();</span><br><span class="line">        <span class="keyword">final</span> <span class="type">StatementHandler</span> <span class="variable">handler</span> <span class="operator">=</span> configuration.newStatementHandler(</span><br><span class="line">            <span class="built_in">this</span>, ms, parameterObject, RowBounds.DEFAULT, <span class="literal">null</span>, <span class="literal">null</span>);</span><br><span class="line">        <span class="keyword">final</span> <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> handler.getBoundSql();</span><br><span class="line">        <span class="keyword">final</span> <span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> boundSql.getSql();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 判断是否与上一条SQL相同</span></span><br><span class="line">        <span class="keyword">if</span> (sql.equals(currentSql) &amp;&amp; ms.equals(currentStatement)) &#123;</span><br><span class="line">            <span class="comment">// SQL相同 → 复用Statement，addBatch</span></span><br><span class="line">            <span class="type">int</span> <span class="variable">batchIndex</span> <span class="operator">=</span> statementList.size() - <span class="number">1</span>;</span><br><span class="line">            handler.batch(statementList.get(batchIndex));</span><br><span class="line">            batchResultList.get(batchIndex).addParameterObject(parameterObject);</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">// SQL不同 → 创建新Statement</span></span><br><span class="line">            <span class="type">Statement</span> <span class="variable">stmt</span> <span class="operator">=</span> prepareStatement(handler, ms.getStatementLog());</span><br><span class="line">            handler.batch(stmt);</span><br><span class="line">            currentSql = sql;</span><br><span class="line">            currentStatement = ms;</span><br><span class="line">            statementList.add(stmt);</span><br><span class="line">            batchResultList.add(<span class="keyword">new</span> <span class="title class_">BatchResult</span>(ms, sql, parameterObject));</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> BatchResult.BATCH_UPDATE_RETURN_VALUE;  <span class="comment">// 返回特殊值</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">List</span>&lt;BatchResult&gt; <span class="title function_">doFlushStatements</span><span class="params">(<span class="type">boolean</span> isRollback)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">        <span class="type">List</span>&lt;BatchResult&gt; <span class="variable">results</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">        <span class="keyword">if</span> (isRollback) &#123;</span><br><span class="line">            <span class="comment">// 回滚 → 丢弃所有批量操作</span></span><br><span class="line">            <span class="keyword">for</span> (Statement stmt : statementList) &#123;</span><br><span class="line">                stmt.close();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">// 提交 → 执行所有批量操作</span></span><br><span class="line">            <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; statementList.size(); i++) &#123;</span><br><span class="line">                <span class="type">Statement</span> <span class="variable">stmt</span> <span class="operator">=</span> statementList.get(i);</span><br><span class="line">                <span class="type">BatchResult</span> <span class="variable">batchResult</span> <span class="operator">=</span> batchResultList.get(i);</span><br><span class="line">                <span class="keyword">try</span> &#123;</span><br><span class="line">                    <span class="comment">// 真正执行批量操作</span></span><br><span class="line">                    batchResult.setUpdateCounts(stmt.executeBatch());</span><br><span class="line">                    results.add(batchResult);</span><br><span class="line">                &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                    stmt.close();</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 清空状态</span></span><br><span class="line">        currentSql = <span class="literal">null</span>;</span><br><span class="line">        currentStatement = <span class="literal">null</span>;</span><br><span class="line">        statementList.clear();</span><br><span class="line">        batchResultList.clear();</span><br><span class="line">        <span class="keyword">return</span> results;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="BatchExecutor执行原理图"><a href="#BatchExecutor执行原理图" class="headerlink" title="BatchExecutor执行原理图"></a>BatchExecutor执行原理图</h3><p><strong>BatchExecutor 执行原理</strong>（同一 SQL 复用同一个 PreparedStatement，参数只 <code>addBatch</code> 不立即发送）：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 1. 第一次 insert：创建 PreparedStatement 并缓存参数</span></span><br><span class="line"><span class="type">PreparedStatement</span> <span class="variable">ps1</span> <span class="operator">=</span> conn.prepareStatement(</span><br><span class="line">    <span class="string">&quot;INSERT INTO sensor_data(device_id,value,time) VALUES(?,?,?)&quot;</span>);</span><br><span class="line">ps1.setString(<span class="number">1</span>, <span class="string">&quot;SENSOR_001&quot;</span>);</span><br><span class="line">ps1.setBigDecimal(<span class="number">2</span>, <span class="keyword">new</span> <span class="title class_">BigDecimal</span>(<span class="string">&quot;36.5&quot;</span>));</span><br><span class="line">ps1.setTimestamp(<span class="number">3</span>, Timestamp.valueOf(<span class="string">&quot;2023-03-01 10:00:00&quot;</span>));</span><br><span class="line">ps1.addBatch();  <span class="comment">// 添加到批处理队列，不立即发送</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 2. 第二次 insert（SQL 相同，复用同一个 ps1）</span></span><br><span class="line">ps1.setString(<span class="number">1</span>, <span class="string">&quot;SENSOR_002&quot;</span>);</span><br><span class="line">ps1.setBigDecimal(<span class="number">2</span>, <span class="keyword">new</span> <span class="title class_">BigDecimal</span>(<span class="string">&quot;37.2&quot;</span>));</span><br><span class="line">ps1.setTimestamp(<span class="number">3</span>, Timestamp.valueOf(<span class="string">&quot;2023-03-01 10:00:01&quot;</span>));</span><br><span class="line">ps1.addBatch();  <span class="comment">// 继续追加，仍不发送</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 3. ... 第 500 次 insert，同样 addBatch() ...</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 4. flushStatements()：一次性把整批参数发送到数据库</span></span><br><span class="line"><span class="type">int</span>[] <span class="variable">results</span> <span class="operator">=</span> ps1.executeBatch();  <span class="comment">// 网络只往返一次</span></span><br><span class="line">ps1.clearBatch();</span><br></pre></td></tr></table></figure>
+
+<p><strong>优点</strong>：只编译一次 SQL，多次设置参数，一次网络发送。<br><strong>缺点</strong>：不支持 SELECT；<code>insert</code> 的返回值是 <code>BATCH_UPDATE_RETURN_VALUE</code>，而非受影响行数。</p>
+<h2 id="优化方案3：rewriteBatchedStatements"><a href="#优化方案3：rewriteBatchedStatements" class="headerlink" title="优化方案3：rewriteBatchedStatements"></a>优化方案3：rewriteBatchedStatements</h2><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># MySQL JDBC参数：rewriteBatchedStatements=true</span></span><br><span class="line"><span class="comment"># 将addBatch自动重写为多值INSERT</span></span><br><span class="line"></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">url:</span> <span class="string">jdbc:mysql://localhost:3306/mine_db?rewriteBatchedStatements=true&amp;useServerPrepStmts=false</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 开启rewriteBatchedStatements后</span></span><br><span class="line"><span class="comment">// JDBC驱动自动将：</span></span><br><span class="line"><span class="comment">// INSERT INTO sensor_data(device_id,value,time) VALUES(?,?,?)</span></span><br><span class="line"><span class="comment">// INSERT INTO sensor_data(device_id,value,time) VALUES(?,?,?)</span></span><br><span class="line"><span class="comment">// INSERT INTO sensor_data(device_id,value,time) VALUES(?,?,?)</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 重写为：</span></span><br><span class="line"><span class="comment">// INSERT INTO sensor_data(device_id,value,time) VALUES(?,?,?),(?,?,?),(?,?,?)</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 配合BatchExecutor使用，性能最优</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="rewriteBatchedStatements原理"><a href="#rewriteBatchedStatements原理" class="headerlink" title="rewriteBatchedStatements原理"></a>rewriteBatchedStatements原理</h3><p>开启 <code>rewriteBatchedStatements=true</code> 后，MySQL JDBC 驱动（<code>com.mysql.cj.jdbc.ClientPreparedStatement</code>）会在 <code>executeBatch()</code> 时做一层”重写”：</p>
+<ul>
+<li><code>addBatch()</code> 不再立即发送给数据库，而是<strong>缓存在 JDBC 驱动内存中</strong>；</li>
+<li>累积到一定数量、或调用 <code>executeBatch()</code> 时，驱动检查这批 SQL 是否是多值 INSERT；</li>
+<li>若是，则把多条 <code>INSERT ... VALUES(?,?,?)</code> <strong>重写合并成一条</strong> <code>INSERT ... VALUES(?,?,?),(?,?,?),(?,?,?)</code> 再发送；</li>
+<li>这样数据库只接收一条 SQL、只编译一次执行计划，网络往返也从 40 次降到 1 次。</li>
+</ul>
+<blockquote>
+<p>注意：<code>rewriteBatchedStatements</code> <strong>只对 INSERT 生效，对 UPDATE&#x2F;DELETE 不生效</strong>（UPDATE&#x2F;DELETE 仍逐条发送，无法重写）。并且必须配合 <code>useServerPrepStmts=false</code>——因为服务端预编译（server-side prepared statement）不支持重写，只能用客户端预编译。</p>
+</blockquote>
+<p><strong>性能提升来源小结</strong>：</p>
+<ol>
+<li>网络往返：40 次 → 1 次；</li>
+<li>SQL编译：40 次 → 1 次；</li>
+<li>事务提交：1 次。</li>
+</ol>
+<h2 id="批量更新"><a href="#批量更新" class="headerlink" title="批量更新"></a>批量更新</h2><h3 id="CASE-WHEN方式"><a href="#CASE-WHEN方式" class="headerlink" title="CASE WHEN方式"></a>CASE WHEN方式</h3><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="tag">&lt;<span class="name">update</span> <span class="attr">id</span>=<span class="string">&quot;batchUpdateStatus&quot;</span>&gt;</span></span><br><span class="line">    UPDATE device SET</span><br><span class="line">    status = CASE id</span><br><span class="line">        <span class="tag">&lt;<span class="name">foreach</span> <span class="attr">collection</span>=<span class="string">&quot;list&quot;</span> <span class="attr">item</span>=<span class="string">&quot;item&quot;</span>&gt;</span></span><br><span class="line">            WHEN #&#123;item.id&#125; THEN #&#123;item.status&#125;</span><br><span class="line">        <span class="tag">&lt;/<span class="name">foreach</span>&gt;</span></span><br><span class="line">    END,</span><br><span class="line">    last_check_date = CASE id</span><br><span class="line">        <span class="tag">&lt;<span class="name">foreach</span> <span class="attr">collection</span>=<span class="string">&quot;list&quot;</span> <span class="attr">item</span>=<span class="string">&quot;item&quot;</span>&gt;</span></span><br><span class="line">            WHEN #&#123;item.id&#125; THEN #&#123;item.lastCheckDate&#125;</span><br><span class="line">        <span class="tag">&lt;/<span class="name">foreach</span>&gt;</span></span><br><span class="line">    END</span><br><span class="line">    WHERE id IN</span><br><span class="line">    <span class="tag">&lt;<span class="name">foreach</span> <span class="attr">collection</span>=<span class="string">&quot;list&quot;</span> <span class="attr">item</span>=<span class="string">&quot;item&quot;</span> <span class="attr">open</span>=<span class="string">&quot;(&quot;</span> <span class="attr">separator</span>=<span class="string">&quot;,&quot;</span> <span class="attr">close</span>=<span class="string">&quot;)&quot;</span>&gt;</span></span><br><span class="line">        #&#123;item.id&#125;</span><br><span class="line">    <span class="tag">&lt;/<span class="name">foreach</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">update</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="逐条更新-BatchExecutor"><a href="#逐条更新-BatchExecutor" class="headerlink" title="逐条更新+BatchExecutor"></a>逐条更新+BatchExecutor</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">batchUpdate</span><span class="params">(List&lt;Device&gt; devices)</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> (<span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession(ExecutorType.BATCH)) &#123;</span><br><span class="line">        <span class="type">DeviceMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> session.getMapper(DeviceMapper.class);</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; devices.size(); i++) &#123;</span><br><span class="line">            mapper.updateById(devices.get(i));</span><br><span class="line">            <span class="keyword">if</span> (i % <span class="number">500</span> == <span class="number">0</span> || i == devices.size() - <span class="number">1</span>) &#123;</span><br><span class="line">                session.flushStatements();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        session.commit();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="批量更新方式对比"><a href="#批量更新方式对比" class="headerlink" title="批量更新方式对比"></a>批量更新方式对比</h3><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    N1["网络往返少 缺点SQL长度随数据量增长"]
+    N2["更新字段多时SQL更复杂"]
+    N3["UPDATE device SET"]
+    N4["statusA WHERE"]
+    N5["id1 UPDATE device"]
+    N6["SET statusB WHERE"]
+    N7["id2"]
+    N8["addBatch"]
+    N9["executeBatch 优点SQL简单"]
+    N10["适用任何更新场景 缺点rewriteBatchedStatements对UPDATE不生效"]
+    N11["适合大批量更新 缺点需要创建临时表"]
+    N12["复杂度高"]
+    N1 --> N2
+    N2 --> N1
+    N1 --> N3
+    N1 --> N4
+    N1 --> N5
+    N1 --> N6
+    N1 --> N7
+    N2 --> N3
+    N2 --> N4
+    N2 --> N5
+    N2 --> N6
+    N2 --> N7
+    N3 --> N8
+    N4 --> N8
+    N5 --> N8
+    N6 --> N8
+    N7 --> N8
+    N8 --> N9
+    N8 --> N10
+    N9 --> N11
+    N9 --> N12
+    N10 --> N11
+    N10 --> N12</pre>
+
+<h2 id="批量删除"><a href="#批量删除" class="headerlink" title="批量删除"></a>批量删除</h2><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="tag">&lt;<span class="name">delete</span> <span class="attr">id</span>=<span class="string">&quot;batchDelete&quot;</span>&gt;</span></span><br><span class="line">    DELETE FROM device WHERE id IN</span><br><span class="line">    <span class="tag">&lt;<span class="name">foreach</span> <span class="attr">collection</span>=<span class="string">&quot;list&quot;</span> <span class="attr">item</span>=<span class="string">&quot;id&quot;</span> <span class="attr">open</span>=<span class="string">&quot;(&quot;</span> <span class="attr">separator</span>=<span class="string">&quot;,&quot;</span> <span class="attr">close</span>=<span class="string">&quot;)&quot;</span>&gt;</span></span><br><span class="line">        #&#123;id&#125;</span><br><span class="line">    <span class="tag">&lt;/<span class="name">foreach</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">delete</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="Oracle-IN列表超1000限制处理"><a href="#Oracle-IN列表超1000限制处理" class="headerlink" title="Oracle IN列表超1000限制处理"></a>Oracle IN列表超1000限制处理</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Oracle不支持IN列表超过1000个元素</span></span><br><span class="line"><span class="comment">// 解决方案：分批处理 + OR连接</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 方式1：Java层分批</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">batchDelete</span><span class="params">(List&lt;Long&gt; ids)</span> &#123;</span><br><span class="line">    Lists.partition(ids, <span class="number">1000</span>).forEach(batch -&gt; &#123;</span><br><span class="line">        deviceMapper.batchDelete(batch);</span><br><span class="line">    &#125;);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方式2：XML中使用OR连接</span></span><br><span class="line"><span class="comment">// WHERE (id IN (1,2,...,999) OR id IN (1000,1001,...,1999))</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="性能对比"><a href="#性能对比" class="headerlink" title="性能对比"></a>性能对比</h2><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>2万条耗时</th>
+<th>网络往返</th>
+<th>适用场景</th>
+<th>限制</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>逐条insert</td>
+<td>300秒</td>
+<td>20000次</td>
+<td>不推荐</td>
+<td>性能极差</td>
+</tr>
+<tr>
+<td>拼接VALUES</td>
+<td>8秒</td>
+<td>40次</td>
+<td>通用</td>
+<td>max_allowed_packet限制</td>
+</tr>
+<tr>
+<td>BatchExecutor</td>
+<td>12秒</td>
+<td>40次</td>
+<td>需统一事务</td>
+<td>不支持SELECT</td>
+</tr>
+<tr>
+<td>Batch+rewrite</td>
+<td>3秒</td>
+<td>1次</td>
+<td>最优方案</td>
+<td>仅MySQL</td>
+</tr>
+</tbody></table>
+<h3 id="性能优化路径图"><a href="#性能优化路径图" class="headerlink" title="性能优化路径图"></a>性能优化路径图</h3><p><strong>批量操作性能优化路径</strong>：</p>
+<ul>
+<li>300s (逐条)</li>
+<li>优化：拼接VALUES，减少网络往返</li>
+<li>↓</li>
+<li>8s (拼接VALUES)</li>
+<li>优化：BatchExecutor，只编译一次SQL</li>
+<li>↓</li>
+<li>6s (BatchExecutor)</li>
+<li>优化：rewriteBatchedStatements，自动重写为多值INSERT</li>
+<li>↓</li>
+<li>3s (Batch+rewrite) ← 最终方案</li>
+<li>优化倍数：300s → 3s &#x3D; 100倍提升</li>
+<li>实际项目最终方案：</li>
+<li>BatchExecutor + rewriteBatchedStatements + 500条&#x2F;批</li>
+<li><ul>
+<li>分批提交 + 失败重试 + 导入结果记录</li>
+</ul>
+</li>
+</ul>
+<h2 id="实战：传感器数据Excel导入优化"><a href="#实战：传感器数据Excel导入优化" class="headerlink" title="实战：传感器数据Excel导入优化"></a>实战：传感器数据Excel导入优化</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SensorDataImportService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlSessionFactory sqlSessionFactory;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SensorDataMapper sensorDataMapper;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlParamValidator paramValidator;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">ImportResult</span> <span class="title function_">importFromExcel</span><span class="params">(MultipartFile file, String month)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 校验分表参数</span></span><br><span class="line">        paramValidator.validateMonth(month);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 2. 解析Excel（流式读取，避免OOM）</span></span><br><span class="line">        <span class="type">List</span>&lt;SensorData&gt; <span class="variable">dataList</span> <span class="operator">=</span> parseExcel(file);</span><br><span class="line">        <span class="type">int</span> <span class="variable">total</span> <span class="operator">=</span> dataList.size();</span><br><span class="line">        <span class="type">int</span> <span class="variable">success</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">        <span class="type">int</span> <span class="variable">fail</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">        <span class="type">List</span>&lt;String&gt; <span class="variable">errors</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 按主键排序，避免死锁</span></span><br><span class="line">        dataList.sort(Comparator.comparing(SensorData::getDeviceId)</span><br><span class="line">            .thenComparing(SensorData::getCollectTime));</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 4. 分批处理</span></span><br><span class="line">        <span class="type">List</span>&lt;List&lt;SensorData&gt;&gt; <span class="variable">batches</span> <span class="operator">=</span> Lists.partition(dataList, <span class="number">500</span>);</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">batchIndex</span> <span class="operator">=</span> <span class="number">0</span>; batchIndex &lt; batches.size(); batchIndex++) &#123;</span><br><span class="line">            <span class="type">List</span>&lt;SensorData&gt; <span class="variable">batch</span> <span class="operator">=</span> batches.get(batchIndex);</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                batchInsert(batch, month);</span><br><span class="line">                success += batch.size();</span><br><span class="line">                log.info(<span class="string">&quot;[导入进度] 成功: &#123;&#125;/&#123;&#125;&quot;</span>, success, total);</span><br><span class="line">            &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">                <span class="comment">// 批量失败 → 逐条重试</span></span><br><span class="line">                log.warn(<span class="string">&quot;[导入] 第&#123;&#125;批失败，逐条重试&quot;</span>, batchIndex + <span class="number">1</span>, e);</span><br><span class="line">                <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; batch.size(); i++) &#123;</span><br><span class="line">                    <span class="keyword">try</span> &#123;</span><br><span class="line">                        sensorDataMapper.insert(batch.get(i));</span><br><span class="line">                        success++;</span><br><span class="line">                    &#125; <span class="keyword">catch</span> (Exception ex) &#123;</span><br><span class="line">                        fail++;</span><br><span class="line">                        errors.add(String.format(<span class="string">&quot;第%d行: %s&quot;</span>, </span><br><span class="line">                            batchIndex * <span class="number">500</span> + i + <span class="number">1</span>, ex.getMessage()));</span><br><span class="line">                    &#125;</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> ImportResult.builder()</span><br><span class="line">            .total(total).success(success).fail(fail).errors(errors)</span><br><span class="line">            .build();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">void</span> <span class="title function_">batchInsert</span><span class="params">(List&lt;SensorData&gt; dataList, String month)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> (<span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession(ExecutorType.BATCH)) &#123;</span><br><span class="line">            ShardingContextHolder.set(<span class="keyword">new</span> <span class="title class_">ShardingContext</span>(month, <span class="literal">null</span>, <span class="literal">null</span>));</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                <span class="type">SensorDataMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> session.getMapper(SensorDataMapper.class);</span><br><span class="line">                <span class="keyword">for</span> (SensorData data : dataList) &#123;</span><br><span class="line">                    mapper.insert(data);</span><br><span class="line">                &#125;</span><br><span class="line">                session.flushStatements();</span><br><span class="line">                session.commit();</span><br><span class="line">            &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                ShardingContextHolder.clear();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 流式读取Excel，避免大文件OOM</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">List</span>&lt;SensorData&gt; <span class="title function_">parseExcel</span><span class="params">(MultipartFile file)</span> &#123;</span><br><span class="line">        <span class="type">List</span>&lt;SensorData&gt; <span class="variable">result</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">        <span class="keyword">try</span> (<span class="type">InputStream</span> <span class="variable">is</span> <span class="operator">=</span> file.getInputStream();</span><br><span class="line">             <span class="type">Workbook</span> <span class="variable">workbook</span> <span class="operator">=</span> WorkbookFactory.create(is)) &#123;</span><br><span class="line">            <span class="type">Sheet</span> <span class="variable">sheet</span> <span class="operator">=</span> workbook.getSheetAt(<span class="number">0</span>);</span><br><span class="line">            <span class="keyword">for</span> (Row row : sheet) &#123;</span><br><span class="line">                <span class="keyword">if</span> (row.getRowNum() == <span class="number">0</span>) <span class="keyword">continue</span>;  <span class="comment">// 跳过表头</span></span><br><span class="line">                <span class="keyword">try</span> &#123;</span><br><span class="line">                    <span class="type">SensorData</span> <span class="variable">data</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">SensorData</span>();</span><br><span class="line">                    data.setDeviceId(getStringCellValue(row, <span class="number">0</span>));</span><br><span class="line">                    data.setSensorValue(getBigDecimalCellValue(row, <span class="number">1</span>));</span><br><span class="line">                    data.setCollectTime(getDateTimeCellValue(row, <span class="number">2</span>));</span><br><span class="line">                    result.add(data);</span><br><span class="line">                &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">                    log.warn(<span class="string">&quot;[导入] 第&#123;&#125;行解析失败&quot;</span>, row.getRowNum() + <span class="number">1</span>, e);</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(<span class="string">&quot;Excel解析失败: &quot;</span> + e.getMessage());</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Data</span></span><br><span class="line"><span class="meta">@Builder</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ImportResult</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> total;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> success;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> fail;</span><br><span class="line">    <span class="keyword">private</span> List&lt;String&gt; errors;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="BatchExecutor常见陷阱"><a href="#BatchExecutor常见陷阱" class="headerlink" title="BatchExecutor常见陷阱"></a>BatchExecutor常见陷阱</h2><h3 id="陷阱1：返回值不正确"><a href="#陷阱1：返回值不正确" class="headerlink" title="陷阱1：返回值不正确"></a>陷阱1：返回值不正确</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BatchExecutor的insert返回值是BATCH_UPDATE_RETURN_VALUE(-2147483648)</span></span><br><span class="line"><span class="comment">// 而不是受影响的行数</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">try</span> (<span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession(ExecutorType.BATCH)) &#123;</span><br><span class="line">    <span class="type">DeviceMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> session.getMapper(DeviceMapper.class);</span><br><span class="line">    <span class="keyword">for</span> (Device device : devices) &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">rows</span> <span class="operator">=</span> mapper.insert(device);  <span class="comment">// rows = -2147483648，不是1！</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 正确获取受影响行数的方式</span></span><br><span class="line">    <span class="type">List</span>&lt;BatchResult&gt; <span class="variable">results</span> <span class="operator">=</span> session.flushStatements();</span><br><span class="line">    <span class="keyword">for</span> (BatchResult result : results) &#123;</span><br><span class="line">        <span class="type">int</span>[] <span class="variable">updateCounts</span> <span class="operator">=</span> result.getUpdateCounts();</span><br><span class="line">        <span class="comment">// updateCounts数组包含每条SQL的受影响行数</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="陷阱2：自增ID不回填"><a href="#陷阱2：自增ID不回填" class="headerlink" title="陷阱2：自增ID不回填"></a>陷阱2：自增ID不回填</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BatchExecutor不会自动回填自增ID</span></span><br><span class="line"><span class="comment">// 需要额外查询</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">try</span> (<span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession(ExecutorType.BATCH)) &#123;</span><br><span class="line">    <span class="type">DeviceMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> session.getMapper(DeviceMapper.class);</span><br><span class="line">    <span class="keyword">for</span> (Device device : devices) &#123;</span><br><span class="line">        mapper.insert(device);</span><br><span class="line">        <span class="comment">// device.getId() == null ！不会自动回填</span></span><br><span class="line">    &#125;</span><br><span class="line">    session.flushStatements();</span><br><span class="line">    session.commit();</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// 解决：批量插入后查询ID</span></span><br><span class="line">    <span class="comment">// 使用INSERT ... RETURNING id 或 LAST_INSERT_ID()</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="陷阱3：一级缓存积累"><a href="#陷阱3：一级缓存积累" class="headerlink" title="陷阱3：一级缓存积累"></a>陷阱3：一级缓存积累</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BatchExecutor继承BaseExecutor，有一级缓存</span></span><br><span class="line"><span class="comment">// 批量操作中每条SQL都加入一级缓存，可能OOM</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 解决：使用独立的SqlSession</span></span><br><span class="line"><span class="keyword">try</span> (<span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession(ExecutorType.BATCH)) &#123;</span><br><span class="line">    <span class="comment">// 这个SqlSession是独立的，不会影响其他操作</span></span><br><span class="line">    <span class="comment">// 关闭后缓存自然释放</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="实战踩坑：批量导入的三类线上事故"><a href="#实战踩坑：批量导入的三类线上事故" class="headerlink" title="实战踩坑：批量导入的三类线上事故"></a>实战踩坑：批量导入的三类线上事故</h2><p>理论清楚了，但真正上线批量导入时，踩过的坑比方案本身还多。这里记录三类最典型的事故，都是血泪教训。</p>
+<h3 id="坑一：max-allowed-packet-超限导致整批失败"><a href="#坑一：max-allowed-packet-超限导致整批失败" class="headerlink" title="坑一：max_allowed_packet 超限导致整批失败"></a>坑一：max_allowed_packet 超限导致整批失败</h3><p>拼接 VALUES 方案下，一条 SQL 把所有行塞进去，SQL 包体积随行数线性增长。一旦超过 MySQL 的 <code>max_allowed_packet</code>（默认仅 4MB），会直接抛 <code>PacketTooBigException</code>，<strong>整批插入全部失败</strong>。</p>
+<figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 查看与调整上限</span></span><br><span class="line"><span class="keyword">SHOW</span> VARIABLES <span class="keyword">LIKE</span> <span class="string">&#x27;max_allowed_packet&#x27;</span>;</span><br><span class="line"><span class="keyword">SET</span> <span class="keyword">GLOBAL</span> max_allowed_packet <span class="operator">=</span> <span class="number">64</span> <span class="operator">*</span> <span class="number">1024</span> <span class="operator">*</span> <span class="number">1024</span>;  <span class="comment">-- 64MB</span></span><br></pre></td></tr></table></figure>
+
+<p>我们的经验：<strong>单批控制在 500~1000 条</strong>，基本不会撞包上限；如果单行字段特别宽（比如带长文本），要进一步调小批次。</p>
+<h3 id="坑二：并发批量写入引发的死锁"><a href="#坑二：并发批量写入引发的死锁" class="headerlink" title="坑二：并发批量写入引发的死锁"></a>坑二：并发批量写入引发的死锁</h3><p>多个线程同时对不同分表做批量 <code>insert</code>，如果各线程插入的主键顺序不一致，InnoDB 加行锁的顺序就会交错，极易触发 <code>Deadlock found</code>。前文实战里我们<strong>按 <code>(device_id, collect_time)</code> 排序后再分批</strong>，就是为了让所有线程按同一顺序加锁，从根上规避死锁。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 排序是批量导入的隐形保命符</span></span><br><span class="line">dataList.sort(Comparator.comparing(SensorData::getDeviceId)</span><br><span class="line">    .thenComparing(SensorData::getCollectTime));</span><br></pre></td></tr></table></figure>
+
+<h3 id="坑三：大事务造成主从延迟与锁等待"><a href="#坑三：大事务造成主从延迟与锁等待" class="headerlink" title="坑三：大事务造成主从延迟与锁等待"></a>坑三：大事务造成主从延迟与锁等待</h3><p>一次性 <code>insert</code> 2 万条再 <code>commit</code>，这个事务会长时间持有自增锁和插入意向锁，undo log 也会暴涨；从库回放这条超大 binlog 时会严重滞后，造成<strong>主从延迟</strong>，读从库的业务短暂读到旧数据。</p>
+<p>解决思路就是前文强调的<strong>分批小事务</strong>：每 500 条一个独立事务，锁持有时间短、binlog 分散、某批失败只影响当前批。这也是”分批事务 vs 大事务”那张图想表达的核心。</p>
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-MyBatis批量插入怎么优化？"><a href="#1-MyBatis批量插入怎么优化？" class="headerlink" title="1. MyBatis批量插入怎么优化？"></a>1. MyBatis批量插入怎么优化？</h3><p>三个层次：拼接VALUES（简单，减少网络往返）、BatchExecutor（通用，JDBC addBatch&#x2F;executeBatch）、rewriteBatchedStatements（MySQL最优，驱动层自动重写为多值INSERT）。建议500条&#x2F;批，分批提交，失败逐条重试。</p>
+<h3 id="2-BatchExecutor的原理？"><a href="#2-BatchExecutor的原理？" class="headerlink" title="2. BatchExecutor的原理？"></a>2. BatchExecutor的原理？</h3><p>使用JDBC的addBatch+executeBatch。SQL只编译一次创建PreparedStatement，每次调用addBatch()将参数添加到批处理队列，调用executeBatch()一次性将所有参数发送到数据库执行。同一条SQL复用同一个Statement对象。</p>
+<h3 id="3-rewriteBatchedStatements是什么？"><a href="#3-rewriteBatchedStatements是什么？" class="headerlink" title="3. rewriteBatchedStatements是什么？"></a>3. rewriteBatchedStatements是什么？</h3><p>MySQL JDBC驱动的URL参数，开启后驱动在executeBatch()时自动将多条INSERT重写为多值INSERT（INSERT INTO t VALUES(…),(…),(…)），配合BatchExecutor性能最优。注意需要useServerPrepStmts&#x3D;false才能生效。</p>
+<h2 id="BatchExecutor源码深度分析"><a href="#BatchExecutor源码深度分析" class="headerlink" title="BatchExecutor源码深度分析"></a>BatchExecutor源码深度分析</h2><h3 id="doUpdate完整源码"><a href="#doUpdate完整源码" class="headerlink" title="doUpdate完整源码"></a>doUpdate完整源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BatchExecutor.doUpdate() — 批量更新的核心逻辑</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BatchExecutor</span> <span class="keyword">extends</span> <span class="title class_">BaseExecutor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">List</span>&lt;Statement&gt; <span class="variable">statementList</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">List</span>&lt;BatchResult&gt; <span class="variable">batchResultList</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    <span class="keyword">private</span> String currentSql;</span><br><span class="line">    <span class="keyword">private</span> MappedStatement currentStatement;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">doUpdate</span><span class="params">(MappedStatement ms, Object parameterObject)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">        <span class="keyword">final</span> <span class="type">Configuration</span> <span class="variable">configuration</span> <span class="operator">=</span> ms.getConfiguration();</span><br><span class="line">        <span class="keyword">final</span> <span class="type">StatementHandler</span> <span class="variable">handler</span> <span class="operator">=</span> configuration.newStatementHandler(</span><br><span class="line">            <span class="built_in">this</span>, ms, parameterObject, RowBounds.DEFAULT, <span class="literal">null</span>, <span class="literal">null</span>);</span><br><span class="line">        <span class="keyword">final</span> <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> handler.getBoundSql();</span><br><span class="line">        <span class="keyword">final</span> <span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> boundSql.getSql();</span><br><span class="line"></span><br><span class="line">        Statement stmt;</span><br><span class="line">        <span class="comment">// 判断是否与上一条SQL相同</span></span><br><span class="line">        <span class="keyword">if</span> (sql.equals(currentSql) &amp;&amp; ms.equals(currentStatement)) &#123;</span><br><span class="line">            <span class="comment">// SQL相同 → 复用Statement</span></span><br><span class="line">            <span class="type">int</span> <span class="variable">batchIndex</span> <span class="operator">=</span> statementList.size() - <span class="number">1</span>;</span><br><span class="line">            stmt = statementList.get(batchIndex);</span><br><span class="line">            <span class="comment">// 参数设置</span></span><br><span class="line">            handler.parameterize(stmt);</span><br><span class="line">            <span class="comment">// 添加到批处理</span></span><br><span class="line">            handler.batch(stmt);</span><br><span class="line">            <span class="comment">// 记录参数</span></span><br><span class="line">            batchResultList.get(batchIndex).addParameterObject(parameterObject);</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">// SQL不同 → 创建新Statement</span></span><br><span class="line">            <span class="type">KeyGenerator</span> <span class="variable">keyGenerator</span> <span class="operator">=</span> ms.getKeyGenerator();</span><br><span class="line">            <span class="keyword">if</span> (keyGenerator <span class="keyword">instanceof</span> Jdbc3KeyGenerator) &#123;</span><br><span class="line">                <span class="comment">// 自增主键：需要返回GeneratedKeys</span></span><br><span class="line">                stmt = prepareStatement(handler, ms.getStatementLog(), </span><br><span class="line">                    Statement.RETURN_GENERATED_KEYS);</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                stmt = prepareStatement(handler, ms.getStatementLog(), </span><br><span class="line">                    Statement.NO_GENERATED_KEYS);</span><br><span class="line">            &#125;</span><br><span class="line">            handler.parameterize(stmt);</span><br><span class="line">            handler.batch(stmt);</span><br><span class="line">            currentSql = sql;</span><br><span class="line">            currentStatement = ms;</span><br><span class="line">            statementList.add(stmt);</span><br><span class="line">            batchResultList.add(<span class="keyword">new</span> <span class="title class_">BatchResult</span>(ms, sql, parameterObject));</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> BatchResult.BATCH_UPDATE_RETURN_VALUE;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="StatementHandler-batch-源码"><a href="#StatementHandler-batch-源码" class="headerlink" title="StatementHandler.batch()源码"></a>StatementHandler.batch()源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// PreparedStatementHandler.batch()</span></span><br><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">batch</span><span class="params">(Statement statement)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">    <span class="comment">// 底层就是PreparedStatement.addBatch()</span></span><br><span class="line">    ((PreparedStatement) statement).addBatch();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="flushStatements完整源码"><a href="#flushStatements完整源码" class="headerlink" title="flushStatements完整源码"></a>flushStatements完整源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// BaseExecutor.flushStatements()</span></span><br><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">List</span>&lt;BatchResult&gt; <span class="title function_">flushStatements</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> flushStatements(<span class="literal">false</span>);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">protected</span> <span class="type">List</span>&lt;BatchResult&gt; <span class="title function_">flushStatements</span><span class="params">(<span class="type">boolean</span> isRollback)</span> &#123;</span><br><span class="line">    <span class="comment">// 交给子类实现</span></span><br><span class="line">    <span class="keyword">return</span> doFlushStatements(isRollback);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// BatchExecutor.doFlushStatements()</span></span><br><span class="line"><span class="meta">@Override</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">List</span>&lt;BatchResult&gt; <span class="title function_">doFlushStatements</span><span class="params">(<span class="type">boolean</span> isRollback)</span> <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">    <span class="type">List</span>&lt;BatchResult&gt; <span class="variable">results</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    <span class="keyword">if</span> (isRollback) &#123;</span><br><span class="line">        <span class="comment">// 回滚 → 丢弃所有批量操作</span></span><br><span class="line">        <span class="keyword">for</span> (Statement stmt : statementList) &#123;</span><br><span class="line">            <span class="keyword">try</span> &#123; stmt.close(); &#125; <span class="keyword">catch</span> (SQLException e) &#123; <span class="comment">/* ignore */</span> &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">// 提交 → 执行所有批量操作</span></span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; statementList.size(); i++) &#123;</span><br><span class="line">            <span class="type">Statement</span> <span class="variable">stmt</span> <span class="operator">=</span> statementList.get(i);</span><br><span class="line">            <span class="type">BatchResult</span> <span class="variable">batchResult</span> <span class="operator">=</span> batchResultList.get(i);</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                <span class="comment">// 真正执行批量操作！</span></span><br><span class="line">                batchResult.setUpdateCounts(stmt.executeBatch());</span><br><span class="line">                <span class="comment">// 处理自增主键回填</span></span><br><span class="line">                <span class="type">MappedStatement</span> <span class="variable">ms</span> <span class="operator">=</span> batchResult.getMappedStatement();</span><br><span class="line">                <span class="type">KeyGenerator</span> <span class="variable">keyGenerator</span> <span class="operator">=</span> ms.getKeyGenerator();</span><br><span class="line">                <span class="keyword">if</span> (keyGenerator <span class="keyword">instanceof</span> Jdbc3KeyGenerator) &#123;</span><br><span class="line">                    <span class="type">List</span>&lt;Object&gt; <span class="variable">parameterObjects</span> <span class="operator">=</span> batchResult.getParameterObjects();</span><br><span class="line">                    keyGenerator.processAfter(ms, <span class="literal">null</span>, </span><br><span class="line">                        parameterObjects.toArray(), stmt);</span><br><span class="line">                &#125;</span><br><span class="line">                results.add(batchResult);</span><br><span class="line">            &#125; <span class="keyword">catch</span> (BatchUpdateException e) &#123;</span><br><span class="line">                <span class="comment">// 批量更新异常：部分成功部分失败</span></span><br><span class="line">                results.add(<span class="keyword">new</span> <span class="title class_">BatchResult</span>(ms, batchResult.getSql(), </span><br><span class="line">                    batchResult.getParameterObjects()));</span><br><span class="line">            &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                <span class="keyword">try</span> &#123; stmt.close(); &#125; <span class="keyword">catch</span> (SQLException e) &#123; <span class="comment">/* ignore */</span> &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// 清空状态</span></span><br><span class="line">    currentSql = <span class="literal">null</span>;</span><br><span class="line">    currentStatement = <span class="literal">null</span>;</span><br><span class="line">    statementList.clear();</span><br><span class="line">    batchResultList.clear();</span><br><span class="line">    <span class="keyword">return</span> results;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="JDBC批量执行原理"><a href="#JDBC批量执行原理" class="headerlink" title="JDBC批量执行原理"></a>JDBC批量执行原理</h2><h3 id="JDBC-addBatch-executeBatch"><a href="#JDBC-addBatch-executeBatch" class="headerlink" title="JDBC addBatch&#x2F;executeBatch"></a>JDBC addBatch&#x2F;executeBatch</h3><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    A["conn.prepareStatement(sql)<br/>创建 PreparedStatement"] --> B["ps.setString / ps.setInt<br/>设置参数"]
+    B --> C1["逐条执行模式"]
+    B --> C2["批量执行模式"]
+    C1 --> D1["ps.executeUpdate() 每次发送"]
+    D1 --> E1["ps.close()<br/>网络往返: N次, SQL编译: N次"]
+    C2 --> D2["ps.addBatch()<br/>缓存在 JDBC 驱动内存"]
+    D2 --> E2["ps.executeBatch() 一次性发送"]
+    E2 --> F2["ps.close()<br/>网络往返: 1次, SQL编译: 1次"]</pre>
+
+<h2 id="大批量数据分批导入方案"><a href="#大批量数据分批导入方案" class="headerlink" title="大批量数据分批导入方案"></a>大批量数据分批导入方案</h2><h3 id="流式读取-分批提交"><a href="#流式读取-分批提交" class="headerlink" title="流式读取+分批提交"></a>流式读取+分批提交</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：超大批量数据导入（10万+）</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LargeDataImportService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> SqlSessionFactory sqlSessionFactory;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> ImportProgressService progressService;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">ImportResult</span> <span class="title function_">importLargeData</span><span class="params">(String filePath, String month)</span> &#123;</span><br><span class="line">        <span class="type">ImportProgress</span> <span class="variable">progress</span> <span class="operator">=</span> progressService.create(month);</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">try</span> (<span class="type">BufferedReader</span> <span class="variable">reader</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">BufferedReader</span>(<span class="keyword">new</span> <span class="title class_">FileReader</span>(filePath))) &#123;</span><br><span class="line">            String line;</span><br><span class="line">            <span class="type">List</span>&lt;SensorData&gt; <span class="variable">batch</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(<span class="number">500</span>);</span><br><span class="line">            <span class="type">int</span> <span class="variable">lineNum</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">            </span><br><span class="line">            <span class="keyword">while</span> ((line = reader.readLine()) != <span class="literal">null</span>) &#123;</span><br><span class="line">                lineNum++;</span><br><span class="line">                <span class="keyword">if</span> (lineNum == <span class="number">1</span>) <span class="keyword">continue</span>;  <span class="comment">// 跳过表头</span></span><br><span class="line">                </span><br><span class="line">                <span class="keyword">try</span> &#123;</span><br><span class="line">                    <span class="type">SensorData</span> <span class="variable">data</span> <span class="operator">=</span> parseLine(line);</span><br><span class="line">                    batch.add(data);</span><br><span class="line">                &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">                    progress.addError(lineNum, <span class="string">&quot;解析失败: &quot;</span> + e.getMessage());</span><br><span class="line">                    <span class="keyword">continue</span>;</span><br><span class="line">                &#125;</span><br><span class="line">                </span><br><span class="line">                <span class="comment">// 每500条提交一次</span></span><br><span class="line">                <span class="keyword">if</span> (batch.size() &gt;= <span class="number">500</span>) &#123;</span><br><span class="line">                    processBatch(batch, month, progress);</span><br><span class="line">                    batch.clear();</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">            </span><br><span class="line">            <span class="comment">// 处理剩余数据</span></span><br><span class="line">            <span class="keyword">if</span> (!batch.isEmpty()) &#123;</span><br><span class="line">                processBatch(batch, month, progress);</span><br><span class="line">            &#125;</span><br><span class="line">            </span><br><span class="line">        &#125; <span class="keyword">catch</span> (IOException e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;[导入] 文件读取失败&quot;</span>, e);</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(<span class="string">&quot;文件读取失败&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">return</span> progress.toResult();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">void</span> <span class="title function_">processBatch</span><span class="params">(List&lt;SensorData&gt; batch, String month, </span></span><br><span class="line"><span class="params">            ImportProgress progress)</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> (<span class="type">SqlSession</span> <span class="variable">session</span> <span class="operator">=</span> sqlSessionFactory.openSession(ExecutorType.BATCH)) &#123;</span><br><span class="line">            ShardingContextHolder.set(<span class="keyword">new</span> <span class="title class_">ShardingContext</span>(month, <span class="literal">null</span>, <span class="literal">null</span>));</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                <span class="type">SensorDataMapper</span> <span class="variable">mapper</span> <span class="operator">=</span> session.getMapper(SensorDataMapper.class);</span><br><span class="line">                <span class="keyword">for</span> (SensorData data : batch) &#123;</span><br><span class="line">                    mapper.insert(data);</span><br><span class="line">                &#125;</span><br><span class="line">                <span class="type">List</span>&lt;BatchResult&gt; <span class="variable">results</span> <span class="operator">=</span> session.flushStatements();</span><br><span class="line">                session.commit();</span><br><span class="line">                </span><br><span class="line">                progress.addSuccess(batch.size());</span><br><span class="line">                progressService.update(progress);</span><br><span class="line">                </span><br><span class="line">                log.info(<span class="string">&quot;[导入] 进度: 成功=&#123;&#125;, 失败=&#123;&#125;&quot;</span>, </span><br><span class="line">                    progress.getSuccess(), progress.getFail());</span><br><span class="line">            &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">                ShardingContextHolder.clear();</span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            <span class="comment">// 批量失败 → 逐条重试</span></span><br><span class="line">            log.warn(<span class="string">&quot;[导入] 批量插入失败，逐条重试&quot;</span>, e);</span><br><span class="line">            <span class="keyword">for</span> (SensorData data : batch) &#123;</span><br><span class="line">                <span class="keyword">try</span> &#123;</span><br><span class="line">                    sensorDataMapper.insert(data);</span><br><span class="line">                    progress.addSuccess(<span class="number">1</span>);</span><br><span class="line">                &#125; <span class="keyword">catch</span> (Exception ex) &#123;</span><br><span class="line">                    progress.addError(<span class="number">0</span>, <span class="string">&quot;插入失败: &quot;</span> + ex.getMessage());</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">SensorData</span> <span class="title function_">parseLine</span><span class="params">(String line)</span> &#123;</span><br><span class="line">        <span class="type">String</span>[] <span class="variable">fields</span> <span class="operator">=</span> line.split(<span class="string">&quot;,&quot;</span>);</span><br><span class="line">        <span class="type">SensorData</span> <span class="variable">data</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">SensorData</span>();</span><br><span class="line">        data.setDeviceId(fields[<span class="number">0</span>].trim());</span><br><span class="line">        data.setSensorValue(<span class="keyword">new</span> <span class="title class_">BigDecimal</span>(fields[<span class="number">1</span>].trim()));</span><br><span class="line">        data.setCollectTime(LocalDateTime.parse(fields[<span class="number">2</span>].trim(), </span><br><span class="line">            DateTimeFormatter.ofPattern(<span class="string">&quot;yyyy-MM-dd HH:mm:ss&quot;</span>)));</span><br><span class="line">        <span class="keyword">return</span> data;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 导入进度追踪</span></span><br><span class="line"><span class="meta">@Data</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ImportProgress</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> String taskId;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> total;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> success;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> fail;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">List</span>&lt;String&gt; <span class="variable">errors</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">    </span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addSuccess</span><span class="params">(<span class="type">int</span> count)</span> &#123; success += count; &#125;</span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addError</span><span class="params">(<span class="type">int</span> lineNum, String error)</span> &#123;</span><br><span class="line">        fail++;</span><br><span class="line">        errors.add(<span class="string">&quot;行&quot;</span> + lineNum + <span class="string">&quot;: &quot;</span> + error);</span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="keyword">public</span> <span class="type">ImportResult</span> <span class="title function_">toResult</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> ImportResult.builder()</span><br><span class="line">            .total(total).success(success).fail(fail).errors(errors)</span><br><span class="line">            .build();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="不同数据库批量操作差异"><a href="#不同数据库批量操作差异" class="headerlink" title="不同数据库批量操作差异"></a>不同数据库批量操作差异</h2><table>
+<thead>
+<tr>
+<th>数据库</th>
+<th>批量INSERT方式</th>
+<th>特殊限制</th>
+<th>推荐方案</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>MySQL</td>
+<td>INSERT VALUES(…),(…)</td>
+<td>max_allowed_packet</td>
+<td>Batch+rewrite</td>
+</tr>
+<tr>
+<td>Oracle</td>
+<td>INSERT ALL … SELECT</td>
+<td>IN列表≤1000</td>
+<td>分批+BatchExecutor</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td>INSERT VALUES(…),(…)</td>
+<td>无特殊限制</td>
+<td>拼接VALUES</td>
+</tr>
+<tr>
+<td>SQL Server</td>
+<td>INSERT VALUES(…),(…)</td>
+<td>1000行&#x2F;INSERT</td>
+<td>分批500条</td>
+</tr>
+</tbody></table>
+<h3 id="MySQL批量优化配置"><a href="#MySQL批量优化配置" class="headerlink" title="MySQL批量优化配置"></a>MySQL批量优化配置</h3><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># MySQL批量操作优化配置</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">datasource:</span></span><br><span class="line">    <span class="attr">url:</span> <span class="string">jdbc:mysql://localhost:3306/mine_db?rewriteBatchedStatements=true&amp;useServerPrepStmts=false&amp;cachePrepStmts=true&amp;prepStmtCacheSize=250&amp;prepStmtCacheSqlLimit=2048</span></span><br><span class="line">    <span class="attr">hikari:</span></span><br><span class="line">      <span class="attr">maximum-pool-size:</span> <span class="number">20</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># MySQL服务端配置</span></span><br><span class="line"><span class="comment"># innodb_autoinc_lock_mode=2  → 自增锁模式（批量插入性能更好）</span></span><br><span class="line"><span class="comment"># innodb_buffer_pool_size=4G  → 缓冲池大小</span></span><br><span class="line"><span class="comment"># innodb_log_file_size=512M   → 日志文件大小（影响大事务性能）</span></span><br><span class="line"><span class="comment"># max_allowed_packet=64M      → 允许的最大SQL包大小</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="批量操作与事务"><a href="#批量操作与事务" class="headerlink" title="批量操作与事务"></a>批量操作与事务</h2><h3 id="分批事务-vs-大事务"><a href="#分批事务-vs-大事务" class="headerlink" title="分批事务 vs 大事务"></a>分批事务 vs 大事务</h3><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    Root["批量操作的事务策略"] --> Big["大事务: BEGIN 后一次插入 12 万条再 COMMIT"]
+    Root --> Batch["分批事务: 每批 1500 条 分多批提交"]
+    Big --> BigP["大事务的问题"]
+    BigP --> BigP1["锁持有时间长 / undo log 膨胀"]
+    BigP --> BigP2["回滚段不足 / binlog 单条过大"]
+    BigP2 --> BigP3["主从延迟 / 任意一行失败全部回滚"]
+    Batch --> BatchP["分批事务的优点"]
+    BatchP --> BatchP1["锁持有时间短 不阻塞其他事务"]
+    BatchP --> BatchP2["undo log 可控 回滚段正常"]
+    BatchP2 --> BatchP3["某批失败只影响当前批 binlog 分散 主从同步正常"]</pre>
+
+<h2 id="批量操作性能监控"><a href="#批量操作性能监控" class="headerlink" title="批量操作性能监控"></a>批量操作性能监控</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：批量操作性能监控</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BatchOperationMonitor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> MeterRegistry meterRegistry;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">recordBatchInsert</span><span class="params">(String tableName, <span class="type">int</span> batchSize, <span class="type">long</span> costMs)</span> &#123;</span><br><span class="line">        <span class="comment">// 记录指标</span></span><br><span class="line">        meterRegistry.counter(<span class="string">&quot;batch.insert.count&quot;</span>, </span><br><span class="line">            <span class="string">&quot;table&quot;</span>, tableName).increment(batchSize);</span><br><span class="line">        meterRegistry.timer(<span class="string">&quot;batch.insert.time&quot;</span>, </span><br><span class="line">            <span class="string">&quot;table&quot;</span>, tableName).record(costMs, TimeUnit.MILLISECONDS);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 计算吞吐量</span></span><br><span class="line">        <span class="type">double</span> <span class="variable">throughput</span> <span class="operator">=</span> batchSize * <span class="number">1000.0</span> / costMs;</span><br><span class="line">        log.info(<span class="string">&quot;[批量操作] table=&#123;&#125;, batchSize=&#123;&#125;, cost=&#123;&#125;ms, throughput=&#123;&#125;/s&quot;</span>, </span><br><span class="line">            tableName, batchSize, costMs, String.format(<span class="string">&quot;%.0f&quot;</span>, throughput));</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 性能基线检查</span></span><br><span class="line">        <span class="keyword">if</span> (costMs &gt; batchSize * <span class="number">2</span>) &#123;</span><br><span class="line">            <span class="comment">// 平均每条超过2ms，可能有性能问题</span></span><br><span class="line">            log.warn(<span class="string">&quot;[批量操作告警] table=&#123;&#125;, 平均每条&#123;&#125;ms，超过2ms基线&quot;</span>, </span><br><span class="line">                tableName, String.format(<span class="string">&quot;%.1f&quot;</span>, (<span class="type">double</span>)costMs/batchSize));</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h1><hr>
+<p>批量操作是数据库性能优化的基本功。实际项目的传感器数据导入从5分钟优化到3秒，核心认知是：<strong>逐条操作的事务开销和网络往返是性能杀手，拼接VALUES简单有效减少网络往返，BatchExecutor利用JDBC批处理只编译一次SQL，rewriteBatchedStatements让MySQL驱动自动重写为多值INSERT</strong>。500条&#x2F;批+分批提交+失败重试+导入结果记录，这是批量操作的黄金法则。理解了BatchExecutor的源码——addBatch缓存参数、executeBatch一次性发送——就能避免返回值不正确、自增ID不回填等常见陷阱。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/10/15/468f524aa298/">JVM内存泄漏排查——从现象到根因</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/10/29/a32ee190f1f8/">MySQL EXPLAIN执行计划深度解读</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5/" class="tag" aria-label="标签: #工程实践">#工程实践</a>
+            
+                <a href="/tags/MyBatis/" class="tag" aria-label="标签: #MyBatis">#MyBatis</a>
+            
+                <a href="/tags/%E6%80%A7%E8%83%BD/" class="tag" aria-label="标签: #性能">#性能</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(61)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/MyBatis%E6%BA%90%E7%A0%81/" aria-label="分类: MyBatis源码">
+                        MyBatis源码
+                        <span>(6)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>大数据量导出场景题——百万级Excel、异步任务、内存治理 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2026/04/27/70b1e676d229/">
+<meta name="description" content="前言“运营要在后台导出200万条订单明细，怎么做？”——这是面试场景题里的常青树，因为它在一个需求里同时考察了内存治理、异步任务、分页策略、失败恢复四个维度，任何一环没想过，方案在追问第二层就会露馅。这篇文章把导出场景从1千条到1亿条完整讲透。导出规模决定方案：先分级再设计数据量同步&amp;#x2F;异步核心方案关">
+
+<!-- Open Graph -->
+<meta property="og:title" content="大数据量导出场景题——百万级Excel、异步任务、内存治理">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2026/04/27/70b1e676d229/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言“运营要在后台导出200万条订单明细，怎么做？”——这是面试场景题里的常青树，因为它在一个需求里同时考察了内存治理、异步任务、分页策略、失败恢复四个维度，任何一环没想过，方案在追问第二层就会露馅。这篇文章把导出场景从1千条到1亿条完整讲透。导出规模决定方案：先分级再设计数据量同步&amp;#x2F;异步核心方案关">
+
+<meta property="article:published_time" content="2026-04-27T08:08:53.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="大数据量导出场景题——百万级Excel、异步任务、内存治理">
+<meta name="twitter:description" content="前言“运营要在后台导出200万条订单明细，怎么做？”——这是面试场景题里的常青树，因为它在一个需求里同时考察了内存治理、异步任务、分页策略、失败恢复四个维度，任何一环没想过，方案在追问第二层就会露馅。这篇文章把导出场景从1千条到1亿条完整讲透。导出规模决定方案：先分级再设计数据量同步&amp;#x2F;异步核心方案关">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"大数据量导出场景题——百万级Excel、异步任务、内存治理","description":"前言“运营要在后台导出200万条订单明细，怎么做？”——这是面试场景题里的常青树，因为它在一个需求里同时考察了内存治理、异步任务、分页策略、失败恢复四个维度，任何一环没想过，方案在追问第二层就会露馅。这篇文章把导出场景从1千条到1亿条完整讲透。导出规模决定方案：先分级再设计数据量同步&#x2F;异步核心方案关","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2026-04-27T08:08:53.000Z","dateModified":"2026-04-27T08:08:53.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2026/04/27/70b1e676d229/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2026-04-27T08:08:53.000Z">
+  <article class="post">
+    <h1 class="post-title">大数据量导出场景题——百万级Excel、异步任务、内存治理</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2026-04-27T08:08:53.000Z">2026-04-27</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/">2026</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%96%87%E4%BB%B6%E5%A4%84%E7%90%86/">文件处理</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%96%87%E4%BB%B6%E5%A4%84%E7%90%86/%E9%9D%A2%E8%AF%95%E9%A2%98/">面试题</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <p><strong>前言</strong></p>
+<p>“运营要在后台导出 200 万条订单明细，怎么做？”——这是面试场景题里的常青树，因为它在一个需求里同时考察了内存治理、异步任务、分页策略、失败恢复四个维度，任何一环没想过，方案在追问第二层就会露馅。这篇文章把导出场景从 1 千条到 1 亿条完整讲透。</p>
+<hr>
+<h2 id="导出规模决定方案：先分级再设计"><a href="#导出规模决定方案：先分级再设计" class="headerlink" title="导出规模决定方案：先分级再设计"></a>导出规模决定方案：先分级再设计</h2><table>
+<thead>
+<tr>
+<th>数据量</th>
+<th>同步&#x2F;异步</th>
+<th>核心方案</th>
+<th>关键风险</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>&lt; 1万条</strong></td>
+<td>同步</td>
+<td>流式查询 + 流式写出，一次请求完成</td>
+<td>几乎无风险</td>
+</tr>
+<tr>
+<td><strong>1万~50万</strong></td>
+<td>同步（慢）或异步</td>
+<td>分页流式 + EasyExcel 分批写</td>
+<td>响应超时、网关超时配置</td>
+</tr>
+<tr>
+<td><strong>50万~500万</strong></td>
+<td>必须异步</td>
+<td>任务表 + 后台生成 + OSS 下载链接</td>
+<td>任务失败恢复、并发任务限制</td>
+</tr>
+<tr>
+<td><strong>&gt; 500万</strong></td>
+<td>异步 + 拆分</td>
+<td>按时间&#x2F;分片拆多任务并行生成，最后合并或分文件交付</td>
+<td>合并策略、存储成本</td>
+</tr>
+</tbody></table>
+<p><strong>面试第一句就应该说分级</strong>——上来直接讲”用 EasyExcel 流式写”的候选人，会在面试官追问”那 200 万条呢、2 亿条呢”时立刻暴露没处理过真实规模。分级思维本身就是答案的一部分：<strong>导出方案的正确形态由数据量级决定，先问规模再谈技术</strong>。</p>
+<hr>
+<h2 id="核心原理一：流式处理，为什么不能一把查出来"><a href="#核心原理一：流式处理，为什么不能一把查出来" class="headerlink" title="核心原理一：流式处理，为什么不能一把查出来"></a>核心原理一：流式处理，为什么不能一把查出来</h2><h3 id="内存账本"><a href="#内存账本" class="headerlink" title="内存账本"></a>内存账本</h3><p>朴素做法 <code>SELECT * FROM orders</code> 一次拉全量：200 万行 × 每行 1KB ≈ 2GB——远超 JVM 默认堆的舒适区，即使堆够大，一次性分配 2GB 也会触发 Full GC 甚至直接 OOM。流式方案的分界线在于<strong>数据在内存中的峰值从”全量”降到”单页”</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 反面教材：一次性拉全量</span></span><br><span class="line"><span class="type">List</span>&lt;Order&gt; <span class="variable">all</span> <span class="operator">=</span> orderMapper.selectAll();          <span class="comment">// 内存峰值 = 全量数据</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 正确姿势：游标/流式读 + 分批写，内存峰值 = 单批数据</span></span><br><span class="line"><span class="keyword">try</span> (<span class="type">Cursor</span>&lt;Order&gt; <span class="variable">cursor</span> <span class="operator">=</span> orderMapper.cursorByCondition(query)) &#123;  <span class="comment">// MyBatis Cursor</span></span><br><span class="line">    <span class="type">ExcelWriter</span> <span class="variable">writer</span> <span class="operator">=</span> EasyExcel.write(out, OrderExportVO.class).build();</span><br><span class="line">    <span class="type">WriteSheet</span> <span class="variable">sheet</span> <span class="operator">=</span> EasyExcel.writerSheet(<span class="string">&quot;订单明细&quot;</span>).build();</span><br><span class="line">    <span class="type">List</span>&lt;OrderExportVO&gt; <span class="variable">batch</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(<span class="number">5000</span>);   <span class="comment">// 固定容量，预估后不扩容</span></span><br><span class="line">    <span class="type">int</span> <span class="variable">rowNum</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">    <span class="keyword">for</span> (Order order : cursor) &#123;</span><br><span class="line">        batch.add(convert(order));</span><br><span class="line">        <span class="keyword">if</span> (++rowNum % <span class="number">5000</span> == <span class="number">0</span>) &#123;</span><br><span class="line">            writer.write(batch, sheet);   <span class="comment">// 每5000行刷一次盘</span></span><br><span class="line">            batch.clear();                <span class="comment">// 复用列表，避免反复扩容</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">if</span> (!batch.isEmpty()) writer.write(batch, sheet);</span><br><span class="line">    writer.finish();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>三个容易忽略的细节</strong>：其一，MyBatis 的 <code>Cursor</code> 需要<strong>长连接支撑</strong>（MySQL JDBC 的 <code>fetchSize</code> 要设为 <code>Integer.MIN_VALUE</code> 或开启 <code>useCursorFetch=true</code>，否则驱动仍会全量拉取——流式是假流式，这是最常见的踩坑点）；其二，流式查询占用连接时间长，必须配<strong>独立数据源或连接池隔离</strong>，防止导出任务把正常业务的连接耗尽；其三，<code>batch.clear()</code> 复用列表而非新建，让 Young GC 在固定内存水位下工作，避免堆曲线锯齿状抖动。</p>
+<h3 id="为什么选-EasyExcel-而不是-POI"><a href="#为什么选-EasyExcel-而不是-POI" class="headerlink" title="为什么选 EasyExcel 而不是 POI"></a>为什么选 EasyExcel 而不是 POI</h3><p>POI 的 <code>XSSFWorkbook</code> 把整个工作簿的 DOM 都留在内存里，10 万行就能把堆吃满；<code>SXSSFWorkbook</code> 虽然滑出了磁盘缓冲，但 API 复杂且仍要自己管理窗口；<strong>EasyExcel 在 POI 基础上做了逐行写出的封装</strong>，配合写监听器天然契合”查一批写一批”的流式模型，且对样式、大数据量做了实测优化。面试答”为什么不用 POI”时，核心词汇是 <strong>DOM 全量驻留 vs 流式增量写出</strong>。</p>
+<hr>
+<h2 id="核心原理二：异步任务与状态机"><a href="#核心原理二：异步任务与状态机" class="headerlink" title="核心原理二：异步任务与状态机"></a>核心原理二：异步任务与状态机</h2><h3 id="任务表设计"><a href="#任务表设计" class="headerlink" title="任务表设计"></a>任务表设计</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">CREATE TABLE</span> export_task (</span><br><span class="line">  id           <span class="type">BIGINT</span> <span class="keyword">PRIMARY KEY</span>,</span><br><span class="line">  user_id      <span class="type">BIGINT</span> <span class="keyword">NOT NULL</span>,</span><br><span class="line">  task_type    <span class="type">VARCHAR</span>(<span class="number">50</span>) <span class="keyword">NOT NULL</span>,      <span class="comment">-- 导出类型</span></span><br><span class="line">  query_param  JSON,                       <span class="comment">-- 查询条件快照</span></span><br><span class="line">  status       <span class="type">VARCHAR</span>(<span class="number">20</span>) <span class="keyword">NOT NULL</span>,       <span class="comment">-- PENDING/RUNNING/SUCCESS/FAILED/EXPIRED</span></span><br><span class="line">  file_url     <span class="type">VARCHAR</span>(<span class="number">500</span>),               <span class="comment">-- 生成后的下载地址</span></span><br><span class="line">  total_rows   <span class="type">BIGINT</span>,                     <span class="comment">-- 进度：总行数（可预估）</span></span><br><span class="line">  done_rows    <span class="type">BIGINT</span> <span class="keyword">DEFAULT</span> <span class="number">0</span>,           <span class="comment">-- 进度：已处理行数</span></span><br><span class="line">  error_msg    <span class="type">VARCHAR</span>(<span class="number">1000</span>),</span><br><span class="line">  create_time  DATETIME,</span><br><span class="line">  finish_time  DATETIME,</span><br><span class="line">  KEY idx_user_time (user_id, create_time),</span><br><span class="line">  KEY idx_status (status)</span><br><span class="line">);</span><br></pre></td></tr></table></figure>
+
+<p><strong>几个字段都有明确的面试考点</strong>：<code>query_param</code> 存<strong>查询条件的快照</strong>而不是引用——用户提交任务后又改了筛选条件，导出结果必须按提交时刻的条件走，这是”任务语义不可变”的体现；<code>done_rows/total_rows</code> 支撑进度条（总行数可用 <code>COUNT(*)</code> 预估或分片数粗估），<strong>没有进度条的异步导出会被用户反复重提任务</strong>，放大系统压力；<code>status</code> 加索引是因为调度器要扫描 PENDING 任务，表大了之后这里是热点。</p>
+<h3 id="调度与失败恢复"><a href="#调度与失败恢复" class="headerlink" title="调度与失败恢复"></a>调度与失败恢复</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 调度器：抢占式领取任务（乐观锁防重复执行）</span></span><br><span class="line"><span class="meta">@Scheduled(fixedDelay = 5000)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">pollPendingTasks</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 限定并发：实例最多同时跑 N 个导出任务，防止单机被导出拖垮</span></span><br><span class="line">    <span class="keyword">if</span> (runningCount.get() &gt;= maxConcurrent) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 2. CAS 抢占：UPDATE status=&#x27;RUNNING&#x27;, worker=本机ID WHERE id=? AND status=&#x27;PENDING&#x27;</span></span><br><span class="line">    <span class="type">List</span>&lt;ExportTask&gt; <span class="variable">tasks</span> <span class="operator">=</span> taskMapper.claimPending(workerId, maxConcurrent - runningCount.get());</span><br><span class="line">    <span class="keyword">for</span> (ExportTask task : tasks) &#123;</span><br><span class="line">        executor.submit(() -&gt; execute(task));   <span class="comment">// 独立线程池执行</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>失败恢复的三个机制</strong>：任务执行时<strong>记录心跳</strong>（每 30 秒更新 <code>heartbeat_time</code>），调度器发现 RUNNING 且心跳超时的任务判为”执行机挂了”，重置回 PENDING 重新调度——没有心跳机制的话，执行机宕机后任务永远卡在 RUNNING；失败任务<strong>保留 error_msg 和已完成分片</strong>，支持从断点续跑而不是从头再来；任务结果文件设 <strong>TTL（如 7 天过期）</strong>，用户长期不下载就清理 OSS 文件并把任务标记 EXPIRED，防止存储无限膨胀。这套”抢占 + 心跳 + 断点 + TTL”组合是把 demo 级方案拉到生产级的完整拼图，面试时逐个讲出来就是加分节奏。</p>
+<hr>
+<h2 id="核心原理三：深分页的坑与替代方案"><a href="#核心原理三：深分页的坑与替代方案" class="headerlink" title="核心原理三：深分页的坑与替代方案"></a>核心原理三：深分页的坑与替代方案</h2><h3 id="坑：LIMIT-offset-的平方级劣化"><a href="#坑：LIMIT-offset-的平方级劣化" class="headerlink" title="坑：LIMIT offset 的平方级劣化"></a>坑：LIMIT offset 的平方级劣化</h3><p>导出循环里最常见的写法是 <code>LIMIT 100000, 5000</code>——MySQL 要<strong>先扫过前 100000 行再丢弃</strong>，翻到第 400 页时每页实际扫描 200 万行。200 万数据分 400 页的总扫描量是 O(n²&#x2F;页大小)，导出越往后越慢，任务”跑一半突然卡死”基本都是这个原因。</p>
+<h3 id="两种正确替代"><a href="#两种正确替代" class="headerlink" title="两种正确替代"></a>两种正确替代</h3><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 方案1：游标分页（推荐，带唯一排序键）</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> orders <span class="keyword">WHERE</span> id <span class="operator">&gt;</span> #&#123;lastMaxId&#125; <span class="keyword">ORDER</span> <span class="keyword">BY</span> id LIMIT <span class="number">5000</span>;</span><br><span class="line"><span class="comment">-- 每页成本恒定，但要求排序键单调且带索引（自增主键天然满足）</span></span><br><span class="line"></span><br><span class="line"><span class="comment">-- 方案2：按键范围分片（并行导出的基础）</span></span><br><span class="line"><span class="comment">-- 把 id 区间 [1, 20000000] 切成 N 片，每片独立查询独立写文件</span></span><br><span class="line"><span class="keyword">SELECT</span> <span class="operator">*</span> <span class="keyword">FROM</span> orders <span class="keyword">WHERE</span> id <span class="operator">&gt;=</span> #&#123;<span class="keyword">start</span>&#125; <span class="keyword">AND</span> id <span class="operator">&lt;</span> #&#123;<span class="keyword">end</span>&#125;;</span><br></pre></td></tr></table></figure>
+
+<p><strong>两个方案的适用边界要讲清楚</strong>：游标分页简单可靠但<strong>只能单任务串行</strong>（lastMaxId 是任务内状态）；按范围分片牺牲一点实现复杂度，换来<strong>多分片并行生成多个文件</strong>的能力——500 万行拆 10 个 50 万行的文件并行生成，耗时直接除以并行度，最后要么打包 zip、要么列表页展示多个文件。<strong>“一个大文件”还是”多个分文件”这个产品决策，往往能把技术方案从”很慢”变成”很快”</strong>，这也是场景题里”和产品对齐需求”的典型切入口。</p>
+<hr>
+<h2 id="完整链路：把所有环节串起来"><a href="#完整链路：把所有环节串起来" class="headerlink" title="完整链路：把所有环节串起来"></a>完整链路：把所有环节串起来</h2><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">用户点击导出</span><br><span class="line">  → 1. 参数校验 + 行数预估（COUNT 超阈值提示缩小范围或走异步）</span><br><span class="line">  → 2. 写任务表（PENDING）→ 立即返回任务ID，前端轮询进度</span><br><span class="line">  → 3. 调度器抢占任务 → 执行机领取</span><br><span class="line">  → 4. 按游标/分片流式查询 → EasyExcel 分批写出 → 更新进度</span><br><span class="line">  → 5. 上传 OSS → 回写 file_url + SUCCESS → 通知用户（站内信/邮件）</span><br><span class="line">  → 6. 7 天 TTL 自动清理</span><br><span class="line"></span><br><span class="line">失败路径：</span><br><span class="line">  执行机宕机 → 心跳超时 → 任务重置 PENDING → 重新抢占</span><br><span class="line">  单分片失败 → 记录断点 → 续跑该分片</span><br><span class="line">  查询超时 → 缩小分片粒度重试</span><br></pre></td></tr></table></figure>
+
+<p><strong>面试汇报这个链路时的高分动作是主动讲约束</strong>：导出服务与业务库隔离（独立从库&#x2F;数仓）、单实例并发任务上限、全局限流（防止 100 个用户同时导出把从库打挂）、敏感字段脱敏后导出（导出文件是数据泄露的重灾区）。<strong>导出从来不是一个功能，而是一条和主业务抢资源的旁路负载</strong>——能说出这句话的候选人，基本可以确认处理过真实的运营导出需求。</p>
+<hr>
+<h2 id="进阶实现一：分片并行导出"><a href="#进阶实现一：分片并行导出" class="headerlink" title="进阶实现一：分片并行导出"></a>进阶实现一：分片并行导出</h2><p>单任务串行处理 500 万行，即使流式也要跑十几分钟。按主键范围分片并行，把耗时除以并行度：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ShardedExportJob</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">execute</span><span class="params">(ExportTask task)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 查询主键范围（min_id ~ max_id），按每片50万行切成N片</span></span><br><span class="line">        <span class="type">long</span> <span class="variable">minId</span> <span class="operator">=</span> orderMapper.selectMinId(task.getQueryParam());</span><br><span class="line">        <span class="type">long</span> <span class="variable">maxId</span> <span class="operator">=</span> orderMapper.selectMaxId(task.getQueryParam());</span><br><span class="line">        <span class="type">long</span> <span class="variable">shardSize</span> <span class="operator">=</span> <span class="number">500_000</span>;</span><br><span class="line">        <span class="type">List</span>&lt;IdRange&gt; <span class="variable">shards</span> <span class="operator">=</span> splitRange(minId, maxId, shardSize);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 每片独立生成子文件（独立线程，独立连接）</span></span><br><span class="line">        <span class="type">List</span>&lt;CompletableFuture&lt;String&gt;&gt; <span class="variable">futures</span> <span class="operator">=</span> shards.stream()</span><br><span class="line">            .map(range -&gt; CompletableFuture.supplyAsync(</span><br><span class="line">                () -&gt; exportShard(task.getId(), task.getQueryParam(), range),</span><br><span class="line">                exportExecutor))                       <span class="comment">// 独立线程池，与业务隔离</span></span><br><span class="line">            .collect(Collectors.toList());</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 等待全部分片完成，打包或登记多文件</span></span><br><span class="line">        <span class="type">List</span>&lt;String&gt; <span class="variable">files</span> <span class="operator">=</span> futures.stream()</span><br><span class="line">            .map(CompletableFuture::join)</span><br><span class="line">            .collect(Collectors.toList());</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (files.size() == <span class="number">1</span>) &#123;</span><br><span class="line">            uploadSingle(task, files.get(<span class="number">0</span>));</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            uploadZip(task, files);                    <span class="comment">// 多文件打zip，或列表页展示</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">String</span> <span class="title function_">exportShard</span><span class="params">(Long taskId, String queryParam, IdRange range)</span> &#123;</span><br><span class="line">        <span class="comment">// 游标分页 + EasyExcel 流式写，单文件50万行（低于Excel单Sheet上限）</span></span><br><span class="line">        <span class="comment">// 每完成1万行更新任务进度：done_rows += 10000</span></span><br><span class="line">        <span class="comment">// 失败时抛出分片号，调度器支持单分片重试（断点续跑）</span></span><br><span class="line">        ...</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>分片方案的两个前提必须说清</strong>：分片键必须是<strong>带索引的单调列</strong>（自增主键最佳），<code>WHERE id &gt;= ? AND id &lt; ?</code> 才能走范围索引扫描；<strong>各分片必须独立可重试</strong>——第 3 片失败不应重跑前 2 片，所以子文件按分片号命名，重试只补失败的片。并行度也不是越大越好：每个分片占用一个数据库连接和一个 EasyExcel 写缓冲，<strong>并行度 &#x3D; min(可用连接数&#x2F;2, CPU核数)</strong> 是稳妥起点，导出从库的负载要实时监控。</p>
+<h2 id="进阶实现二：进度查询与任务通知"><a href="#进阶实现二：进度查询与任务通知" class="headerlink" title="进阶实现二：进度查询与任务通知"></a>进阶实现二：进度查询与任务通知</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@GetMapping(&quot;/export/task/&#123;id&#125;/progress&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">Result</span>&lt;TaskProgressVO&gt; <span class="title function_">progress</span><span class="params">(<span class="meta">@PathVariable</span> Long id)</span> &#123;</span><br><span class="line">    <span class="type">ExportTask</span> <span class="variable">task</span> <span class="operator">=</span> taskMapper.selectById(id);</span><br><span class="line">    <span class="comment">// 权限校验：只能查自己的任务</span></span><br><span class="line">    <span class="keyword">if</span> (!task.getUserId().equals(currentUserId())) &#123;</span><br><span class="line">        <span class="keyword">return</span> Result.fail(<span class="number">403</span>, <span class="string">&quot;无权查看&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="type">TaskProgressVO</span> <span class="variable">vo</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">TaskProgressVO</span>();</span><br><span class="line">    vo.setStatus(task.getStatus());</span><br><span class="line">    <span class="comment">// 进度 = 已完成行数/预估总行数；总行数未预估时用分片数粗估</span></span><br><span class="line">    vo.setPercent(task.getTotalRows() &gt; <span class="number">0</span></span><br><span class="line">        ? task.getDoneRows() * <span class="number">100</span> / task.getTotalRows() : <span class="number">0</span>);</span><br><span class="line">    vo.setFileUrl(SUCCESS.equals(task.getStatus()) ? task.getFileUrl() : <span class="literal">null</span>);</span><br><span class="line">    <span class="keyword">return</span> Result.ok(vo);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>进度交互的产品细节决定用户行为</strong>：轮询间隔建议 3~5 秒（前端可做指数退避），进度条到 99% 卡住是最招投诉的设计——分片并行时按”完成分片数&#x2F;总分片数”推进能保证匀速；任务完成后除了接口返回 file_url，<strong>主动推一条站内信或企业微信通知</strong>，用户不用守着页面等；下载链接带签名和过期时间（OSS 预签名 URL），防止导出文件被转发后永久可访问。这些细节单独看都小，合起来决定这个功能是”能用”还是”好用”。</p>
+<h2 id="导出文件的安全与权限：最容易被忽略的一环"><a href="#导出文件的安全与权限：最容易被忽略的一环" class="headerlink" title="导出文件的安全与权限：最容易被忽略的一环"></a>导出文件的安全与权限：最容易被忽略的一环</h2><p>导出文件是数据泄露的高危通道，因为它<strong>把带权限校验的接口数据变成了脱离系统管控的静态文件</strong>。防线有四条：<strong>生成时脱敏</strong>——按发起人的角色决定掩码强度，掩码发生在写文件那一刻而不是下载时（文件里已经是明文就来不及了）；<strong>下载鉴权</strong>——file_url 用预签名 URL（5~30 分钟有效）而不是永久公开链接，且下载动作记审计表（谁、何时、导了什么范围的数据）；<strong>行级权限</strong>——“导出全量”还是”导出我有权限的部分”必须在查询条件层强制，不能信任前端传参；<strong>文件水印</strong>——敏感导出在文件头或页脚嵌入导出人信息（Excel 批注或 CSV 注释行），泄露后可溯源。这四条防线在面试里对应一个核心论点：<strong>导出权限模型必须与在线查询权限模型完全同构</strong>——在线查询看得到 10 行的人，导出也只能拿到那 10 行，任何”导出接口绕过了权限过滤器”的实现都是事故预备队。</p>
+<h2 id="资源隔离：别让导出拖垮主业务"><a href="#资源隔离：别让导出拖垮主业务" class="headerlink" title="资源隔离：别让导出拖垮主业务"></a>资源隔离：别让导出拖垮主业务</h2><p>导出是典型的”低优先级重负载”，与主业务共资源时必须隔离。<strong>数据源隔离</strong>：导出走专门的从库或数仓（至少是独立从库），从库延迟要监控——用户导出的数据延迟 10 分钟内可接受，主库绝不能被导出查询波及；<strong>连接池隔离</strong>：导出线程池独享连接池（如 10 个连接），与业务连接池（如 50 个）物理分开，导出高峰期最多”用完自己的连接”排队，不会挤占下单接口的连接；<strong>带宽与存储限速</strong>：OSS 上传走限速通道，避免大文件上传占满出口带宽影响接口响应；<strong>任务排队与配额</strong>：全站同时运行的任务数设上限（如 5 个），超出排队，每个用户每日导出次数限额——这些约束共同保证一个极端场景成立：<strong>运营同时提交 50 个百万行导出，下单接口的 P99 不应该有任何变化</strong>。面试里被问”导出系统怎么设计”，最后一定要落回这句资源视角的总结，它区分了”做过导出功能”和”运营过导出系统”。</p>
+<h2 id="面试高频问题速答"><a href="#面试高频问题速答" class="headerlink" title="面试高频问题速答"></a>面试高频问题速答</h2><h3 id="1-CSV-和-Excel-怎么选？"><a href="#1-CSV-和-Excel-怎么选？" class="headerlink" title="1. CSV 和 Excel 怎么选？"></a>1. CSV 和 Excel 怎么选？</h3><p>CSV 无行数限制、生成快、流式友好，但无样式且大数字会被 Excel 打开时转科学计数法；Excel（xlsx）支持样式多 Sheet，单 Sheet 上限 1048576 行（超了必须分 Sheet）。数据给系统用选 CSV，给人看且超百万行选”多 Sheet xlsx 或分文件 zip”。</p>
+<h3 id="2-导出过程中数据变了怎么办？"><a href="#2-导出过程中数据变了怎么办？" class="headerlink" title="2. 导出过程中数据变了怎么办？"></a>2. 导出过程中数据变了怎么办？</h3><p>任务语义按<strong>提交时刻</strong>锁定：查询条件快照 + 导出数据加 <code>create_time &lt;= 提交时刻</code> 上界，新写入的数据不属于本次任务——“导出的是历史切片”是大多数场景的正确语义，实时性需求应该用报表系统而不是导出。</p>
+<h3 id="3-怎么防止用户狂点导出按钮？"><a href="#3-怎么防止用户狂点导出按钮？" class="headerlink" title="3. 怎么防止用户狂点导出按钮？"></a>3. 怎么防止用户狂点导出按钮？</h3><p>四层防护：前端按钮置灰 + 进度展示、后端按用户维度限频（同用户同时只能有 1~2 个运行中任务）、相同查询条件的任务结果复用（任务表按 userId + 查询条件哈希查重）、全站导出并发总量限流。</p>
+<h3 id="4-百万行导出如何保证不-OOM？"><a href="#4-百万行导出如何保证不-OOM？" class="headerlink" title="4. 百万行导出如何保证不 OOM？"></a>4. 百万行导出如何保证不 OOM？</h3><p>记住一个公式：<strong>内存峰值 &#x3D; 单批处理行数 × 单行对象大小 × 并发批数</strong>。三个变量全部显式控制（批大小固定 5000、VO 精简字段、并发批数受线程池约束），再配合 EasyExcel 的流式写出，内存曲线就是一条平线。任何不受控的”全量 List”都是 OOM 隐患。</p>
+<hr>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>大数据量导出场景题的完整答案是一套组合拳：<strong>分级决策定形态、流式读写控内存、任务状态机保可靠、游标分片治深分页、隔离限流护主业务</strong>。最后三条经验送给读者：其一，导出需求的实际规模永远比产品说的要大——按他们说的 10 倍设计；其二，EasyExcel 的流式查询要验证 JDBC 驱动真的在流式（抓包看网络包大小或观察内存曲线），”假流式”是最隐蔽的坑；其三，导出文件的脱敏和权限校验要和数据接口同等强度——<strong>文件一旦下载，权限边界就脱离了你的系统</strong>。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2026/04/22/a9953f5f9cb2/">响应式编程Reactor与WebFlux——背压、操作符与R2DBC实战</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2026/05/02/9cb4cf283637/">2026面试场景题——数据库与算法篇（智慧矿山实战）</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E9%9D%A2%E8%AF%95/" class="tag" aria-label="标签: #面试">#面试</a>
+            
+                <a href="/tags/%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96/" class="tag" aria-label="标签: #性能优化">#性能优化</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/" aria-label="分类: 2026">
+                        2026
+                        <span>(52)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%96%87%E4%BB%B6%E5%A4%84%E7%90%86/" aria-label="分类: 文件处理">
+                        文件处理
+                        <span>(1)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%96%87%E4%BB%B6%E5%A4%84%E7%90%86/%E9%9D%A2%E8%AF%95%E9%A2%98/" aria-label="分类: 面试题">
+                        面试题
+                        <span>(1)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

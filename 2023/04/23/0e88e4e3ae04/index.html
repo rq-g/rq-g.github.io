@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>Redis实战——排行榜系统的设计与实现 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2023/04/23/0e88e4e3ae04/">
+<meta name="description" content="前言实际项目需要实现多种排行榜：设备运行时长榜、班组安全积分榜、物资消耗排行、设备故障率排行。最初用MySQLORDERBY查询，1000条数据排序耗时500ms，数据量增长到10万后查询超过3秒。2023年用RedisZSet重构后，排行榜查询从500ms降到5ms，同时支持多时间维度和排名变化趋势。本文系">
+
+<!-- Open Graph -->
+<meta property="og:title" content="Redis实战——排行榜系统的设计与实现">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2023/04/23/0e88e4e3ae04/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言实际项目需要实现多种排行榜：设备运行时长榜、班组安全积分榜、物资消耗排行、设备故障率排行。最初用MySQLORDERBY查询，1000条数据排序耗时500ms，数据量增长到10万后查询超过3秒。2023年用RedisZSet重构后，排行榜查询从500ms降到5ms，同时支持多时间维度和排名变化趋势。本文系">
+
+<meta property="article:published_time" content="2023-04-23T12:48:41.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Redis实战——排行榜系统的设计与实现">
+<meta name="twitter:description" content="前言实际项目需要实现多种排行榜：设备运行时长榜、班组安全积分榜、物资消耗排行、设备故障率排行。最初用MySQLORDERBY查询，1000条数据排序耗时500ms，数据量增长到10万后查询超过3秒。2023年用RedisZSet重构后，排行榜查询从500ms降到5ms，同时支持多时间维度和排名变化趋势。本文系">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"Redis实战——排行榜系统的设计与实现","description":"前言实际项目需要实现多种排行榜：设备运行时长榜、班组安全积分榜、物资消耗排行、设备故障率排行。最初用MySQLORDERBY查询，1000条数据排序耗时500ms，数据量增长到10万后查询超过3秒。2023年用RedisZSet重构后，排行榜查询从500ms降到5ms，同时支持多时间维度和排名变化趋势。本文系","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2023-04-23T12:48:41.000Z","dateModified":"2023-04-23T12:48:41.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2023/04/23/0e88e4e3ae04/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2023-04-23T12:48:41.000Z">
+  <article class="post">
+    <h1 class="post-title">Redis实战——排行榜系统的设计与实现</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-04-23T12:48:41.000Z">2023-04-23</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/Redis/">Redis</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>实际项目需要实现多种排行榜：设备运行时长榜、班组安全积分榜、物资消耗排行、设备故障率排行。最初用MySQL ORDER BY查询，1000条数据排序耗时500ms，数据量增长到10万后查询超过3秒。2023年用Redis ZSet重构后，排行榜查询从500ms降到5ms，同时支持多时间维度和排名变化趋势。本文系统地总结排行榜系统在实际项目中的设计与实现。</p>
+<h2 id="排行榜的核心需求"><a href="#排行榜的核心需求" class="headerlink" title="排行榜的核心需求"></a>排行榜的核心需求</h2><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    N1["智慧矿山排行榜核心需求"]
+    N2["操作 MySQL Redis ZSet"]
+    N1 --> N2</pre>
+
+<h2 id="ZSet底层结构分析"><a href="#ZSet底层结构分析" class="headerlink" title="ZSet底层结构分析"></a>ZSet底层结构分析</h2><h3 id="跳表（Skiplist）"><a href="#跳表（Skiplist）" class="headerlink" title="跳表（Skiplist）"></a>跳表（Skiplist）</h3><ul>
+<li>元素数量 &lt; 128 且所有元素 &lt; 64字节 → ziplist（压缩列表）</li>
+<li>元素数量 &gt;&#x3D; 128 或任意元素 &gt;&#x3D; 64字节 → skiplist + dict</li>
+</ul>
+<h3 id="跳表源码关键数据结构"><a href="#跳表源码关键数据结构" class="headerlink" title="跳表源码关键数据结构"></a>跳表源码关键数据结构</h3><p>ZSet 的底层由 <code>zskiplist</code>（跳表）和 <code>dict</code>（哈希表）共同维护：<code>dict</code> 以 member 为键、score 为值，提供 O(1) 的 <code>ZSCORE</code>；<code>zskiplist</code> 保证有序，提供范围查询与排名。下面是 server.h 中两个核心结构（已简化，指针声明里的 <code>*</code> 是 C 语言解引用而非 Markdown 加粗）：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 跳表节点</span></span><br><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">struct</span> <span class="title">zskiplistNode</span> &#123;</span></span><br><span class="line">    sds ele;                        <span class="comment">// 成员对象(member)</span></span><br><span class="line">    <span class="type">double</span> score;                   <span class="comment">// 分数</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">zskiplistNode</span> *<span class="title">backward</span>;</span> <span class="comment">// 后退指针（指向前一个节点）</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">zskiplistLevel</span> &#123;</span></span><br><span class="line">        <span class="class"><span class="keyword">struct</span> <span class="title">zskiplistNode</span> *<span class="title">forward</span>;</span> <span class="comment">// 前进指针（指向下一个节点）</span></span><br><span class="line">        <span class="type">unsigned</span> <span class="type">long</span> span;             <span class="comment">// 跨度：到 forward 节点的距离</span></span><br><span class="line">    &#125; level[];                      <span class="comment">// 层级数组（柔性数组）</span></span><br><span class="line">&#125; zskiplistNode;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 跳表本身</span></span><br><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">struct</span> <span class="title">zskiplist</span> &#123;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">zskiplistNode</span> *<span class="title">header</span>, *<span class="title">tail</span>;</span> <span class="comment">// 头尾哨兵节点</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">long</span> length;                <span class="comment">// 节点数量（不含头节点）</span></span><br><span class="line">    <span class="type">int</span> level;                           <span class="comment">// 当前最大层数</span></span><br><span class="line">&#125; zskiplist;</span><br></pre></td></tr></table></figure>
+
+<p><strong>span 字段是跳表能 O(logN) 算排名的关键</strong>：<code>ZRANK</code> 不是去数节点个数，而是从头节点沿 forward 指针前进时，把沿途经过的 <code>span</code> 累加，到达目标节点时累加值就是排名。这意味着排名计算不需要遍历整条链，复杂度与查找同阶。</p>
+<p><strong>层数由随机函数决定</strong>：新节点的层数按 <code>1/2概率1层、1/4概率2层、1/8概率3层……</code> 的幂次分布生成，最大层数 32（Redis 5.0+ 提升为 64）。平均层数约 1.33，额外指针开销很小。以智慧矿山 10 万设备排行榜为例，跳表高度约 17 层，<code>ZRANK</code> 只需约 17 次指针比较即可定位，远优于 MySQL 用 B+Tree 做 <code>COUNT(*)</code> 全表扫描。</p>
+<h2 id="基础排行榜"><a href="#基础排行榜" class="headerlink" title="基础排行榜"></a>基础排行榜</h2><h3 id="核心操作"><a href="#核心操作" class="headerlink" title="核心操作"></a>核心操作</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">RANK_KEY</span> <span class="operator">=</span> <span class="string">&quot;rank:score&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 更新分数（覆盖）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：设备运行时长排行榜</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">updateScore</span><span class="params">(Long memberId, <span class="type">double</span> score)</span> &#123;</span><br><span class="line">        redisTemplate.opsForZSet().add(RANK_KEY, String.valueOf(memberId), score);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 增加分数（增量）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：班组安全积分增加</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Double</span> <span class="title function_">incrementScore</span><span class="params">(Long memberId, <span class="type">double</span> delta)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().incrementScore(RANK_KEY,</span><br><span class="line">            String.valueOf(memberId), delta);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取TOP N（降序）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：监控大屏TOP 10</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; getTopN(<span class="type">int</span> n) &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().reverseRangeWithScores(RANK_KEY, <span class="number">0</span>, n - <span class="number">1</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取排名（从0开始，降序）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：&quot;我的班组排第几？&quot;</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Long</span> <span class="title function_">getRank</span><span class="params">(Long memberId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().reverseRank(RANK_KEY, String.valueOf(memberId));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取分数</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Double</span> <span class="title function_">getScore</span><span class="params">(Long memberId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().score(RANK_KEY, String.valueOf(memberId));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取排名列表（分页）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：排行榜分页浏览</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; getRankList(<span class="type">int</span> page, <span class="type">int</span> size) &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">start</span> <span class="operator">=</span> (<span class="type">long</span>) page * size;</span><br><span class="line">        <span class="type">long</span> <span class="variable">end</span> <span class="operator">=</span> start + size - <span class="number">1</span>;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().reverseRangeWithScores(RANK_KEY, start, end);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取排名附近的列表</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：&quot;我的排名前后10名是谁？&quot;</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; getAroundRank(Long memberId, <span class="type">int</span> range) &#123;</span><br><span class="line">        <span class="type">Long</span> <span class="variable">rank</span> <span class="operator">=</span> getRank(memberId);</span><br><span class="line">        <span class="keyword">if</span> (rank == <span class="literal">null</span>) <span class="keyword">return</span> Collections.emptySet();</span><br><span class="line">        <span class="type">long</span> <span class="variable">start</span> <span class="operator">=</span> Math.max(<span class="number">0</span>, rank - range);</span><br><span class="line">        <span class="type">long</span> <span class="variable">end</span> <span class="operator">=</span> rank + range;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().reverseRangeWithScores(RANK_KEY, start, end);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取总人数</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Long</span> <span class="title function_">getTotalCount</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().size(RANK_KEY);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="完整排行榜VO"><a href="#完整排行榜VO" class="headerlink" title="完整排行榜VO"></a>完整排行榜VO</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Data</span></span><br><span class="line"><span class="meta">@Builder</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankVO</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> Long memberId;</span><br><span class="line">    <span class="keyword">private</span> String memberName;</span><br><span class="line">    <span class="keyword">private</span> String avatar;</span><br><span class="line">    <span class="keyword">private</span> Double score;</span><br><span class="line">    <span class="keyword">private</span> Long rank;          <span class="comment">// 排名（从1开始）</span></span><br><span class="line">    <span class="keyword">private</span> Long rankChange;    <span class="comment">// 排名变化（正数上升，负数下降）</span></span><br><span class="line">    <span class="keyword">private</span> String scoreLabel;  <span class="comment">// 分数标签（如&quot;运行1280小时&quot;）</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankFacadeService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RankService rankService;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> TeamService teamService;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取排行榜列表（带详情）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：班组安全积分榜</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">List</span>&lt;RankVO&gt; <span class="title function_">getTopRankList</span><span class="params">(<span class="type">int</span> page, <span class="type">int</span> size)</span> &#123;</span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; tuples = rankService.getRankList(page, size);</span><br><span class="line">        <span class="keyword">if</span> (tuples == <span class="literal">null</span> || tuples.isEmpty()) <span class="keyword">return</span> Collections.emptyList();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 批量获取班组信息</span></span><br><span class="line">        <span class="type">List</span>&lt;Long&gt; <span class="variable">teamIds</span> <span class="operator">=</span> tuples.stream()</span><br><span class="line">            .map(t -&gt; Long.parseLong(String.valueOf(t.getValue())))</span><br><span class="line">            .collect(Collectors.toList());</span><br><span class="line">        <span class="type">Map</span>&lt;Long, Team&gt; <span class="variable">teamMap</span> <span class="operator">=</span> teamService.batchGetByIds(teamIds);</span><br><span class="line"></span><br><span class="line">        <span class="type">List</span>&lt;RankVO&gt; <span class="variable">result</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">        <span class="type">long</span> <span class="variable">rank</span> <span class="operator">=</span> (<span class="type">long</span>) page * size + <span class="number">1</span>;</span><br><span class="line">        <span class="keyword">for</span> (ZSetOperations.TypedTuple&lt;Object&gt; tuple : tuples) &#123;</span><br><span class="line">            <span class="type">Long</span> <span class="variable">teamId</span> <span class="operator">=</span> Long.parseLong(String.valueOf(tuple.getValue()));</span><br><span class="line">            <span class="type">Double</span> <span class="variable">score</span> <span class="operator">=</span> tuple.getScore();</span><br><span class="line">            <span class="type">Team</span> <span class="variable">team</span> <span class="operator">=</span> teamMap.get(teamId);</span><br><span class="line"></span><br><span class="line">            result.add(RankVO.builder()</span><br><span class="line">                .memberId(teamId)</span><br><span class="line">                .memberName(team != <span class="literal">null</span> ? team.getName() : <span class="string">&quot;未知班组&quot;</span>)</span><br><span class="line">                .avatar(team != <span class="literal">null</span> ? team.getAvatar() : <span class="literal">null</span>)</span><br><span class="line">                .score(score)</span><br><span class="line">                .rank(rank++)</span><br><span class="line">                .scoreLabel(score != <span class="literal">null</span> ? <span class="string">&quot;安全积分&quot;</span> + score.intValue() : <span class="literal">null</span>)</span><br><span class="line">                .build());</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取某个班组的排名信息</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">RankVO</span> <span class="title function_">getMemberRank</span><span class="params">(Long teamId)</span> &#123;</span><br><span class="line">        <span class="type">Long</span> <span class="variable">rank</span> <span class="operator">=</span> rankService.getRank(teamId);</span><br><span class="line">        <span class="type">Double</span> <span class="variable">score</span> <span class="operator">=</span> rankService.getScore(teamId);</span><br><span class="line">        <span class="keyword">if</span> (rank == <span class="literal">null</span>) <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line"></span><br><span class="line">        <span class="type">Team</span> <span class="variable">team</span> <span class="operator">=</span> teamService.getById(teamId);</span><br><span class="line">        <span class="keyword">return</span> RankVO.builder()</span><br><span class="line">            .memberId(teamId)</span><br><span class="line">            .memberName(team != <span class="literal">null</span> ? team.getName() : <span class="string">&quot;未知班组&quot;</span>)</span><br><span class="line">            .score(score)</span><br><span class="line">            .rank(rank + <span class="number">1</span>)  <span class="comment">// rank从0开始，+1转为从1开始</span></span><br><span class="line">            .scoreLabel(score != <span class="literal">null</span> ? <span class="string">&quot;安全积分&quot;</span> + score.intValue() : <span class="literal">null</span>)</span><br><span class="line">            .build();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="ZSet命令与时间复杂度"><a href="#ZSet命令与时间复杂度" class="headerlink" title="ZSet命令与时间复杂度"></a>ZSet命令与时间复杂度</h3><p><strong>ZSet核心命令与时间复杂度</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>命令</th>
+<th>时间复杂度</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ZADD</td>
+<td>O(logN)</td>
+<td>添加&#x2F;更新成员</td>
+</tr>
+<tr>
+<td>ZINCRBY</td>
+<td>O(logN)</td>
+<td>增加分数</td>
+</tr>
+<tr>
+<td>ZREM</td>
+<td>O(logN)</td>
+<td>删除成员</td>
+</tr>
+<tr>
+<td>ZSCORE</td>
+<td>O(1)</td>
+<td>查分数（通过 dict 直接查）</td>
+</tr>
+<tr>
+<td>ZRANK &#x2F; ZREVRANK</td>
+<td>O(logN)</td>
+<td>查排名（span 累加）</td>
+</tr>
+<tr>
+<td>ZRANGE &#x2F; ZREVRANGE</td>
+<td>O(logN+M)</td>
+<td>范围查询（M&#x3D;返回数量）</td>
+</tr>
+<tr>
+<td>ZRANGEBYSCORE</td>
+<td>O(logN+M)</td>
+<td>按分数范围查询</td>
+</tr>
+<tr>
+<td>ZCOUNT</td>
+<td>O(logN)</td>
+<td>统计分数范围内数量</td>
+</tr>
+<tr>
+<td>ZCARD</td>
+<td>O(1)</td>
+<td>总成员数</td>
+</tr>
+<tr>
+<td>ZUNIONSTORE</td>
+<td>O(N*K)</td>
+<td>合并 K 个 ZSet（N&#x3D;最大 ZSet 元素数）</td>
+</tr>
+<tr>
+<td>ZSCAN</td>
+<td>O(1)每次</td>
+<td>增量迭代</td>
+</tr>
+</tbody></table>
+<p><strong>智慧矿山场景实测</strong>（10 万设备规模）：</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>时间复杂度</th>
+<th>实测耗时</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ZREVRANGE TOP 10</td>
+<td>O(logN+10)</td>
+<td>~5ms</td>
+</tr>
+<tr>
+<td>ZREVRANK 查排名</td>
+<td>O(logN)</td>
+<td>~0.1ms</td>
+</tr>
+<tr>
+<td>ZINCRBY 加积分</td>
+<td>O(logN)</td>
+<td>~0.1ms</td>
+</tr>
+</tbody></table>
+<h2 id="深度剖析：ZSet-为什么用跳表而不是红黑树"><a href="#深度剖析：ZSet-为什么用跳表而不是红黑树" class="headerlink" title="深度剖析：ZSet 为什么用跳表而不是红黑树"></a>深度剖析：ZSet 为什么用跳表而不是红黑树</h2><p>面试高频里已经点过，这里展开”为什么”。从工程权衡角度，Redis 作者 antirez 选择跳表而非红黑树，核心原因有四点：</p>
+<ol>
+<li><strong>范围查询天然有序</strong>：排行榜 90% 的操作是 <code>ZRANGE/ZREVRANGE</code> 取一段连续排名，跳表沿 forward 指针顺序遍历即可得到有序结果；红黑树要做中序遍历，且缓存局部性更差。</li>
+<li><strong>实现简单、不易出错</strong>：跳表插入只需”找到每层前驱 → 改指针”，红黑树插入后需要多种旋转（LL&#x2F;LR&#x2F;RL&#x2F;RR）来修复平衡，代码复杂度与出 bug 概率都更高。</li>
+<li><strong>span 带来排名能力</strong>：红黑树没有”跨度”概念，要算排名必须额外维护子树大小；而跳表的 <code>span</code> 让 <code>ZRANK</code> 几乎零成本。</li>
+<li><strong>内存换性能可接受</strong>：跳表平均多花约 1.33 倍指针内存，但对 Redis 这种内存换性能的系统完全值得。</li>
+</ol>
+<p>代价是跳表比红黑树占更多指针内存，但对”读多写少、要排名、要范围”的排行榜场景，利远大于弊。</p>
+<h3 id="ZADD-执行流程源码剖析（t-zset-c-简化）"><a href="#ZADD-执行流程源码剖析（t-zset-c-简化）" class="headerlink" title="ZADD 执行流程源码剖析（t_zset.c 简化）"></a>ZADD 执行流程源码剖析（t_zset.c 简化）</h3><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ZADD key score member [...]</span></span><br><span class="line"><span class="comment">// 核心路径：zaddGenericCommand -&gt; zsetAdd</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">zsetAdd</span><span class="params">(robj *zobj, <span class="type">double</span> score, sds ele, <span class="type">int</span> *flags)</span> &#123;</span><br><span class="line">    <span class="comment">// 1. 根据元素数量/大小决定底层编码</span></span><br><span class="line">    <span class="comment">//    ziplist（小数据）或 skiplist+dict（大数据）</span></span><br><span class="line">    <span class="keyword">if</span> (zobj-&gt;encoding == OBJ_ENCODING_ZIPLIST) &#123;</span><br><span class="line">        <span class="comment">// 2. ziplist 路径：按 score 有序存储，插入要移动内存</span></span><br><span class="line">        ...</span><br><span class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> (zobj-&gt;encoding == OBJ_ENCODING_SKIPLIST) &#123;</span><br><span class="line">        zset *zs = zobj-&gt;ptr;</span><br><span class="line">        <span class="comment">// 3. dict 查 member 是否已存在（O(1)）</span></span><br><span class="line">        dictEntry *de = dictFind(zs-&gt;dict, ele);</span><br><span class="line">        <span class="keyword">if</span> (de != <span class="literal">NULL</span>) &#123;</span><br><span class="line">            <span class="comment">// 4a. 已存在：更新 score，在跳表里调整位置</span></span><br><span class="line">            zskiplistNode *ln = dictGetVal(de);</span><br><span class="line">            <span class="keyword">if</span> (score != ln-&gt;score) &#123;</span><br><span class="line">                zslDelete(zs-&gt;zsl, ln-&gt;score, ln-&gt;ele, <span class="literal">NULL</span>);</span><br><span class="line">                znode = zslInsert(zs-&gt;zsl, score, ln-&gt;ele);</span><br><span class="line">                <span class="comment">// dict 的 value 指向同一个 node，无需改 dict</span></span><br><span class="line">            &#125;</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="comment">// 4b. 不存在：新插入跳表 + 写入 dict</span></span><br><span class="line">            znode = zslInsert(zs-&gt;zsl, score, ele);</span><br><span class="line">            dictAdd(zs-&gt;dict, ele, &amp;znode-&gt;score);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>要点：<strong>dict 与 skiplist 共享同一个 member 字符串和 score 值，dict 的 value 是指向 skiplist node 中 score 字段的指针</strong>，两者永远不会不一致——这正是 ZSet”既能 O(1) 查分、又能 O(logN) 排名”的根本实现。</p>
+<pre class="mermaid">flowchart TD
+    A["ZADD key score member"] --> B{"底层编码?"}
+    B -->|"ziplist 小数据"| C["压缩列表按序<br/>插入/更新"]
+    B -->|"skiplist+dict 大数据"| D["dict 查 member 是否存在 O(1)"]
+    D -->|"已存在"| E["更新 score<br/>跳表删旧+插新"]
+    D -->|"不存在"| F["跳表插新节点<br/>+ dict 写入"]
+    C --> G["返回结果"]
+    E --> G
+    F --> G</pre>
+
+<h2 id="多时间维度排行榜"><a href="#多时间维度排行榜" class="headerlink" title="多时间维度排行榜"></a>多时间维度排行榜</h2><h3 id="设计方案"><a href="#设计方案" class="headerlink" title="设计方案"></a>设计方案</h3><table>
+<thead>
+<tr>
+<th>*</th>
+<th>排行榜时间维度关系</th>
+</tr>
+</thead>
+</table>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">| * | 日榜(每天) ──→ 合并 ──→ 周榜(每周) |</span><br></pre></td></tr></table></figure>
+
+
+<h3 id="日榜自动过期"><a href="#日榜自动过期" class="headerlink" title="日榜自动过期"></a>日榜自动过期</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankExpireService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RankKeyGenerator keyGenerator;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 更新日榜分数（带过期时间）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">updateDailyScore</span><span class="params">(String bizType, Long memberId, <span class="type">double</span> score)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> keyGenerator.getDailyKey(bizType, LocalDate.now());</span><br><span class="line">        redisTemplate.opsForZSet().add(key, String.valueOf(memberId), score);</span><br><span class="line">        <span class="comment">// 日榜7天后过期</span></span><br><span class="line">        redisTemplate.expire(key, <span class="number">7</span>, TimeUnit.DAYS);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 更新月榜分数（带过期时间）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">updateMonthlyScore</span><span class="params">(String bizType, Long memberId, <span class="type">double</span> score)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> keyGenerator.getMonthlyKey(bizType, LocalDate.now());</span><br><span class="line">        redisTemplate.opsForZSet().add(key, String.valueOf(memberId), score);</span><br><span class="line">        <span class="comment">// 月榜90天后过期</span></span><br><span class="line">        redisTemplate.expire(key, <span class="number">90</span>, TimeUnit.DAYS);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="定时合并日榜到周榜-月榜"><a href="#定时合并日榜到周榜-月榜" class="headerlink" title="定时合并日榜到周榜&#x2F;月榜"></a>定时合并日榜到周榜&#x2F;月榜</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankMergeTask</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RankKeyGenerator keyGenerator;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 每天凌晨1点合并日榜到周榜</span></span><br><span class="line"><span class="comment">     * ZUNIONSTORE：合并多个ZSet的分数</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 1 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">mergeDailyToWeekly</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">bizType</span> <span class="operator">=</span> <span class="string">&quot;safe&quot;</span>;  <span class="comment">// 安全积分榜</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">dailyKey</span> <span class="operator">=</span> keyGenerator.getDailyKey(bizType, LocalDate.now().minusDays(<span class="number">1</span>));</span><br><span class="line">        <span class="type">String</span> <span class="variable">weeklyKey</span> <span class="operator">=</span> keyGenerator.getWeeklyKey(bizType, LocalDate.now());</span><br><span class="line"></span><br><span class="line">        <span class="comment">// ZUNIONSTORE合并（SUM聚合）</span></span><br><span class="line">        redisTemplate.opsForZSet().unionAndStore(weeklyKey, dailyKey, weeklyKey);</span><br><span class="line">        log.info(<span class="string">&quot;合并日榜到周榜完成: &#123;&#125; → &#123;&#125;&quot;</span>, dailyKey, weeklyKey);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 每天凌晨2点合并日榜到月榜</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 2 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">mergeDailyToMonthly</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">bizType</span> <span class="operator">=</span> <span class="string">&quot;safe&quot;</span>;</span><br><span class="line">        <span class="type">String</span> <span class="variable">dailyKey</span> <span class="operator">=</span> keyGenerator.getDailyKey(bizType, LocalDate.now().minusDays(<span class="number">1</span>));</span><br><span class="line">        <span class="type">String</span> <span class="variable">monthlyKey</span> <span class="operator">=</span> keyGenerator.getMonthlyKey(bizType, LocalDate.now());</span><br><span class="line"></span><br><span class="line">        redisTemplate.opsForZSet().unionAndStore(monthlyKey, dailyKey, monthlyKey);</span><br><span class="line">        redisTemplate.expire(monthlyKey, <span class="number">90</span>, TimeUnit.DAYS);</span><br><span class="line">        log.info(<span class="string">&quot;合并日榜到月榜完成: &#123;&#125; → &#123;&#125;&quot;</span>, dailyKey, monthlyKey);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="ZUNIONSTORE性能优化"><a href="#ZUNIONSTORE性能优化" class="headerlink" title="ZUNIONSTORE性能优化"></a>ZUNIONSTORE性能优化</h3><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    N1["ZUNIONSTORE性能优化策略"]
+    N2["1. 低峰期执行 智慧矿山凌晨1-2点合并日榜 此时QPS最低"]
+    N3["批量发送减少网络往返 每批500条避免Pipeline过大 4. 从节点执行合并Redis 7.0"]
+    N4["利用在从节点读的特性减少主节点压力"]
+    N1 --> N2
+    N2 --> N3
+    N2 --> N4</pre>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 智慧矿山 - 使用Pipeline代替ZUNIONSTORE合并榜单</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankPipelineMerge</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * Pipeline方式合并日榜到周榜</span></span><br><span class="line"><span class="comment">     * 避免ZUNIONSTORE阻塞Redis</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 1 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">mergeDailyToWeeklyByPipeline</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">bizType</span> <span class="operator">=</span> <span class="string">&quot;safe&quot;</span>;</span><br><span class="line">        <span class="type">String</span> <span class="variable">dailyKey</span> <span class="operator">=</span> <span class="string">&quot;rank:&quot;</span> + bizType + <span class="string">&quot;:&quot;</span> +</span><br><span class="line">            LocalDate.now().minusDays(<span class="number">1</span>).format(DateTimeFormatter.BASIC_ISO_DATE);</span><br><span class="line">        <span class="type">String</span> <span class="variable">weeklyKey</span> <span class="operator">=</span> <span class="string">&quot;rank:&quot;</span> + bizType + <span class="string">&quot;:&quot;</span> + LocalDate.now().getYear() + <span class="string">&quot;W&quot;</span> +</span><br><span class="line">            String.format(<span class="string">&quot;%02d&quot;</span>, LocalDate.now().get(</span><br><span class="line">                WeekFields.of(DayOfWeek.MONDAY, <span class="number">1</span>).weekOfWeekBasedYear()));</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 获取日榜所有数据</span></span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; dailyData =</span><br><span class="line">            redisTemplate.opsForZSet().reverseRangeWithScores(dailyKey, <span class="number">0</span>, -<span class="number">1</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (dailyData == <span class="literal">null</span> || dailyData.isEmpty()) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// Pipeline批量ZINCRBY到周榜</span></span><br><span class="line">        redisTemplate.executePipelined((RedisCallback&lt;Object&gt;) connection -&gt; &#123;</span><br><span class="line">            <span class="type">StringRedisConnection</span> <span class="variable">stringConn</span> <span class="operator">=</span> (StringRedisConnection) connection;</span><br><span class="line">            <span class="type">int</span> <span class="variable">count</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">            <span class="keyword">for</span> (ZSetOperations.TypedTuple&lt;Object&gt; tuple : dailyData) &#123;</span><br><span class="line">                stringConn.zIncrBy(weeklyKey.getBytes(),</span><br><span class="line">                    tuple.getScore(),</span><br><span class="line">                    String.valueOf(tuple.getValue()).getBytes());</span><br><span class="line">                count++;</span><br><span class="line">            &#125;</span><br><span class="line">            log.info(<span class="string">&quot;Pipeline合并完成: &#123;&#125; → &#123;&#125;, 共&#123;&#125;条&quot;</span>, dailyKey, weeklyKey, count);</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="排名变化趋势"><a href="#排名变化趋势" class="headerlink" title="排名变化趋势"></a>排名变化趋势</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankTrendService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取排名变化</span></span><br><span class="line"><span class="comment">     * 正数=排名上升，负数=排名下降，0=无变化</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Long</span> <span class="title function_">getRankChange</span><span class="params">(String bizType, Long memberId)</span> &#123;</span><br><span class="line">        <span class="type">Long</span> <span class="variable">currentRank</span> <span class="operator">=</span> getCurrentRank(bizType, memberId);</span><br><span class="line">        <span class="type">Long</span> <span class="variable">yesterdayRank</span> <span class="operator">=</span> getYesterdayRank(bizType, memberId);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (currentRank == <span class="literal">null</span>) <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">        <span class="keyword">if</span> (yesterdayRank == <span class="literal">null</span>) <span class="keyword">return</span> <span class="number">0L</span>;  <span class="comment">// 新上榜</span></span><br><span class="line"></span><br><span class="line">        <span class="comment">// 排名数值越小越好，所以用昨天的排名减今天的排名</span></span><br><span class="line">        <span class="keyword">return</span> yesterdayRank - currentRank;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 每天凌晨保存当前排名快照</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 0 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">snapshotRank</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">bizType</span> <span class="operator">=</span> <span class="string">&quot;safe&quot;</span>;</span><br><span class="line">        <span class="type">String</span> <span class="variable">currentKey</span> <span class="operator">=</span> <span class="string">&quot;rank:&quot;</span> + bizType + <span class="string">&quot;:total&quot;</span>;</span><br><span class="line">        <span class="type">String</span> <span class="variable">snapshotKey</span> <span class="operator">=</span> <span class="string">&quot;rank:&quot;</span> + bizType + <span class="string">&quot;:snapshot:&quot;</span> +</span><br><span class="line">            LocalDate.now().minusDays(<span class="number">1</span>).format(DateTimeFormatter.BASIC_ISO_DATE);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 使用DUMP+RESTORE原子复制（比逐条ADD更高效）</span></span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; all =</span><br><span class="line">            redisTemplate.opsForZSet().reverseRangeWithScores(currentKey, <span class="number">0</span>, -<span class="number">1</span>);</span><br><span class="line">        <span class="keyword">if</span> (all != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">for</span> (ZSetOperations.TypedTuple&lt;Object&gt; tuple : all) &#123;</span><br><span class="line">                redisTemplate.opsForZSet().add(snapshotKey,</span><br><span class="line">                    String.valueOf(tuple.getValue()), tuple.getScore());</span><br><span class="line">            &#125;</span><br><span class="line">            redisTemplate.expire(snapshotKey, <span class="number">7</span>, TimeUnit.DAYS);</span><br><span class="line">        &#125;</span><br><span class="line">        log.info(<span class="string">&quot;排名快照保存完成: &#123;&#125;&quot;</span>, snapshotKey);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">Long</span> <span class="title function_">getCurrentRank</span><span class="params">(String bizType, Long memberId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;rank:&quot;</span> + bizType + <span class="string">&quot;:total&quot;</span>;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().reverseRank(key, String.valueOf(memberId));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">Long</span> <span class="title function_">getYesterdayRank</span><span class="params">(String bizType, Long memberId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;rank:&quot;</span> + bizType + <span class="string">&quot;:snapshot:&quot;</span> +</span><br><span class="line">            LocalDate.now().minusDays(<span class="number">1</span>).format(DateTimeFormatter.BASIC_ISO_DATE);</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().reverseRank(key, String.valueOf(memberId));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="设备运行时长排行榜"><a href="#设备运行时长排行榜" class="headerlink" title="设备运行时长排行榜"></a>设备运行时长排行榜</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceRuntimeRankService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">RUNTIME_RANK_KEY</span> <span class="operator">=</span> <span class="string">&quot;rank:runtime:device&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 设备运行时长累加</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：设备每运行1小时，累加运行时长</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Double</span> <span class="title function_">addRuntime</span><span class="params">(Long deviceId, <span class="type">double</span> hours)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().incrementScore(</span><br><span class="line">            RUNTIME_RANK_KEY, String.valueOf(deviceId), hours);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取运行时长TOP N设备</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">List</span>&lt;DeviceRankVO&gt; <span class="title function_">getTopDevices</span><span class="params">(<span class="type">int</span> n)</span> &#123;</span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; tuples =</span><br><span class="line">            redisTemplate.opsForZSet().reverseRangeWithScores(RUNTIME_RANK_KEY, <span class="number">0</span>, n - <span class="number">1</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (tuples == <span class="literal">null</span>) <span class="keyword">return</span> Collections.emptyList();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> tuples.stream().map(tuple -&gt; &#123;</span><br><span class="line">            <span class="type">Long</span> <span class="variable">deviceId</span> <span class="operator">=</span> Long.parseLong(String.valueOf(tuple.getValue()));</span><br><span class="line">            <span class="keyword">return</span> DeviceRankVO.builder()</span><br><span class="line">                .deviceId(deviceId)</span><br><span class="line">                .runtimeHours(tuple.getScore().longValue())</span><br><span class="line">                .runtimeLabel(<span class="string">&quot;运行&quot;</span> + tuple.getScore().longValue() + <span class="string">&quot;小时&quot;</span>)</span><br><span class="line">                .build();</span><br><span class="line">        &#125;).collect(Collectors.toList());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="物资消耗排行榜"><a href="#物资消耗排行榜" class="headerlink" title="物资消耗排行榜"></a>物资消耗排行榜</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MaterialConsumeRankService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">CONSUME_RANK_KEY</span> <span class="operator">=</span> <span class="string">&quot;rank:consume:material&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 物资消耗量增加</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：物资出库时更新消耗排行</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Double</span> <span class="title function_">addConsume</span><span class="params">(Long materialId, <span class="type">int</span> quantity)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().incrementScore(</span><br><span class="line">            CONSUME_RANK_KEY, String.valueOf(materialId), quantity);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取消耗TOP N物资</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">List</span>&lt;MaterialConsumeVO&gt; <span class="title function_">getTopMaterials</span><span class="params">(<span class="type">int</span> n)</span> &#123;</span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; tuples =</span><br><span class="line">            redisTemplate.opsForZSet().reverseRangeWithScores(CONSUME_RANK_KEY, <span class="number">0</span>, n - <span class="number">1</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (tuples == <span class="literal">null</span>) <span class="keyword">return</span> Collections.emptyList();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> tuples.stream().map(tuple -&gt; &#123;</span><br><span class="line">            <span class="type">Long</span> <span class="variable">materialId</span> <span class="operator">=</span> Long.parseLong(String.valueOf(tuple.getValue()));</span><br><span class="line">            <span class="keyword">return</span> MaterialConsumeVO.builder()</span><br><span class="line">                .materialId(materialId)</span><br><span class="line">                .consumeQuantity(tuple.getScore().longValue())</span><br><span class="line">                .build();</span><br><span class="line">        &#125;).collect(Collectors.toList());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="设备故障率排行榜"><a href="#设备故障率排行榜" class="headerlink" title="设备故障率排行榜"></a>设备故障率排行榜</h2><p><strong>为什么要预计算？</strong></p>
+<ul>
+<li>ZSet不支持除法运算</li>
+<li>每次查询时计算故障率太慢</li>
+<li>定时预计算故障率存入独立ZSet</li>
+</ul>
+<h2 id="热度衰减排行榜"><a href="#热度衰减排行榜" class="headerlink" title="热度衰减排行榜"></a>热度衰减排行榜</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">HotRankDecayService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">HOT_RANK_KEY</span> <span class="operator">=</span> <span class="string">&quot;rank:hot:notice&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 热度计算：浏览量×1 + 点赞×5 + 评论×10 + 收藏×8</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">updateHotScore</span><span class="params">(Long noticeId, <span class="type">int</span> views, <span class="type">int</span> likes, <span class="type">int</span> comments, <span class="type">int</span> favorites)</span> &#123;</span><br><span class="line">        <span class="type">double</span> <span class="variable">score</span> <span class="operator">=</span> views * <span class="number">1.0</span> + likes * <span class="number">5.0</span> + comments * <span class="number">10.0</span> + favorites * <span class="number">8.0</span>;</span><br><span class="line">        redisTemplate.opsForZSet().add(HOT_RANK_KEY, String.valueOf(noticeId), score);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 浏览量增加</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">incrementViews</span><span class="params">(Long noticeId)</span> &#123;</span><br><span class="line">        redisTemplate.opsForZSet().incrementScore(HOT_RANK_KEY,</span><br><span class="line">            String.valueOf(noticeId), <span class="number">1.0</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 点赞增加</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">incrementLikes</span><span class="params">(Long noticeId)</span> &#123;</span><br><span class="line">        redisTemplate.opsForZSet().incrementScore(HOT_RANK_KEY,</span><br><span class="line">            String.valueOf(noticeId), <span class="number">5.0</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 时间衰减：每天凌晨降低热度</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：通知公告热度排行榜</span></span><br><span class="line"><span class="comment">     *</span></span><br><span class="line"><span class="comment">     * 衰减策略：每天衰减5%</span></span><br><span class="line"><span class="comment">     * 新内容热度高 → 自然排在前面</span></span><br><span class="line"><span class="comment">     * 老内容热度衰减 → 逐渐退出排行榜</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 3 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">decayHotScore</span><span class="params">()</span> &#123;</span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; all =</span><br><span class="line">            redisTemplate.opsForZSet().reverseRangeWithScores(HOT_RANK_KEY, <span class="number">0</span>, -<span class="number">1</span>);</span><br><span class="line">        <span class="keyword">if</span> (all == <span class="literal">null</span>) <span class="keyword">return</span>;</span><br><span class="line"></span><br><span class="line">        <span class="type">int</span> <span class="variable">decayed</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">        <span class="type">int</span> <span class="variable">removed</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">for</span> (ZSetOperations.TypedTuple&lt;Object&gt; tuple : all) &#123;</span><br><span class="line">            <span class="type">Double</span> <span class="variable">newScore</span> <span class="operator">=</span> tuple.getScore() * <span class="number">0.95</span>;  <span class="comment">// 每天衰减5%</span></span><br><span class="line">            <span class="keyword">if</span> (newScore &lt; <span class="number">1.0</span>) &#123;</span><br><span class="line">                redisTemplate.opsForZSet().remove(HOT_RANK_KEY, tuple.getValue());</span><br><span class="line">                removed++;</span><br><span class="line">            &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">                redisTemplate.opsForZSet().add(HOT_RANK_KEY, tuple.getValue(), newScore);</span><br><span class="line">                decayed++;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        log.info(<span class="string">&quot;热度衰减完成：衰减&#123;&#125;条，移除&#123;&#125;条&quot;</span>, decayed, removed);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="Lua脚本原子更新热度"><a href="#Lua脚本原子更新热度" class="headerlink" title="Lua脚本原子更新热度"></a>Lua脚本原子更新热度</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 智慧矿山 - Lua脚本原子更新热度</span></span><br><span class="line"><span class="comment"> * 解决浏览/点赞/评论权重计算的非原子问题</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">HotRankLuaService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * Lua脚本：原子计算并更新热度</span></span><br><span class="line"><span class="comment">     * 将浏览/点赞/评论的加权计算放在Redis端执行</span></span><br><span class="line"><span class="comment">     * 避免Java端计算后再ZADD可能出现的并发问题</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">UPDATE_HOT_SCORE_LUA</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;local key = KEYS[1] &quot;</span> +</span><br><span class="line">        <span class="string">&quot;local noticeId = ARGV[1] &quot;</span> +</span><br><span class="line">        <span class="string">&quot;local viewWeight = tonumber(ARGV[2]) &quot;</span> +</span><br><span class="line">        <span class="string">&quot;local likeWeight = tonumber(ARGV[3]) &quot;</span> +</span><br><span class="line">        <span class="string">&quot;local commentWeight = tonumber(ARGV[4]) &quot;</span> +</span><br><span class="line">        <span class="string">&quot;local delta = viewWeight * 1 + likeWeight * 5 + commentWeight * 10 &quot;</span> +</span><br><span class="line">        <span class="string">&quot;return redis.call(&#x27;ZINCRBY&#x27;, key, delta, noticeId)&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * Lua脚本：原子浏览+热度更新</span></span><br><span class="line"><span class="comment">     * 浏览量计数器+1 同时热度+1</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">VIEW_AND_HOT_LUA</span> <span class="operator">=</span></span><br><span class="line">        <span class="string">&quot;local viewKey = KEYS[1] &quot;</span> +</span><br><span class="line">        <span class="string">&quot;local hotKey = KEYS[2] &quot;</span> +</span><br><span class="line">        <span class="string">&quot;local noticeId = ARGV[1] &quot;</span> +</span><br><span class="line">        <span class="string">&quot;redis.call(&#x27;INCR&#x27;, viewKey) &quot;</span> +</span><br><span class="line">        <span class="string">&quot;return redis.call(&#x27;ZINCRBY&#x27;, hotKey, 1, noticeId)&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 原子更新热度（浏览+点赞+评论）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Double</span> <span class="title function_">atomicUpdateHotScore</span><span class="params">(Long noticeId, <span class="type">int</span> views, <span class="type">int</span> likes, <span class="type">int</span> comments)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.execute(</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(UPDATE_HOT_SCORE_LUA, Long.class),</span><br><span class="line">            Collections.singletonList(<span class="string">&quot;rank:hot:notice&quot;</span>),</span><br><span class="line">            String.valueOf(noticeId),</span><br><span class="line">            String.valueOf(views),</span><br><span class="line">            String.valueOf(likes),</span><br><span class="line">            String.valueOf(comments));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 原子浏览+热度更新</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：用户查看通知公告时，同时更新浏览计数和热度</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Long</span> <span class="title function_">viewAndUpdateHot</span><span class="params">(Long noticeId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.execute(</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">DefaultRedisScript</span>&lt;&gt;(VIEW_AND_HOT_LUA, Long.class),</span><br><span class="line">            Arrays.asList(<span class="string">&quot;notice:views:&quot;</span> + noticeId, <span class="string">&quot;rank:hot:notice&quot;</span>),</span><br><span class="line">            String.valueOf(noticeId));</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="大数据量优化"><a href="#大数据量优化" class="headerlink" title="大数据量优化"></a>大数据量优化</h2><h3 id="只缓存TOP-N"><a href="#只缓存TOP-N" class="headerlink" title="只缓存TOP N"></a>只缓存TOP N</h3><p><strong>为什么要只缓存TOP N？</strong></p>
+<ol>
+<li>百万级ZSet内存占用大（约500MB）</li>
+<li>大ZSet的ZADD&#x2F;ZINCRBY变慢</li>
+<li>99%的查询只看TOP N</li>
+<li>排名靠后的从数据库查询即可</li>
+</ol>
+<h3 id="排行榜缓存策略"><a href="#排行榜缓存策略" class="headerlink" title="排行榜缓存策略"></a>排行榜缓存策略</h3><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    N1["排行榜多级缓存策略"]
+    N2["客户端缓存 本地缓存 Redis缓存"]
+    N3["(浏览器) (Caffeine)"]
+    N4["(ZSet)"]
+    N5["层级 TTL 说明"]
+    N1 --> N2
+    N1 --> N3
+    N1 --> N4
+    N2 --> N5
+    N3 --> N5
+    N4 --> N5</pre>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 智慧矿山 - 排行榜多级缓存</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankCacheService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RankService rankService;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// Caffeine本地缓存</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">Cache</span>&lt;String, List&lt;RankVO&gt;&gt; <span class="variable">localCache</span> <span class="operator">=</span> Caffeine.newBuilder()</span><br><span class="line">        .expireAfterWrite(Duration.ofSeconds(<span class="number">10</span>))</span><br><span class="line">        .maximumSize(<span class="number">100</span>)</span><br><span class="line">        .build();</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取排行榜（带本地缓存）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">List</span>&lt;RankVO&gt; <span class="title function_">getTopRankWithCache</span><span class="params">(<span class="type">int</span> page, <span class="type">int</span> size)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">cacheKey</span> <span class="operator">=</span> <span class="string">&quot;rank:top:&quot;</span> + page + <span class="string">&quot;:&quot;</span> + size;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 1. 查本地缓存</span></span><br><span class="line">        <span class="type">List</span>&lt;RankVO&gt; <span class="variable">cached</span> <span class="operator">=</span> localCache.getIfPresent(cacheKey);</span><br><span class="line">        <span class="keyword">if</span> (cached != <span class="literal">null</span>) <span class="keyword">return</span> cached;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 查Redis</span></span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; tuples =</span><br><span class="line">            rankService.getRankList(page, size);</span><br><span class="line">        <span class="keyword">if</span> (tuples == <span class="literal">null</span> || tuples.isEmpty()) <span class="keyword">return</span> Collections.emptyList();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 转换并缓存</span></span><br><span class="line">        <span class="type">List</span>&lt;RankVO&gt; <span class="variable">result</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line">        <span class="type">long</span> <span class="variable">rank</span> <span class="operator">=</span> (<span class="type">long</span>) page * size + <span class="number">1</span>;</span><br><span class="line">        <span class="keyword">for</span> (ZSetOperations.TypedTuple&lt;Object&gt; tuple : tuples) &#123;</span><br><span class="line">            result.add(RankVO.builder()</span><br><span class="line">                .memberId(Long.parseLong(String.valueOf(tuple.getValue())))</span><br><span class="line">                .score(tuple.getScore())</span><br><span class="line">                .rank(rank++)</span><br><span class="line">                .build());</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        localCache.put(cacheKey, result);</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="排行榜数据一致性"><a href="#排行榜数据一致性" class="headerlink" title="排行榜数据一致性"></a>排行榜数据一致性</h2><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    N1["排行榜数据一致性保证"]
+    N2["1. 更新MySQL事务保证 2."]
+    N3["更新Redis"]
+    N4["ZSetZINCRBY 3."]
+    N5["如果Redis更新失败"]
+    N6["定时校验补偿"]
+    N7["1. 更新MySQL 2. 发送MQ消息"]
+    N8["3. 消费者监听消息"]
+    N9["更新Redis ZSet 4."]
+    N10["延迟可能几百毫秒"]
+    N1 --> N2
+    N1 --> N3
+    N1 --> N4
+    N1 --> N5
+    N2 --> N6
+    N3 --> N6
+    N4 --> N6
+    N5 --> N6
+    N6 --> N7
+    N6 --> N8
+    N7 --> N9
+    N7 --> N10
+    N8 --> N9
+    N8 --> N10</pre>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 智慧矿山 - 排行榜数据一致性校验</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankConsistencyChecker</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> TeamMapper teamMapper;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 每天凌晨3点校验排行榜一致性</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(cron = &quot;0 0 3 * * ?&quot;)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">checkRankConsistency</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">bizType</span> <span class="operator">=</span> <span class="string">&quot;safe&quot;</span>;</span><br><span class="line">        <span class="type">String</span> <span class="variable">rankKey</span> <span class="operator">=</span> <span class="string">&quot;rank:&quot;</span> + bizType + <span class="string">&quot;:total&quot;</span>;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 1. 从MySQL查询TOP 100</span></span><br><span class="line">        <span class="type">List</span>&lt;Team&gt; <span class="variable">topTeams</span> <span class="operator">=</span> teamMapper.selectTopByScore(<span class="number">100</span>);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 2. 从Redis查询TOP 100</span></span><br><span class="line">        Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; redisTop =</span><br><span class="line">            redisTemplate.opsForZSet().reverseRangeWithScores(rankKey, <span class="number">0</span>, <span class="number">99</span>);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 3. 比较并修正</span></span><br><span class="line">        <span class="type">Map</span>&lt;Long, Double&gt; <span class="variable">mysqlMap</span> <span class="operator">=</span> topTeams.stream()</span><br><span class="line">            .collect(Collectors.toMap(Team::getId, Team::getSafeScore));</span><br><span class="line">        <span class="type">int</span> <span class="variable">fixed</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">for</span> (ZSetOperations.TypedTuple&lt;Object&gt; tuple : redisTop) &#123;</span><br><span class="line">            <span class="type">Long</span> <span class="variable">teamId</span> <span class="operator">=</span> Long.parseLong(String.valueOf(tuple.getValue()));</span><br><span class="line">            <span class="type">Double</span> <span class="variable">redisScore</span> <span class="operator">=</span> tuple.getScore();</span><br><span class="line">            <span class="type">Double</span> <span class="variable">mysqlScore</span> <span class="operator">=</span> mysqlMap.get(teamId);</span><br><span class="line">            <span class="keyword">if</span> (mysqlScore != <span class="literal">null</span> &amp;&amp; !mysqlScore.equals(redisScore)) &#123;</span><br><span class="line">                redisTemplate.opsForZSet().add(rankKey,</span><br><span class="line">                    String.valueOf(teamId), mysqlScore);</span><br><span class="line">                fixed++;</span><br><span class="line">                log.warn(<span class="string">&quot;修正排行榜分数: teamId=&#123;&#125;, redis=&#123;&#125;, mysql=&#123;&#125;&quot;</span>,</span><br><span class="line">                    teamId, redisScore, mysqlScore);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        log.info(<span class="string">&quot;排行榜一致性校验完成，修正&#123;&#125;条&quot;</span>, fixed);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="实战：排行榜缓存击穿与雪崩防护"><a href="#实战：排行榜缓存击穿与雪崩防护" class="headerlink" title="实战：排行榜缓存击穿与雪崩防护"></a>实战：排行榜缓存击穿与雪崩防护</h2><p>排行榜 ZSet 虽然快，但在智慧矿山监控大屏这类高并发读场景下，仍有三类典型风险。这里结合真实踩坑给出可落地的方案。</p>
+<p><strong>风险 1：缓存击穿（热点 key 失效瞬间大量请求打到 DB）</strong><br>监控大屏 TOP 10 是绝对热点，一旦 Redis 主节点抖动导致 key 短暂不可用，瞬时请求会回源 MySQL。解决：本地缓存（Caffeine）兜底 + 互斥重建——只允许一个线程去查 DB 并回填，其余线程短暂等待重试。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 互斥重建，避免击穿</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">List</span>&lt;RankVO&gt; <span class="title function_">getTopWithMutex</span><span class="params">(<span class="type">int</span> page, <span class="type">int</span> size)</span> &#123;</span><br><span class="line">    <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;rank:top:&quot;</span> + page + <span class="string">&quot;:&quot;</span> + size;</span><br><span class="line">    <span class="type">List</span>&lt;RankVO&gt; <span class="variable">cached</span> <span class="operator">=</span> localCache.getIfPresent(key);</span><br><span class="line">    <span class="keyword">if</span> (cached != <span class="literal">null</span>) <span class="keyword">return</span> cached;</span><br><span class="line">    <span class="type">String</span> <span class="variable">lockKey</span> <span class="operator">=</span> <span class="string">&quot;lock:&quot;</span> + key;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (redisLock.tryLock(lockKey, <span class="number">3</span>, TimeUnit.SECONDS)) &#123;</span><br><span class="line">            cached = localCache.getIfPresent(key); <span class="comment">// double check</span></span><br><span class="line">            <span class="keyword">if</span> (cached != <span class="literal">null</span>) <span class="keyword">return</span> cached;</span><br><span class="line">            <span class="type">List</span>&lt;RankVO&gt; <span class="variable">fromDb</span> <span class="operator">=</span> rankMapper.selectTop(page, size);</span><br><span class="line">            localCache.put(key, fromDb);</span><br><span class="line">            <span class="keyword">return</span> fromDb;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        redisLock.unlock(lockKey);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> Collections.emptyList(); <span class="comment">// 未拿到锁：返回空，保证不雪崩</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>风险 2：缓存雪崩（大量 key 同时过期）</strong><br>若所有日榜 key 都用相同的 <code>expire(7天)</code>，会在第 7 天同一时刻集体失效。解决：过期时间加随机抖动 <code>expire(key, 7天 + random(0,3600)秒)</code>，把失效打散。</p>
+<p><strong>风险 3：热点成员频繁更新导致单 key 写入瓶颈</strong><br>设备运行时长榜每秒 <code>ZINCRBY</code> 上千次，单 key 写入成为瓶颈。解决：按设备 ID 哈希做多 key 分片（如 <code>rank:runtime:shard:{hash%16}</code>），读取时 <code>ZUNIONSTORE</code> 聚合，把写压力分摊到多个 key。</p>
+<p>这三招（本地兜底+互斥重建、过期抖动、分片）是排行榜上线前必须做好的防护。</p>
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-Redis实现排行榜用什么数据结构？"><a href="#1-Redis实现排行榜用什么数据结构？" class="headerlink" title="1. Redis实现排行榜用什么数据结构？"></a>1. Redis实现排行榜用什么数据结构？</h3><p>ZSet（有序集合）。元素唯一（member），按分数排序（score），支持增减分数（ZINCRBY O(logN)）、范围查询（ZRANGE O(logN+M)）、排名查询（ZRANK O(logN)）。实际项目中所有排行榜都用ZSet实现。底层使用跳表+字典，跳表保证有序性，字典保证O(1)查分数。</p>
+<h3 id="2-如何实现多时间维度的排行榜？"><a href="#2-如何实现多时间维度的排行榜？" class="headerlink" title="2. 如何实现多时间维度的排行榜？"></a>2. 如何实现多时间维度的排行榜？</h3><p>不同时间维度用不同的key（日榜、周榜、月榜、总榜），通过ZUNIONSTORE合并日榜到周榜&#x2F;月榜。日榜设置过期时间自动清理历史数据。智慧矿山中每天凌晨定时合并榜单。大数据量时用Pipeline批量ZINCRBY代替ZUNIONSTORE避免阻塞Redis。</p>
+<h3 id="3-排行榜数据量很大怎么办？"><a href="#3-排行榜数据量很大怎么办？" class="headerlink" title="3. 排行榜数据量很大怎么办？"></a>3. 排行榜数据量很大怎么办？</h3><p>只缓存TOP N，排名靠后的从数据库查询近似排名。使用时间衰减策略淘汰冷数据。智慧矿山中百万级设备排行只缓存前1万名，其他从MySQL查询。还可以使用多级缓存（Caffeine本地缓存+Redis+MySQL）减轻Redis压力。</p>
+<h3 id="4-ZSet底层为什么用跳表而不是红黑树？"><a href="#4-ZSet底层为什么用跳表而不是红黑树？" class="headerlink" title="4. ZSet底层为什么用跳表而不是红黑树？"></a>4. ZSet底层为什么用跳表而不是红黑树？</h3><p>跳表范围查询天然有序（沿链表遍历），红黑树需要中序遍历；跳表实现简单，插入只需修改相邻节点指针，红黑树需要旋转操作；跳表并发友好，锁粒度更小；跳表通过span字段可以O(logN)计算排名。Redis作者antirez认为跳表代码更简洁，性能相当。</p>
+<h3 id="5-如何保证排行榜数据与数据库一致？"><a href="#5-如何保证排行榜数据与数据库一致？" class="headerlink" title="5. 如何保证排行榜数据与数据库一致？"></a>5. 如何保证排行榜数据与数据库一致？</h3><p>先更新MySQL再更新Redis（推荐），配合定时校验补偿。关键业务需要实时一致性用同步双写，非关键业务可以异步同步。智慧矿山每天凌晨3点校验排行榜一致性，修正Redis与MySQL的差异。</p>
+<h3 id="6-ZUNIONSTORE合并大ZSet阻塞Redis怎么办？"><a href="#6-ZUNIONSTORE合并大ZSet阻塞Redis怎么办？" class="headerlink" title="6. ZUNIONSTORE合并大ZSet阻塞Redis怎么办？"></a>6. ZUNIONSTORE合并大ZSet阻塞Redis怎么办？</h3><p>三种方案：1) 低峰期执行合并任务；2) 用Pipeline批量ZINCRBY代替ZUNIONSTORE，逐条更新不阻塞主线程；3) 只合并增量数据而非全量合并。智慧矿山使用Pipeline方式，合并10万元素耗时约50ms且不阻塞Redis。</p>
+<h3 id="7-排行榜分页查询如何保证一致性？"><a href="#7-排行榜分页查询如何保证一致性？" class="headerlink" title="7. 排行榜分页查询如何保证一致性？"></a>7. 排行榜分页查询如何保证一致性？</h3><p>问题：查询期间有ZINCRBY更新 → 分页跨页数据不一致。方案：1) 缓存查询结果，短时间内返回相同数据；2) 使用ZREVRANGEBYSCORE按分数范围分页，而非按排名分页；3) 客户端允许最终一致性。智慧矿山监控大屏使用10秒本地缓存，保证同一屏数据一致。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/04/16/148c09bd000e/">Java线程池深度解析——核心参数与拒绝策略实战</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/04/23/0031a28e3185/">Sentinel限流熔断——微服务的流量防护盾</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/Redis/" class="tag" aria-label="标签: #Redis">#Redis</a>
+            
+                <a href="/tags/%E6%80%A7%E8%83%BD/" class="tag" aria-label="标签: #性能">#性能</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(61)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/Redis/" aria-label="分类: Redis">
+                        Redis
+                        <span>(7)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

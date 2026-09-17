@@ -1,0 +1,1277 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MQ消息堆积排查与治理——从定位到根治的高并发实战 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2026/07/08/20317779d9c4/">
+<meta name="description" content="前言先说一次印象深刻的线上事故。智慧矿山无人驾驶项目，露天矿区部署了80多台矿卡和辅助设备，每台设备每秒上报一次GPS+状态数据。某个周一早班，所有设备同时上电开机，再叠加网络恢复后设备本地缓存的离线数据批量补传，瞬时TPS从常态的800直接干到26000。两分钟后，监控开始报警：vehicle-gpsTop">
+
+<!-- Open Graph -->
+<meta property="og:title" content="MQ消息堆积排查与治理——从定位到根治的高并发实战">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2026/07/08/20317779d9c4/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言先说一次印象深刻的线上事故。智慧矿山无人驾驶项目，露天矿区部署了80多台矿卡和辅助设备，每台设备每秒上报一次GPS+状态数据。某个周一早班，所有设备同时上电开机，再叠加网络恢复后设备本地缓存的离线数据批量补传，瞬时TPS从常态的800直接干到26000。两分钟后，监控开始报警：vehicle-gpsTop">
+
+<meta property="article:published_time" content="2026-07-08T08:08:36.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="MQ消息堆积排查与治理——从定位到根治的高并发实战">
+<meta name="twitter:description" content="前言先说一次印象深刻的线上事故。智慧矿山无人驾驶项目，露天矿区部署了80多台矿卡和辅助设备，每台设备每秒上报一次GPS+状态数据。某个周一早班，所有设备同时上电开机，再叠加网络恢复后设备本地缓存的离线数据批量补传，瞬时TPS从常态的800直接干到26000。两分钟后，监控开始报警：vehicle-gpsTop">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"MQ消息堆积排查与治理——从定位到根治的高并发实战","description":"前言先说一次印象深刻的线上事故。智慧矿山无人驾驶项目，露天矿区部署了80多台矿卡和辅助设备，每台设备每秒上报一次GPS+状态数据。某个周一早班，所有设备同时上电开机，再叠加网络恢复后设备本地缓存的离线数据批量补传，瞬时TPS从常态的800直接干到26000。两分钟后，监控开始报警：vehicle-gpsTop","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2026-07-08T08:08:36.000Z","dateModified":"2026-07-08T08:08:36.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2026/07/08/20317779d9c4/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2026-07-08T08:08:36.000Z">
+  <article class="post">
+    <h1 class="post-title">MQ消息堆积排查与治理——从定位到根治的高并发实战</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2026-07-08T08:08:36.000Z">2026-07-08</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/">2026</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/">消息队列</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/%E9%AB%98%E5%B9%B6%E5%8F%91/">高并发</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><p>先说一次印象深刻的线上事故。</p>
+<p>智慧矿山无人驾驶项目，露天矿区部署了 80 多台矿卡和辅助设备，每台设备每秒上报一次 GPS + 状态数据。某个周一早班，所有设备同时上电开机，再叠加网络恢复后设备本地缓存的离线数据批量补传，<strong>瞬时 TPS 从常态的 800 直接干到 26000</strong>。</p>
+<p>两分钟后，监控开始报警：<code>vehicle-gps</code> Topic 堆积量突破 300 万，Kafka 磁盘水位 20 分钟内从 42% 冲到 88%，消费端 CPU 打到 95%，业务侧的表现是——<strong>调度大屏上的矿卡位置全部停在 10 分钟前</strong>。</p>
+<p>那一刻值班群里最常说的一句话是：”赶紧加消费者！” 但我们加了 3 个实例后，堆积曲线基本没动。为什么？<strong>因为 Topic 只有 8 个分区，消费者组里有 8 个以上实例时，多出来的实例是空转的，一个分区只能被组内的一个消费者消费。</strong></p>
+<p>消息堆积这事，怕的不是堆积本身，而是<strong>只会”加机器”这一招</strong>。这篇文章从定位、根因、应急、根治四个层次，把堆积问题讲透。</p>
+<hr>
+<h2 id="一、本质：一句话-一张水位表"><a href="#一、本质：一句话-一张水位表" class="headerlink" title="一、本质：一句话 + 一张水位表"></a>一、本质：一句话 + 一张水位表</h2><p><strong>消息堆积的本质就是一句话：消费速度 &lt; 生产速度。</strong></p>
+<p>但同样是堆积，严重程度和处置方式天差地别，先建立水位分级：</p>
+<table>
+<thead>
+<tr>
+<th>分级</th>
+<th>堆积量 &#x2F; 延迟</th>
+<th>业务影响</th>
+<th>处置策略</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>L0 正常</strong></td>
+<td>堆积 &lt; 1 万，延迟 &lt; 1s</td>
+<td>无感知</td>
+<td>无需处理，观察即可</td>
+</tr>
+<tr>
+<td><strong>L1 轻微</strong></td>
+<td>堆积 1 万 ~ 50 万，延迟 &lt; 1min</td>
+<td>部分异步通知延迟</td>
+<td>排查慢点，工作日修复</td>
+</tr>
+<tr>
+<td><strong>L2 严重</strong></td>
+<td>堆积 50 万 ~ 500 万，延迟 1~30min</td>
+<td>业务数据可见延迟，对账差异</td>
+<td>立即扩容 + 降级，当天根治</td>
+</tr>
+<tr>
+<td><strong>L3 故障</strong></td>
+<td>堆积 &gt; 500 万 或 磁盘 &gt; 85%</td>
+<td>磁盘写满导致集群只读、全线故障</td>
+<td>紧急止损，可牺牲非核心消息</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>关键认知</strong>：MQ 不是无限大的蓄水池。RocketMQ 默认消息保留 72h，Kafka 默认 7 天，堆积量一旦突破磁盘容量，Broker 会变只读甚至宕机，这时候丢的就不只是消息，是整个集群。</p>
+</blockquote>
+<hr>
+<h2 id="二、第一步：5-分钟快速定位堆积类型"><a href="#二、第一步：5-分钟快速定位堆积类型" class="headerlink" title="二、第一步：5 分钟快速定位堆积类型"></a>二、第一步：5 分钟快速定位堆积类型</h2><p>不要上来就扩容，先用 4 个指标判断”慢在哪里”：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>怎么看</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>生产 TPS</strong></td>
+<td>监控面板 &#x2F; <code>kafka-producer-perf</code> &#x2F; RocketMQ Console</td>
+<td>判断是”生产突增”还是”消费变慢”</td>
+</tr>
+<tr>
+<td><strong>消费 TPS</strong></td>
+<td>消费端埋点 &#x2F; <code>consumerProgress</code></td>
+<td>与生产 TPS 对比，差值就是堆积增长率</td>
+</tr>
+<tr>
+<td><strong>消费者在线数</strong></td>
+<td><code>consumerProgress</code> 的 <code>clientIP</code> 数量</td>
+<td>有没有实例掉线&#x2F;GC 卡死</td>
+</tr>
+<tr>
+<td><strong>单条耗时 P99</strong></td>
+<td>消费端 APM（SkyWalking &#x2F; Arthas trace）</td>
+<td>判断是”每条都慢”还是”个别卡死”</td>
+</tr>
+</tbody></table>
+<p><strong>判断树</strong>：</p>
+<pre class="mermaid">flowchart TD
+    A["发现堆积"] --> B{"生产 TPS 是否突增？"}
+    B -- "是（数倍增长）" --> C["流量突增型<br/>秒杀/批量上报/离线补传"]
+    B -- "否（生产平稳）" --> D{"所有消费者都慢 or 个别慢？"}
+    D -- "全部变慢" --> E["消费能力型<br/>慢SQL / RPC超时 / 线程池打满"]
+    D -- "部分分区卡住" --> F{"是否有失败重试日志？"}
+    F -- "大量失败" --> G["脏数据型<br/>反序列化失败 / 单条消息阻塞"]
+    F -- "无失败但不动" --> H["阻塞型<br/>死锁 / wait / 无超时IO / Rebalance"]
+    C --> I["扩容 + 提高并行度<br/>注意分区数上限"]
+    E --> J["优化消费逻辑<br/>批量化 + 异步化 + 超时"]
+    G --> K["限重试次数 + 转死信<br/>跳过脏消息"]
+    H --> L["jstack 抓栈<br/>查 BLOCKED / WAITING 线程"]</pre>
+
+<p><strong>最有效的一招</strong>：直接上 Arthas 看消费线程在干什么。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1. 找消费线程池的线程，看阻塞在哪一行</span></span><br><span class="line">thread -n 5                     <span class="comment"># 最忙的 5 个线程</span></span><br><span class="line">thread --state BLOCKED          <span class="comment"># 阻塞状态的线程（死锁、锁竞争）</span></span><br><span class="line">thread --state WAITING          <span class="comment"># 无限等待（wait/无超时 IO 的典型特征）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 抓单条消息的耗时，看慢在哪</span></span><br><span class="line">trace com.xxx.mq.GpsConsumer onMessage <span class="string">&#x27;#cost &gt; 500&#x27;</span> -n 3</span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 看实时消费速率</span></span><br><span class="line">watch com.xxx.mq.GpsConsumer onMessage <span class="string">&#x27;&#123;params[0].size(), returnObj&#125;&#x27;</span> -x 2</span><br></pre></td></tr></table></figure>
+
+<p>如果是”全部变慢”，大概率是慢 SQL 或外部 RPC；如果是”个别分区不动”，大概率是单条消息把线程卡死了。</p>
+<hr>
+<h2 id="三、四种典型堆积场景与根治方案"><a href="#三、四种典型堆积场景与根治方案" class="headerlink" title="三、四种典型堆积场景与根治方案"></a>三、四种典型堆积场景与根治方案</h2><h3 id="场景一：消费逻辑太重，同步调用拖垮吞吐"><a href="#场景一：消费逻辑太重，同步调用拖垮吞吐" class="headerlink" title="场景一：消费逻辑太重，同步调用拖垮吞吐"></a>场景一：消费逻辑太重，同步调用拖垮吞吐</h3><p><strong>现象</strong>：单条消息处理耗时 200ms+，消费 TPS 上不去。</p>
+<p><strong>典型代码</strong>（订单支付成功后的消费逻辑）：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 一条消息里串行调 4 个服务，任何一个抖动都会拖慢整体</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">handleOrderPaid</span><span class="params">(OrderPaidMsg msg)</span> &#123;</span><br><span class="line">    inventoryService.deduct(msg.getSkuId(), msg.getNum());   <span class="comment">// 80ms</span></span><br><span class="line">    memberService.addPoints(msg.getUserId(), msg.getAmount());<span class="comment">// 60ms</span></span><br><span class="line">    couponService.grant(msg.getUserId());                     <span class="comment">// 50ms</span></span><br><span class="line">    pushService.notify(msg.getUserId());                      <span class="comment">// 40ms</span></span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">// 单条 230ms，8 线程理论上限 ≈ 35 TPS，远低于生产端</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>根治方案</strong>：消费逻辑”瘦身”——只做必须同步做的事，其余异步化&#x2F;批量化。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 方案 1：非核心逻辑异步化（独立线程池，不占消费线程）</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">handleOrderPaid</span><span class="params">(OrderPaidMsg msg)</span> &#123;</span><br><span class="line">    <span class="comment">// 核心：扣库存（必须同步，失败要重试）</span></span><br><span class="line">    inventoryService.deduct(msg.getSkuId(), msg.getNum());</span><br><span class="line">    <span class="comment">// 非核心：积分、发券、推送 —— 丢到内部线程池或另一个 Topic</span></span><br><span class="line">    asyncBizExecutor.submit(() -&gt; &#123;</span><br><span class="line">        memberService.addPoints(msg.getUserId(), msg.getAmount());</span><br><span class="line">        couponService.grant(msg.getUserId());</span><br><span class="line">        pushService.notify(msg.getUserId());</span><br><span class="line">    &#125;);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 方案 2：批量消费 + 批量落库（吞吐提升 10 倍以上）</span></span><br><span class="line"><span class="meta">@KafkaListener(topics = &quot;vehicle-gps&quot;, groupId = &quot;gps-group&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">batchConsume</span><span class="params">(List&lt;ConsumerRecord&lt;String, String&gt;&gt; records, Acknowledgment ack)</span> &#123;</span><br><span class="line">    <span class="type">List</span>&lt;GpsPoint&gt; <span class="variable">points</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;(records.size());</span><br><span class="line">    <span class="keyword">for</span> (ConsumerRecord&lt;String, String&gt; r : records) &#123;</span><br><span class="line">        points.add(GpsPoint.parse(r.value()));   <span class="comment">// 纯内存解析，不落库</span></span><br><span class="line">    &#125;</span><br><span class="line">    gpsPointMapper.batchInsert(points);          <span class="comment">// 一次 INSERT 500 条</span></span><br><span class="line">    ack.acknowledge();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>批量写库要配 MySQL 参数，否则 <code>foreach</code> 批量插入只是”看起来批了”：</p>
+<figure class="highlight properties"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 关键：开启真正的批量重写，否则 MyBatis foreach 依然是逐条发送</span></span><br><span class="line"><span class="attr">jdbc.url</span>=<span class="string">jdbc:mysql://host:3306/db?rewriteBatchedStatements=true</span></span><br></pre></td></tr></table></figure>
+
+<table>
+<thead>
+<tr>
+<th>优化手段</th>
+<th>吞吐提升</th>
+<th>复杂度</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>消费线程池加大</td>
+<td>2~3 倍</td>
+<td>低</td>
+<td>受 CPU&#x2F;DB 连接限制</td>
+</tr>
+<tr>
+<td>批量消费 + 批量落库</td>
+<td>5~15 倍</td>
+<td>中</td>
+<td>效果最显著，优先做</td>
+</tr>
+<tr>
+<td>非核心逻辑异步化</td>
+<td>2~5 倍</td>
+<td>中</td>
+<td>需单独线程池 + 监控</td>
+</tr>
+<tr>
+<td>多级拆解（Topic 分级）</td>
+<td>取决于拆分</td>
+<td>高</td>
+<td>核心&#x2F;非核心分 Topic 隔离</td>
+</tr>
+</tbody></table>
+<h3 id="场景二：失败消息无限重试，一条脏数据堵死整个队列"><a href="#场景二：失败消息无限重试，一条脏数据堵死整个队列" class="headerlink" title="场景二：失败消息无限重试，一条脏数据堵死整个队列"></a>场景二：失败消息无限重试，一条脏数据堵死整个队列</h3><p><strong>现象</strong>：消费 TPS 看起来不低，但堆积持续上涨，日志里刷同一条消息的异常。</p>
+<p><strong>根因</strong>：某条消息因为字段格式错误、反序列化失败、依赖数据缺失，永远处理不成功，被无限重投。RocketMQ 默认重试 16 次（间隔 10s → 2h，总计约 4.5 小时），Kafka 若手动 <code>seek</code> 回退则会立刻重试。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 用重试次数 + 死信做断路，避免脏消息无限占用资源</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">onMessage</span><span class="params">(MessageExt msg)</span> &#123;</span><br><span class="line">    <span class="type">String</span> <span class="variable">bizKey</span> <span class="operator">=</span> msg.getKeys();</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        gpsService.handle(msg);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">times</span> <span class="operator">=</span> msg.getReconsumeTimes();</span><br><span class="line">        log.error(<span class="string">&quot;消费失败 bizKey=&#123;&#125;, 第 &#123;&#125; 次&quot;</span>, bizKey, times, e);</span><br><span class="line">        <span class="keyword">if</span> (times &gt;= <span class="number">3</span>) &#123;</span><br><span class="line">            <span class="comment">// 快速失败：3 次还不行就转死信，别耗到 16 次</span></span><br><span class="line">            dlqService.saveAndAlert(msg, e);</span><br><span class="line">            <span class="keyword">return</span>;   <span class="comment">// 返回成功，让位点前进</span></span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">RuntimeException</span>(e);  <span class="comment">// 触发重投</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p><strong>经验值</strong>：业务类错误（参数非法、数据不存在）1~3 次即可转死信；依赖类错误（DB 抖动、RPC 超时）可以多给几次，因为重试大概率能自愈。</p>
+</blockquote>
+<h3 id="场景三：流量突增，消费并行度不足"><a href="#场景三：流量突增，消费并行度不足" class="headerlink" title="场景三：流量突增，消费并行度不足"></a>场景三：流量突增，消费并行度不足</h3><p>这是最容易踩的坑——<strong>并行度由 Topic 的物理结构决定，不是由消费者实例数决定</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>中间件</th>
+<th>并行度上限</th>
+<th>扩容无效的原因</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Kafka</strong></td>
+<td>Partition 数</td>
+<td>一个 Partition 只能被组内一个 Consumer 消费，多余实例 idle</td>
+</tr>
+<tr>
+<td><strong>RocketMQ</strong></td>
+<td>Topic 的 Queue 数（ReadQueueNums）</td>
+<td>同理，Consumer 数 &gt; Queue 数时空转</td>
+</tr>
+<tr>
+<td><strong>RabbitMQ</strong></td>
+<td>受 <code>concurrency</code> 和队列数限制</td>
+<td>单队列可多线程，但顺序性会丢失</td>
+</tr>
+</tbody></table>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">真实数据（Kafka）：</span><br><span class="line">分区数 8，单机单线程消费能力 300 TPS</span><br><span class="line">→ 理论上限 8 × 300 = 2400 TPS</span><br><span class="line">→ 生产峰值 26000 TPS，堆积速率 23600/s</span><br><span class="line">→ 扩到 20 个实例毫无用处，因为只有 8 个在干活</span><br></pre></td></tr></table></figure>
+
+<p><strong>根治方案</strong>：</p>
+<ol>
+<li><strong>提前规划分区数</strong>：按 <code>分区数 = 峰值TPS / 单分区消费能力</code> 估算，再乘 1.5 倍冗余。Kafka 分区数只能增不能减，宁可多留；</li>
+<li><strong>紧急扩容分区</strong>：<code>kafka-topics.sh --alter --partitions 64</code>，注意这会导致 Key 路由变化（影响顺序性），且需要重启消费者触发 Rebalance；</li>
+<li><strong>RocketMQ</strong>：调大 <code>writeQueueNums/readQueueNums</code>，或新建高分区 Topic 做迁移；</li>
+<li><strong>临时分流</strong>：把堆积消息转储到临时高分区 Topic，用独立的消费者组快速消费（见”应急”一节）。</li>
+</ol>
+<h3 id="场景四：消费线程阻塞-打满-——-最隐蔽的一类"><a href="#场景四：消费线程阻塞-打满-——-最隐蔽的一类" class="headerlink" title="场景四：消费线程阻塞 &#x2F; 打满 —— 最隐蔽的一类"></a>场景四：消费线程阻塞 &#x2F; 打满 —— 最隐蔽的一类</h3><p><strong>现象</strong>：消费者进程活着、连接正常，但就是不拉消息。</p>
+<table>
+<thead>
+<tr>
+<th>阻塞原因</th>
+<th>线程状态</th>
+<th>排查手段</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>慢 SQL &#x2F; 锁等待</td>
+<td>RUNNABLE（socket read）</td>
+<td><code>jstack</code> 看 <code>SocketInputStream.read</code></td>
+</tr>
+<tr>
+<td><code>synchronized</code> &#x2F; 分布式锁竞争</td>
+<td>BLOCKED</td>
+<td><code>thread --state BLOCKED</code></td>
+</tr>
+<tr>
+<td><code>wait()</code> &#x2F; <code>CountDownLatch</code> 无超时</td>
+<td>WAITING</td>
+<td><code>thread --state WAITING</code></td>
+</tr>
+<tr>
+<td>HTTP 调用无超时</td>
+<td>RUNNABLE</td>
+<td>抓栈看 <code>HttpClient</code></td>
+</tr>
+<tr>
+<td>消费线程池队列无界 + 打满</td>
+<td>线程池拒绝&#x2F;OOM</td>
+<td>看线程池活跃数和队列大小</td>
+</tr>
+<tr>
+<td>Kafka 频繁 Rebalance</td>
+<td>消费暂停</td>
+<td>看 <code>rebalance</code> 日志、<code>session.timeout.ms</code></td>
+</tr>
+</tbody></table>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 踩坑代码：RestTemplate 不设超时 → 默认无限等待</span></span><br><span class="line"><span class="meta">@Bean</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">RestTemplate</span> <span class="title function_">restTemplate</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">RestTemplate</span>();   <span class="comment">// SimpleClientHttpRequestFactory 默认 connect/read 都是 -1</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 必须显式设置超时，且 read 超时要小于消费超时</span></span><br><span class="line"><span class="meta">@Bean</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">RestTemplate</span> <span class="title function_">restTemplate</span><span class="params">(RestTemplateBuilder builder)</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> builder</span><br><span class="line">            .setConnectTimeout(Duration.ofSeconds(<span class="number">1</span>))</span><br><span class="line">            .setReadTimeout(Duration.ofSeconds(<span class="number">3</span>))</span><br><span class="line">            .build();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ✅ 消费线程池必须：有界队列 + 自定义拒绝策略 + 可观测</span></span><br><span class="line"><span class="meta">@Bean(&quot;mqConsumeExecutor&quot;)</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">ThreadPoolExecutor</span> <span class="title function_">mqConsumeExecutor</span><span class="params">()</span> &#123;</span><br><span class="line">    <span class="type">ThreadFactory</span> <span class="variable">factory</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ThreadFactoryBuilder</span>()</span><br><span class="line">            .setNameFormat(<span class="string">&quot;mq-consume-%d&quot;</span>).build();</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">ThreadPoolExecutor</span>(</span><br><span class="line">            <span class="number">16</span>, <span class="number">64</span>, <span class="number">60L</span>, TimeUnit.SECONDS,</span><br><span class="line">            <span class="keyword">new</span> <span class="title class_">LinkedBlockingQueue</span>&lt;&gt;(<span class="number">5000</span>),      <span class="comment">// 有界！无界队列 = 潜在 OOM</span></span><br><span class="line">            factory,</span><br><span class="line">            (r, executor) -&gt; &#123;</span><br><span class="line">                <span class="comment">// 拒绝时记录并告警，而不是静默丢弃</span></span><br><span class="line">                log.error(<span class="string">&quot;消费线程池已满，任务被拒绝&quot;</span>);</span><br><span class="line">                alertService.send(<span class="string">&quot;MQ消费线程池打满&quot;</span>);</span><br><span class="line">                <span class="comment">// 兜底：丢回 MQ 或写本地待处理表</span></span><br><span class="line">                r.run();  <span class="comment">// 或 throw RejectedExecutionException 让 MQ 重投</span></span><br><span class="line">            &#125;);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><strong>另外：外部调用统一加超时熔断</strong>，这是防止线程卡死的最后防线：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 用 CompletableFuture 做超时兜底，防止第三方接口把消费线程拖死</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">GpsResult</span> <span class="title function_">callWithTimeout</span><span class="params">(GpsPoint point)</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> CompletableFuture</span><br><span class="line">                .supplyAsync(() -&gt; dispatchClient.report(point), bizExecutor)</span><br><span class="line">                .orTimeout(<span class="number">2</span>, TimeUnit.SECONDS)      <span class="comment">// Java 9+ 原生超时</span></span><br><span class="line">                .exceptionally(e -&gt; GpsResult.degrade(point))  <span class="comment">// 降级处理，不阻塞主链路</span></span><br><span class="line">                .get(<span class="number">3</span>, TimeUnit.SECONDS);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">        <span class="keyword">return</span> GpsResult.degrade(point);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="补充场景：Kafka-反复-Rebalance"><a href="#补充场景：Kafka-反复-Rebalance" class="headerlink" title="补充场景：Kafka 反复 Rebalance"></a>补充场景：Kafka 反复 Rebalance</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">典型报错：</span><br><span class="line">Commit cannot be completed since the group has rebalanced</span><br><span class="line">Attempt to heart beat failed since the group is rebalancing</span><br></pre></td></tr></table></figure>
+
+<p><strong>根因与参数</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>默认值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>max.poll.interval.ms</code></td>
+<td>5min</td>
+<td>两次 poll 间隔超时则踢出组，消费慢时误伤</td>
+</tr>
+<tr>
+<td><code>session.timeout.ms</code></td>
+<td>45s（新版 10s）</td>
+<td>心跳超时</td>
+</tr>
+<tr>
+<td><code>heartbeat.interval.ms</code></td>
+<td>3s</td>
+<td>心跳间隔，应 ≤ session.timeout&#x2F;3</td>
+</tr>
+<tr>
+<td><code>max.poll.records</code></td>
+<td>500</td>
+<td>单次拉取条数，太大导致处理超时</td>
+</tr>
+</tbody></table>
+<p><strong>处理</strong>：批量处理耗时接近 <code>max.poll.interval.ms</code> 时，调大 <code>max.poll.interval.ms</code> 或减小 <code>max.poll.records</code>，二选一。我更推荐减小 <code>max.poll.records</code>——保持消费者”活着”比一次多拉点更重要。</p>
+<hr>
+<h2 id="四、应急止血：堆积已经爆了怎么办"><a href="#四、应急止血：堆积已经爆了怎么办" class="headerlink" title="四、应急止血：堆积已经爆了怎么办"></a>四、应急止血：堆积已经爆了怎么办</h2><p><strong>核心原则：先止血恢复业务，再根治问题。止血手段可以有损，但必须可控、可追溯。</strong></p>
+<table>
+<thead>
+<tr>
+<th>手段</th>
+<th>适用场景</th>
+<th>风险</th>
+<th>操作要点</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>扩容消费者</strong></td>
+<td>并行度未满</td>
+<td>低</td>
+<td>先确认分区&#x2F;队列数是否还有余量，否则无效</td>
+</tr>
+<tr>
+<td><strong>临时扩分区&#x2F;队列</strong></td>
+<td>Kafka 分区不足</td>
+<td>中</td>
+<td>影响 Key 顺序性，业务低峰操作</td>
+</tr>
+<tr>
+<td><strong>调大批量拉取</strong></td>
+<td>单条开销小</td>
+<td>低</td>
+<td><code>max.poll.records</code> &#x2F; <code>pullBatchSize</code> 调大</td>
+</tr>
+<tr>
+<td><strong>消费逻辑降级</strong></td>
+<td>消费逻辑重</td>
+<td>中</td>
+<td>临时关闭非核心分支（推送、统计）</td>
+</tr>
+<tr>
+<td><strong>堆积消息转储</strong></td>
+<td>堆积巨大且需快速恢复</td>
+<td>中</td>
+<td>见下方”临时队列方案”</td>
+</tr>
+<tr>
+<td><strong>跳过脏消息</strong></td>
+<td>脏数据阻塞</td>
+<td>高</td>
+<td><strong>必须先备份</strong>，再跳过</td>
+</tr>
+<tr>
+<td><strong>清空队列</strong></td>
+<td>磁盘告急</td>
+<td>极高</td>
+<td>最后手段，需业务方书面确认</td>
+</tr>
+</tbody></table>
+<h3 id="临时队列转储方案（推荐）"><a href="#临时队列转储方案（推荐）" class="headerlink" title="临时队列转储方案（推荐）"></a>临时队列转储方案（推荐）</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">思路：把积压的老消息&quot;搬走&quot;，让新消息先进来，老消息离线慢慢消化。</span><br><span class="line"></span><br><span class="line">1. 新建临时 Topic：vehicle-gps-BACKUP-20260914（分区数翻 4 倍）</span><br><span class="line">2. 用一个临时消费者组，从最早位点消费积压 Topic，</span><br><span class="line">   只做一件事：原样转发到临时 Topic（不做业务逻辑，吞吐极高）</span><br><span class="line">3. 主业务消费者组重置 offset 到最新位点（--to-latest），立刻恢复实时性</span><br><span class="line">4. 临时 Topic 上挂 N 倍的消费者实例，慢慢消化历史数据</span><br><span class="line">5. 消化完毕后，核对总量，删除临时 Topic</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Kafka 把积压组位点重置到最新（立刻止损）</span></span><br><span class="line">kafka-consumer-groups.sh --bootstrap-server x:9092 \</span><br><span class="line">  --group gps-group --reset-offsets --to-latest --execute --topic vehicle-gps</span><br><span class="line"></span><br><span class="line"><span class="comment"># 单独建一个转储组，从最早开始消费转发</span></span><br><span class="line">kafka-console-consumer.sh --bootstrap-server x:9092 \</span><br><span class="line">  --topic vehicle-gps --group gps-dump-group --from-beginning</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p>⚠️ <strong>绝对禁止的操作</strong>：直接在控制台点”清空队列”或删除队列。我见过有人清空后才发现里面是未对账的支付消息，最后靠数据库 binlog 一点点补回来的，代价惨重。任何删除动作前，先把消息 dump 到文件或备份 Topic。</p>
+</blockquote>
+<hr>
+<h2 id="五、架构层面：让堆积不再发生"><a href="#五、架构层面：让堆积不再发生" class="headerlink" title="五、架构层面：让堆积不再发生"></a>五、架构层面：让堆积不再发生</h2><h3 id="5-1-监控告警（没有监控-裸奔）"><a href="#5-1-监控告警（没有监控-裸奔）" class="headerlink" title="5.1 监控告警（没有监控 &#x3D; 裸奔）"></a>5.1 监控告警（没有监控 &#x3D; 裸奔）</h3><table>
+<thead>
+<tr>
+<th>告警项</th>
+<th>阈值建议</th>
+<th>级别</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>消息堆积量</td>
+<td>&gt; 10 万 持续 5min</td>
+<td>警告</td>
+</tr>
+<tr>
+<td>消息堆积量</td>
+<td>&gt; 100 万 或持续增长 30min</td>
+<td>严重</td>
+</tr>
+<tr>
+<td>消费延迟（消息产生到消费的时间差）</td>
+<td>&gt; 60s</td>
+<td>警告</td>
+</tr>
+<tr>
+<td>Broker 磁盘使用率</td>
+<td>&gt; 75%</td>
+<td>警告</td>
+</tr>
+<tr>
+<td>Broker 磁盘使用率</td>
+<td>&gt; 85%</td>
+<td>严重</td>
+</tr>
+<tr>
+<td>死信队列数量</td>
+<td>&gt; 0</td>
+<td>警告</td>
+</tr>
+<tr>
+<td>消费失败率</td>
+<td>&gt; 1% 持续 2min</td>
+<td>严重</td>
+</tr>
+<tr>
+<td>消费者组在线实例数</td>
+<td>少于期望值</td>
+<td>严重</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>“堆积量”不如”消费延迟”直观</strong>。100 万堆积对一个日处理 10 亿条的日志 Topic 来说是常态，但对一个订单 Topic 就是 P0 故障。建议用**消息年龄（message age）**做主指标，堆积量做辅助。</p>
+</blockquote>
+<h3 id="5-2-Topic-分级隔离"><a href="#5-2-Topic-分级隔离" class="headerlink" title="5.2 Topic 分级隔离"></a>5.2 Topic 分级隔离</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">vehicle-gps-core      # 核心：位置、告警、任务状态（高优先级，独立集群/独立资源组）</span><br><span class="line">vehicle-gps-log       # 日志：轨迹明细、埋点（允许堆积，允许丢失部分）</span><br><span class="line">vehicle-gps-stat      # 统计：离线计算（允许小时级延迟）</span><br></pre></td></tr></table></figure>
+
+<p><strong>核心原则：不要让日志流量冲垮业务消息。</strong> 三类消息分 Topic 甚至分集群，日志 Topic 堆积 1000 万也不影响调度指令。</p>
+<h3 id="5-3-消费端硬性规范（写进团队-Code-Review-清单）"><a href="#5-3-消费端硬性规范（写进团队-Code-Review-清单）" class="headerlink" title="5.3 消费端硬性规范（写进团队 Code Review 清单）"></a>5.3 消费端硬性规范（写进团队 Code Review 清单）</h3><ol>
+<li>所有外部调用（HTTP &#x2F; RPC &#x2F; DB）<strong>必须设置超时</strong>，且超时总和 &lt; 消费超时时间；</li>
+<li>禁止在消费方法里 <code>wait()</code>、<code>sleep()</code>、使用无超时的 <code>CountDownLatch</code>；</li>
+<li>消费线程池必须<strong>有界队列</strong> + 拒绝策略 + 监控打点；</li>
+<li>单条消息处理耗时 P99 目标 &lt; 50ms（业务类）&#x2F; &lt; 10ms（日志类）；</li>
+<li>消费逻辑必须<strong>幂等</strong>（扩容、重试、Rebalance 都会导致重复消费）；</li>
+<li>大对象（&gt; 100KB）禁止直接放 MQ，走对象存储 + 消息传引用。</li>
+</ol>
+<h3 id="5-4-容量规划与压测"><a href="#5-4-容量规划与压测" class="headerlink" title="5.4 容量规划与压测"></a>5.4 容量规划与压测</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">容量公式：</span><br><span class="line">  所需分区数 = 峰值TPS ÷ 单分区消费TPS × 冗余系数(1.5)</span><br><span class="line">  所需消费者实例数 = 分区数（不能超过）</span><br><span class="line">  所需磁盘 = 消息量/天 × 平均消息大小 × 副本数 × 保留天数 × 1.3(索引等开销)</span><br><span class="line"></span><br><span class="line">示例（矿山 GPS）：</span><br><span class="line">  峰值 26000 TPS，单分区消费 300 TPS</span><br><span class="line">  → 分区数 = 26000 ÷ 300 × 1.5 = 130 ≈ 128 个分区</span><br><span class="line">  → 磁盘 = 26000 × 0.5KB × 86400 × 3副本 × 3天 × 1.3 ≈ 13 TB</span><br></pre></td></tr></table></figure>
+
+<p>上线前必须做<strong>压测</strong>：用影子 Topic 模拟 3 倍峰值流量，验证消费能力和磁盘水位。压测不做的后果就是”上线即堆积”。</p>
+<hr>
+<h2 id="堆积应急的标准动作：先止血，再找根因"><a href="#堆积应急的标准动作：先止血，再找根因" class="headerlink" title="堆积应急的标准动作：先止血，再找根因"></a>堆积应急的标准动作：先止血，再找根因</h2><p>堆积告警拉响后的第一个小时决定损失大小，应急必须按”止血优先”的顺序执行，顺序错了会火上浇油。<strong>第一步，判断堆积趋势而不是绝对量</strong>：堆积 50 万且每分钟消 5000 条是在消化，堆积 10 万且每分钟涨 2 万是灾难进行时——趋势决定要不要立刻升级响应。<strong>第二步，扩容消费能力</strong>：加消费者实例（注意 Kafka 的消费者数超过分区数后无效，先扩分区）或临时跳过非核心处理逻辑（只解析消息头，业务校验后置）。<strong>第三步，识别并摘除毒消息</strong>：如果堆积是某条反复失败的消息卡住消费线程（无重试上限的消费者），定位后把它扔进死信队列让主流恢复——这是”一条消息拖垮整条管道”的典型场景，消费逻辑必须设重试上限的原因就在这。<strong>第四步，降级保护下游</strong>：堆积消化时消费速率翻倍，下游数据库可能被冲垮，先给下游加限流或开启消费端的速率限制（<code> Consumer 流控</code>），别让止血动作本身变成新的故障。<strong>第五步，复盘时再根治</strong>：根因（慢 SQL、第三方超时、分区倾斜）留在事后分析，应急阶段的一切动作只围绕”恢复流动”四个字。把这套顺序写进值班手册并演练过，堆积事故的恢复时间能从小时级压到分钟级。</p>
+<h2 id="六、常见误区（这些坑我都踩过）"><a href="#六、常见误区（这些坑我都踩过）" class="headerlink" title="六、常见误区（这些坑我都踩过）"></a>六、常见误区（这些坑我都踩过）</h2><table>
+<thead>
+<tr>
+<th>误区</th>
+<th>真相</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>❌ 堆积了就加消费者实例</td>
+<td>Kafka 分区数是硬上限，超出实例 100% 空转</td>
+</tr>
+<tr>
+<td>❌ 分区数越多越好</td>
+<td>分区过多导致文件句柄暴涨、Rebalance 变慢、ZK&#x2F;KRaft 元数据膨胀。单个 Broker 建议分区数 &lt; 4000</td>
+</tr>
+<tr>
+<td>❌ 消费做批量就行，不用幂等</td>
+<td>扩容、Rebalance、手动重投都会导致重复，幂等是必选项</td>
+</tr>
+<tr>
+<td>❌ 只要消费成功就行，不监控死信</td>
+<td>死信里往往藏着最真实的业务 bug，不监控等于把 bug 埋起来</td>
+</tr>
+<tr>
+<td>❌ 堆积了就删消息</td>
+<td>删除前必须确认业务影响 + 备份，否则数据不可逆丢失</td>
+</tr>
+<tr>
+<td>❌ 消费端无限重试保证不丢</td>
+<td>无限重试会把正常消息一起堵死，必须有重试上限 + 死信</td>
+</tr>
+<tr>
+<td>❌ 消费慢就加大线程池</td>
+<td>瓶颈常在 DB 连接池或下游接口，加大线程只会把下游打挂</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="堆积根因的四象限定位法"><a href="#堆积根因的四象限定位法" class="headerlink" title="堆积根因的四象限定位法"></a>堆积根因的四象限定位法</h2><p>实战中堆积的根因千变万化，但用”生产侧&#x2F;消费侧 × 突发&#x2F;渐进”四象限能快速收敛。<strong>象限一：生产突发（生产速率骤增）</strong>——上游大促、批量任务误触发、消息风暴（某个事件被循环放大）。判据：生产速率曲线突刺。治理：生产端限流、修正上游任务。<strong>象限二：消费渐进变慢（消费能力缓慢劣化）</strong>——最隐蔽也最常见：数据库慢查询逐渐变多、下游接口悄悄变慢、消费者实例因发布引入了性能回退。判据：单条消息处理耗时曲线缓升。治理：沿消费链路做耗时分析，找到变慢的那一环。<strong>象限三：消费骤停（消费能力瞬间归零）</strong>——消费者全部宕机、频繁再均衡（Rebalance 风暴）、认证过期。判据：消费速率曲线断崖。治理：恢复实例、修 Rebalance 配置（<code>max.poll.interval.ms</code> 太小导致长处理任务被误判死亡是经典根因）。<strong>象限四：结构性倾斜（部分分区堆积）</strong>——分区数不够或消息键分布不均，个别分区成为热点。判据：按分区看堆积量，离散度极大。治理：改分区数（注意 Key 路由变化）或改消息键设计。<strong>四象限的第一步永远是画两条曲线：生产速率和消费速率</strong>——它们的相对关系直接告诉你根因在哪个象限，比逐个组件猜快得多。</p>
+<h2 id="七、总结"><a href="#七、总结" class="headerlink" title="七、总结"></a>七、总结</h2><p>处理消息堆积，思路可以浓缩成三句话：</p>
+<ol>
+<li><strong>定位看对比</strong>——生产 TPS vs 消费 TPS，全部变慢 vs 部分卡住，一眼分出大方向；</li>
+<li><strong>止血要果断</strong>——扩容无效就转储，转储不行就降级，优先恢复实时链路，历史数据离线补；</li>
+<li><strong>根治靠结构</strong>——批量化提吞吐、异步化削逻辑、拆分 Topic 做隔离、超时+幂等做兜底、监控告警早发现。</li>
+</ol>
+<p>最后，<strong>“加机器”永远是最容易想到、也最容易失效的办法</strong>。真正有效的是提前算清楚并行度上限、提前压测、提前分级隔离——把功夫花在没出事的时候。</p>
+<hr>
+<p><strong>思考题</strong>：你的项目里 MQ 的分区&#x2F;队列数是怎么定的？如果现在流量翻 10 倍，现有分区数撑得住吗？欢迎在评论区聊聊你踩过的堆积坑。</p>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/07/06/856780129a3c/" title="MQ消息丢失全场景复盘——生产者、Broker、消费者三层排查与Java实战">MQ消息丢失全场景复盘——生产者、Broker、消费者三层排查与Java实战</a></li>
+<li><a href="/2026/07/10/aa78a5f9baf2/" title="高并发系统MQ架构设计——不丢不重不堆积的完整链路">高并发系统MQ架构设计——不丢不重不堆积的完整链路</a></li>
+</ul>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2026/07/06/856780129a3c/">MQ消息丢失全场景复盘——生产者、Broker、消费者三层排查与Java实战</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2026/07/10/aa78a5f9baf2/">高并发系统MQ架构设计——不丢不重不堆积的完整链路</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/" class="tag" aria-label="标签: #消息队列">#消息队列</a>
+            
+                <a href="/tags/%E6%99%BA%E6%85%A7%E7%9F%BF%E5%B1%B1/" class="tag" aria-label="标签: #智慧矿山">#智慧矿山</a>
+            
+                <a href="/tags/%E9%AB%98%E5%B9%B6%E5%8F%91/" class="tag" aria-label="标签: #高并发">#高并发</a>
+            
+                <a href="/tags/RocketMQ/" class="tag" aria-label="标签: #RocketMQ">#RocketMQ</a>
+            
+                <a href="/tags/RabbitMQ/" class="tag" aria-label="标签: #RabbitMQ">#RabbitMQ</a>
+            
+                <a href="/tags/Kafka/" class="tag" aria-label="标签: #Kafka">#Kafka</a>
+            
+                <a href="/tags/%E7%BA%BF%E4%B8%8A%E6%8E%92%E6%9F%A5/" class="tag" aria-label="标签: #线上排查">#线上排查</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/" aria-label="分类: 2026">
+                        2026
+                        <span>(52)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/" aria-label="分类: 消息队列">
+                        消息队列
+                        <span>(3)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/%E9%AB%98%E5%B9%B6%E5%8F%91/" aria-label="分类: 高并发">
+                        高并发
+                        <span>(2)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

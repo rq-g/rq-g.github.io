@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>Redis五种数据结构深度解析——选对数据结构事半功倍 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2023/03/05/89cb6fe6f654/">
+<meta name="description" content="前言实际项目初期，所有数据都用String+JSON存Redis，导致大量问题：更新设备某个字段需要读取-修改-写回、计数器并发不准、排行榜用MySQL排序太慢、去重逻辑自己实现一遍又一遍。2023年深入理解五种数据结构后，用Hash存设备状态、ZSet做排行榜、Set做标签去重、List做消息队列，代码量减">
+
+<!-- Open Graph -->
+<meta property="og:title" content="Redis五种数据结构深度解析——选对数据结构事半功倍">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2023/03/05/89cb6fe6f654/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言实际项目初期，所有数据都用String+JSON存Redis，导致大量问题：更新设备某个字段需要读取-修改-写回、计数器并发不准、排行榜用MySQL排序太慢、去重逻辑自己实现一遍又一遍。2023年深入理解五种数据结构后，用Hash存设备状态、ZSet做排行榜、Set做标签去重、List做消息队列，代码量减">
+
+<meta property="article:published_time" content="2023-03-05T10:01:02.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Redis五种数据结构深度解析——选对数据结构事半功倍">
+<meta name="twitter:description" content="前言实际项目初期，所有数据都用String+JSON存Redis，导致大量问题：更新设备某个字段需要读取-修改-写回、计数器并发不准、排行榜用MySQL排序太慢、去重逻辑自己实现一遍又一遍。2023年深入理解五种数据结构后，用Hash存设备状态、ZSet做排行榜、Set做标签去重、List做消息队列，代码量减">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"Redis五种数据结构深度解析——选对数据结构事半功倍","description":"前言实际项目初期，所有数据都用String+JSON存Redis，导致大量问题：更新设备某个字段需要读取-修改-写回、计数器并发不准、排行榜用MySQL排序太慢、去重逻辑自己实现一遍又一遍。2023年深入理解五种数据结构后，用Hash存设备状态、ZSet做排行榜、Set做标签去重、List做消息队列，代码量减","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2023-03-05T10:01:02.000Z","dateModified":"2023-03-05T10:01:02.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2023/03/05/89cb6fe6f654/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2023-03-05T10:01:02.000Z">
+  <article class="post">
+    <h1 class="post-title">Redis五种数据结构深度解析——选对数据结构事半功倍</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-03-05T10:01:02.000Z">2023-03-05</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/Redis/">Redis</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>实际项目初期，所有数据都用String+JSON存Redis，导致大量问题：更新设备某个字段需要读取-修改-写回、计数器并发不准、排行榜用MySQL排序太慢、去重逻辑自己实现一遍又一遍。2023年深入理解五种数据结构后，用Hash存设备状态、ZSet做排行榜、Set做标签去重、List做消息队列，代码量减少80%的同时性能提升数倍。本文系统地总结Redis五种数据结构在实际项目中的选型、原理和实战经验。</p>
+<h2 id="String——最基础也最强大"><a href="#String——最基础也最强大" class="headerlink" title="String——最基础也最强大"></a>String——最基础也最强大</h2><h3 id="底层实现"><a href="#底层实现" class="headerlink" title="底层实现"></a>底层实现</h3><p>Redis 的 String 底层并不是 C 语言原生的 <code>char*</code> 字符串，而是自己实现的 <strong>SDS（Simple Dynamic String）</strong>。<code>sdshdr</code> 头部保存了已用长度 <code>len</code>、剩余空间 <code>free</code>，后面跟着真正的数据 <code>buf[]</code>。</p>
+<pre class="mermaid">flowchart LR
+    A["redisObject.type=String"] --> B["ptr 指向 SDS"]
+    B --> C["sdshdr: len=已用长度"]
+    B --> D["sdshdr: free=剩余空间"]
+    B --> E["buf[]: 实际字节数组"]
+    C --> F["O(1) 获取长度"]
+    D --> G["预分配避免频繁扩容"]</pre>
+
+<p><strong>为什么不用 C 原生字符串？</strong> C 字符串有三大痛点，SDS 逐一解决：</p>
+<ol>
+<li><strong>O(1) 取长度</strong>：C 字符串要靠 <code>\0</code> 遍历，O(N)；SDS 直接读 <code>len</code> 字段，O(1)。这是 <code>STRLEN</code> 命令飞快的原因。</li>
+<li><strong>二进制安全</strong>：C 字符串遇 <code>\0</code> 即认为结束，无法存图片或序列化后的二进制；SDS 以 <code>len</code> 判定结尾，<code>\0</code> 只是兼容 C 函数的”尾巴”，中间出现 <code>\0</code> 也不影响。</li>
+<li><strong>杜绝缓冲区溢出 + 减少重分配</strong>：C 字符串拼接若忘记扩容会写穿内存；SDS 拼接前先检查 <code>free</code>，不够才扩容，并采用<strong>空间预分配</strong>（翻倍或 +1MB）和<strong>惰性释放</strong>（删了不立即回收，留作 <code>free</code> 复用），把频繁 <code>realloc</code> 降到最低。</li>
+</ol>
+<h3 id="三种编码方式"><a href="#三种编码方式" class="headerlink" title="三种编码方式"></a>三种编码方式</h3><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    N1["String三种编码方式"]
+    N2["RedisObject(16B)"]
+    N3["SDS头(3B)data"]
+    N4["RedisObject"]
+    N5["SDS头 data"]
+    N1 --> N2
+    N1 --> N3
+    N2 --> N4
+    N3 --> N4
+    N4 --> N5</pre>
+
+<h3 id="典型应用场景"><a href="#典型应用场景" class="headerlink" title="典型应用场景"></a>典型应用场景</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">StringUseCaseService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// =====================================================</span></span><br><span class="line">    <span class="comment">// 1. 缓存对象（整体读写）</span></span><br><span class="line">    <span class="comment">// 智慧矿山场景：传感器实时数据（整体写入，整体读取）</span></span><br><span class="line">    <span class="comment">// =====================================================</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">cacheSensorData</span><span class="params">(String sensorId, SensorData data)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;sensor:data:&quot;</span> + sensorId;</span><br><span class="line">        redisTemplate.opsForValue().set(key, JSON.toJSONString(data), <span class="number">5</span>, TimeUnit.MINUTES);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">SensorData</span> <span class="title function_">getSensorData</span><span class="params">(String sensorId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;sensor:data:&quot;</span> + sensorId;</span><br><span class="line">        <span class="type">String</span> <span class="variable">json</span> <span class="operator">=</span> redisTemplate.opsForValue().get(key);</span><br><span class="line">        <span class="keyword">return</span> json != <span class="literal">null</span> ? JSON.parseObject(json, SensorData.class) : <span class="literal">null</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// =====================================================</span></span><br><span class="line">    <span class="comment">// 2. 计数器（原子递增）</span></span><br><span class="line">    <span class="comment">// 智慧矿山场景：设备告警次数统计</span></span><br><span class="line">    <span class="comment">// =====================================================</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">long</span> <span class="title function_">incrementAlertCount</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:alert:count:&quot;</span> + deviceId;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForValue().increment(key);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 定时同步计数器到MySQL</span></span><br><span class="line">    <span class="meta">@Scheduled(fixedRate = 300000)</span>  <span class="comment">// 5分钟同步一次</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">syncAlertCount</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">Set</span>&lt;String&gt; <span class="variable">keys</span> <span class="operator">=</span> redisTemplate.keys(<span class="string">&quot;device:alert:count:*&quot;</span>);</span><br><span class="line">        <span class="keyword">if</span> (keys != <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">for</span> (String key : keys) &#123;</span><br><span class="line">                <span class="type">String</span> <span class="variable">count</span> <span class="operator">=</span> redisTemplate.opsForValue().get(key);</span><br><span class="line">                <span class="type">String</span> <span class="variable">deviceId</span> <span class="operator">=</span> key.replace(<span class="string">&quot;device:alert:count:&quot;</span>, <span class="string">&quot;&quot;</span>);</span><br><span class="line">                deviceMapper.updateAlertCount(deviceId, Long.parseLong(count));</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// =====================================================</span></span><br><span class="line">    <span class="comment">// 3. 分布式锁</span></span><br><span class="line">    <span class="comment">// 智慧矿山场景：设备操作互斥</span></span><br><span class="line">    <span class="comment">// =====================================================</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryLock</span><span class="params">(String lockKey, String lockValue, <span class="type">long</span> expireSeconds)</span> &#123;</span><br><span class="line">        <span class="type">Boolean</span> <span class="variable">result</span> <span class="operator">=</span> redisTemplate.opsForValue().setIfAbsent(</span><br><span class="line">            lockKey, lockValue, expireSeconds, TimeUnit.SECONDS);</span><br><span class="line">        <span class="keyword">return</span> Boolean.TRUE.equals(result);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// =====================================================</span></span><br><span class="line">    <span class="comment">// 4. 限流器（固定窗口）</span></span><br><span class="line">    <span class="comment">// 智慧矿山场景：API接口防刷</span></span><br><span class="line">    <span class="comment">// =====================================================</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryAcquire</span><span class="params">(String key, <span class="type">int</span> limit, <span class="type">int</span> windowSeconds)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">redisKey</span> <span class="operator">=</span> <span class="string">&quot;rate:fixed:&quot;</span> + key;</span><br><span class="line">        <span class="type">Long</span> <span class="variable">count</span> <span class="operator">=</span> redisTemplate.opsForValue().increment(redisKey);</span><br><span class="line">        <span class="keyword">if</span> (count != <span class="literal">null</span> &amp;&amp; count == <span class="number">1</span>) &#123;</span><br><span class="line">            redisTemplate.expire(redisKey, windowSeconds, TimeUnit.SECONDS);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> count != <span class="literal">null</span> &amp;&amp; count &lt;= limit;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Hash——对象存储的最佳选择"><a href="#Hash——对象存储的最佳选择" class="headerlink" title="Hash——对象存储的最佳选择"></a>Hash——对象存储的最佳选择</h2><h3 id="底层实现-1"><a href="#底层实现-1" class="headerlink" title="底层实现"></a>底层实现</h3><p>Hash 底层有两种编码，Redis 会根据元素数量和大小<strong>自动转换</strong>（小数据省内存，大数据保性能）：</p>
+<pre class="mermaid">flowchart TD
+    A["Hash 写入"] --> B{元素数 <= hash-max-ziplist-entries 且 所有 value <= hash-max-ziplist-value}
+    B -->|是| C["ziplist / listpack 紧凑存储 省内存"]
+    B -->|否| D["hashtable 哈希表 O(1) 查找"]
+    C --> E["元素变大 → 转成 hashtable"]</pre>
+
+<p><strong>原理剖析</strong>：当 Hash 字段少、value 小时，用 <code>ziplist</code>（Redis 7.0 起改为 <code>listpack</code>）把 field-value 紧凑地连续存放，没有哈希表的开销，内存占用极低；一旦字段数超过 <code>hash-max-ziplist-entries</code>（默认 128）或任意 value 超过 <code>hash-max-ziplist-value</code>（默认 64 字节），就<strong>一次性转成真正的哈希表 <code>dict</code></strong>，后续查询变 O(1)。这正是”设备状态用 Hash”的前提——单设备字段不多、value 不大时它比 String(JSON) 省内存，且 <code>HGET</code>&#x2F;<code>HSET</code> 是 O(1) 字段级操作。注意：<strong>编码只升不降</strong>，一旦转成 hashtable 就不会退回。</p>
+<h3 id="String-vs-Hash存储对象"><a href="#String-vs-Hash存储对象" class="headerlink" title="String vs Hash存储对象"></a>String vs Hash存储对象</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 方式1：String存JSON（整体读写）</span></span><br><span class="line">SET device:CR001 <span class="string">&#x27;&#123;&quot;name&quot;:&quot;采煤机1号&quot;,&quot;status&quot;:&quot;running&quot;,&quot;temp&quot;:45.2&#125;&#x27;</span></span><br><span class="line">GET device:CR001           <span class="comment"># 获取全部字段</span></span><br><span class="line"><span class="comment"># 修改单个字段需要读取→修改→写回（3步，非原子）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 方式2：Hash存对象（字段级读写）</span></span><br><span class="line">HSET device:CR001 name <span class="string">&quot;采煤机1号&quot;</span> status <span class="string">&quot;running&quot;</span> temp 45.2</span><br><span class="line">HGET device:CR001 name     <span class="comment"># 只获取name（1步，原子）</span></span><br><span class="line">HINCRBY device:CR001 temp 1  <span class="comment"># 只修改temp（1步，原子）</span></span><br><span class="line">HDEL device:CR001 status   <span class="comment"># 只删除status（1步，原子）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 选择原则：</span></span><br><span class="line"><span class="comment"># 需要整体读写 → String(JSON)</span></span><br><span class="line"><span class="comment"># 需要字段级操作 → Hash</span></span><br><span class="line"><span class="comment"># 智慧矿山：设备状态(多字段独立更新) → Hash</span></span><br><span class="line"><span class="comment"># 智慧矿山：传感器数据(整体读写) → String</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：设备状态缓存（Hash）"><a href="#实战：设备状态缓存（Hash）" class="headerlink" title="实战：设备状态缓存（Hash）"></a>实战：设备状态缓存（Hash）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceStatusHashService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 更新设备状态（Hash字段级更新）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：设备状态只更新变化的字段</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">updateDeviceStatus</span><span class="params">(Long deviceId, Map&lt;String, String&gt; fields)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;device:status:&quot;</span> + deviceId;</span><br><span class="line">        redisTemplate.opsForHash().putAll(key, fields);</span><br><span class="line">        redisTemplate.expire(key, <span class="number">30</span>, TimeUnit.MINUTES);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取设备单个属性</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">String</span> <span class="title function_">getDeviceField</span><span class="params">(Long deviceId, String field)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> (String) redisTemplate.opsForHash().get(<span class="string">&quot;device:status:&quot;</span> + deviceId, field);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取设备全部属性</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Map</span>&lt;Object, Object&gt; <span class="title function_">getDeviceAllFields</span><span class="params">(Long deviceId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForHash().entries(<span class="string">&quot;device:status:&quot;</span> + deviceId);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 设备温度+1</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Long</span> <span class="title function_">incrementDeviceTemp</span><span class="params">(Long deviceId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForHash().increment(</span><br><span class="line">            <span class="string">&quot;device:status:&quot;</span> + deviceId, <span class="string">&quot;temp&quot;</span>, <span class="number">1</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：购物车（Hash）"><a href="#实战：购物车（Hash）" class="headerlink" title="实战：购物车（Hash）"></a>实战：购物车（Hash）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">CartHashService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 添加商品到购物车</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addItem</span><span class="params">(Long userId, Long skuId, <span class="type">int</span> quantity)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;cart:&quot;</span> + userId;</span><br><span class="line">        redisTemplate.opsForHash().put(key, String.valueOf(skuId), String.valueOf(quantity));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 增加数量</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">increment</span><span class="params">(Long userId, Long skuId, <span class="type">int</span> delta)</span> &#123;</span><br><span class="line">        redisTemplate.opsForHash().increment(<span class="string">&quot;cart:&quot;</span> + userId, String.valueOf(skuId), delta);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 获取购物车</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Map</span>&lt;Object, Object&gt; <span class="title function_">getCart</span><span class="params">(Long userId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForHash().entries(<span class="string">&quot;cart:&quot;</span> + userId);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 删除商品</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">removeItem</span><span class="params">(Long userId, Long skuId)</span> &#123;</span><br><span class="line">        redisTemplate.opsForHash().delete(<span class="string">&quot;cart:&quot;</span> + userId, String.valueOf(skuId));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 购物车商品数</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Long</span> <span class="title function_">cartSize</span><span class="params">(Long userId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForHash().size(<span class="string">&quot;cart:&quot;</span> + userId);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="List——消息队列与最新列表"><a href="#List——消息队列与最新列表" class="headerlink" title="List——消息队列与最新列表"></a>List——消息队列与最新列表</h2><h3 id="底层实现-2"><a href="#底层实现-2" class="headerlink" title="底层实现"></a>底层实现</h3><p>Redis 3.2 之后，List 的底层统一为 <strong>quicklist</strong>——它是”链表 + 压缩列表”的折中：整体是一个双向链表，每个节点又是一个 <code>ziplist</code>&#x2F;<code>listpack</code>（一段紧凑存储的小数组）。这样既保留了链表两端 O(1) 插入删除的能力，又用紧凑存储压低了内存开销。</p>
+<pre class="mermaid">flowchart LR
+    A["quicklist 头节点"] --> B["listpack 段1: 多个元素紧凑存储"]
+    A --> C["listpack 段2"]
+    A --> D["listpack 段N"]
+    B --> E["每段元素数受 list-max-listpack-size 控制"]</pre>
+
+<p><strong>原理剖析</strong>：早期 List 在小数据时用 <code>ziplist</code>、大数据时用 <code>linkedlist</code>；但 <code>ziplist</code> 修改中间元素要整体重分配、<code>linkedlist</code> 每个节点都有前后指针浪费内存。quicklist 取两者之长——每个 <code>listpack</code> 段足够小（默认 8KB 左右），修改只动一段；段与段之间是普通指针，头尾操作 O(1)。这就是为什么 <code>LPUSH</code>&#x2F;<code>RPUSH</code>&#x2F;<code>LPOP</code>&#x2F;<code>RPOP</code> 都是 O(1)、而 <code>LINDEX</code>&#x2F;<code>LINSERT</code> 是 O(N)。<code>LPUSH</code> + <code>LTRIM</code> 做”最新 N 条”正是利用了头插 O(1) 的特性。</p>
+<h3 id="实战：最新告警列表（List）"><a href="#实战：最新告警列表（List）" class="headerlink" title="实战：最新告警列表（List）"></a>实战：最新告警列表（List）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AlertListService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 添加告警到最新列表</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：监控大屏显示最近100条告警</span></span><br><span class="line"><span class="comment">     * LPUSH + LTRIM 保持固定长度</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addAlert</span><span class="params">(String deviceId, String alertType, String message)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;alert:recent:&quot;</span> + deviceId;</span><br><span class="line">        <span class="type">AlertRecord</span> <span class="variable">record</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">AlertRecord</span>(deviceId, alertType, message, Instant.now());</span><br><span class="line">        redisTemplate.opsForList().leftPush(key, JSON.toJSONString(record));</span><br><span class="line">        <span class="comment">// 只保留最新100条</span></span><br><span class="line">        redisTemplate.opsForList().trim(key, <span class="number">0</span>, <span class="number">99</span>);</span><br><span class="line">        redisTemplate.expire(key, <span class="number">24</span>, TimeUnit.HOURS);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 获取最新告警列表（分页）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">List</span>&lt;AlertRecord&gt; <span class="title function_">getRecentAlerts</span><span class="params">(String deviceId, <span class="type">int</span> page, <span class="type">int</span> size)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> <span class="string">&quot;alert:recent:&quot;</span> + deviceId;</span><br><span class="line">        <span class="type">long</span> <span class="variable">start</span> <span class="operator">=</span> (<span class="type">long</span>) page * size;</span><br><span class="line">        <span class="type">long</span> <span class="variable">end</span> <span class="operator">=</span> start + size - <span class="number">1</span>;</span><br><span class="line">        <span class="type">List</span>&lt;String&gt; <span class="variable">jsonList</span> <span class="operator">=</span> redisTemplate.opsForList().range(key, start, end);</span><br><span class="line">        <span class="keyword">if</span> (jsonList == <span class="literal">null</span>) <span class="keyword">return</span> Collections.emptyList();</span><br><span class="line">        <span class="keyword">return</span> jsonList.stream()</span><br><span class="line">            .map(json -&gt; JSON.parseObject(json, AlertRecord.class))</span><br><span class="line">            .collect(Collectors.toList());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：简单消息队列（List）"><a href="#实战：简单消息队列（List）" class="headerlink" title="实战：简单消息队列（List）"></a>实战：简单消息队列（List）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SimpleMessageQueueService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, String&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 生产消息</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">produce</span><span class="params">(String queue, String message)</span> &#123;</span><br><span class="line">        redisTemplate.opsForList().leftPush(queue, message);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 消费消息（阻塞式）</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">String</span> <span class="title function_">consume</span><span class="params">(String queue, <span class="type">long</span> timeoutSeconds)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForList().rightPop(queue, timeoutSeconds, TimeUnit.SECONDS);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：设备控制指令队列</span></span><br><span class="line"><span class="comment">     * 生产者：控制台发送控制指令</span></span><br><span class="line"><span class="comment">     * 消费者：设备端监听并执行</span></span><br><span class="line"><span class="comment">     *</span></span><br><span class="line"><span class="comment">     * ⚠️ List做消息队列的限制：</span></span><br><span class="line"><span class="comment">     * 1. 不支持消息确认(ACK)</span></span><br><span class="line"><span class="comment">     * 2. 不支持消费组</span></span><br><span class="line"><span class="comment">     * 3. 没有持久化保障</span></span><br><span class="line"><span class="comment">     * 生产环境建议用RabbitMQ/RocketMQ/Kafka</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Set——去重与集合运算"><a href="#Set——去重与集合运算" class="headerlink" title="Set——去重与集合运算"></a>Set——去重与集合运算</h2><h3 id="底层实现-3"><a href="#底层实现-3" class="headerlink" title="底层实现"></a>底层实现</h3><p>Set 的底层也是<strong>双编码</strong>：当所有成员都是整数且数量不多时用 <code>intset</code>（整数集合，一片有序的整数数组），否则用 <code>hashtable</code>（value 统一为 NULL 的字典，仅用 key 保证去重）。</p>
+<pre class="mermaid">flowchart TD
+    A["Set 写入"] --> B{所有成员都是整数 且 数量 <= set-max-intset-entries?}
+    B -->|是| C["intset 有序整数数组 查找 O(logN) 省内存"]
+    B -->|否| D["hashtable value=NULL 去重 O(1)"]
+    C --> E["加入非整数或超阈值 → 转 hashtable"]</pre>
+
+<p><strong>原理剖析</strong>：<code>intset</code> 用二分查找定位成员，内存极省（没有哈希表指针开销），适合”设备标签 ID 集合”这种纯数字场景；一旦出现字符串成员或超过 <code>set-max-intset-entries</code>（默认 512），会整体升级成 <code>hashtable</code>。由于 Set 的 <code>hashtable</code> 只用 key、value 为 NULL，它天然支持 <code>SADD</code>&#x2F;<code>SISMEMBER</code> O(1) 去重，以及 <code>SINTER</code>&#x2F;<code>SDIFF</code>&#x2F;<code>SUNION</code> 集合运算——这正是标签系统、UV 去重选 Set 而不是 List 的原因（List 不去重、查存在是 O(N)）。</p>
+<h3 id="实战：标签系统（Set）"><a href="#实战：标签系统（Set）" class="headerlink" title="实战：标签系统（Set）"></a>实战：标签系统（Set）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">TagSetService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 给设备添加标签</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addTags</span><span class="params">(Long deviceId, String... tags)</span> &#123;</span><br><span class="line">        redisTemplate.opsForSet().add(<span class="string">&quot;device:&quot;</span> + deviceId + <span class="string">&quot;:tags&quot;</span>, tags);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 获取设备标签</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Set</span>&lt;Object&gt; <span class="title function_">getTags</span><span class="params">(Long deviceId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForSet().members(<span class="string">&quot;device:&quot;</span> + deviceId + <span class="string">&quot;:tags&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 共同标签（交集）- 智慧矿山：找相似设备</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Set</span>&lt;Object&gt; <span class="title function_">getCommonTags</span><span class="params">(Long deviceId1, Long deviceId2)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForSet().intersect(</span><br><span class="line">            <span class="string">&quot;device:&quot;</span> + deviceId1 + <span class="string">&quot;:tags&quot;</span>,</span><br><span class="line">            <span class="string">&quot;device:&quot;</span> + deviceId2 + <span class="string">&quot;:tags&quot;</span></span><br><span class="line">        );</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 推荐标签（差集）- 对方有我没有的</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Set</span>&lt;Object&gt; <span class="title function_">recommendTags</span><span class="params">(Long deviceId1, Long deviceId2)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForSet().difference(</span><br><span class="line">            <span class="string">&quot;device:&quot;</span> + deviceId2 + <span class="string">&quot;:tags&quot;</span>,</span><br><span class="line">            <span class="string">&quot;device:&quot;</span> + deviceId1 + <span class="string">&quot;:tags&quot;</span></span><br><span class="line">        );</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：UV统计与抽奖"><a href="#实战：UV统计与抽奖" class="headerlink" title="实战：UV统计与抽奖"></a>实战：UV统计与抽奖</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SetUseCaseService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// UV统计（精确去重）</span></span><br><span class="line">    <span class="comment">// 小规模用Set，大规模用HyperLogLog</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">recordUV</span><span class="params">(String page, String userId)</span> &#123;</span><br><span class="line">        redisTemplate.opsForSet().add(<span class="string">&quot;uv:&quot;</span> + page, userId);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">long</span> <span class="title function_">getUV</span><span class="params">(String page)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForSet().size(<span class="string">&quot;uv:&quot;</span> + page);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 抽奖 - 智慧矿山：安全知识竞赛抽奖</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addParticipant</span><span class="params">(String activityId, Long userId)</span> &#123;</span><br><span class="line">        redisTemplate.opsForSet().add(<span class="string">&quot;lottery:&quot;</span> + activityId, String.valueOf(userId));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 随机抽取（不移除，可重复中奖）</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Set</span>&lt;Object&gt; <span class="title function_">draw</span><span class="params">(String activityId, <span class="type">int</span> count)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForSet().distinctRandomMembers(</span><br><span class="line">            <span class="string">&quot;lottery:&quot;</span> + activityId, count);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 随机抽取（移除，不可重复中奖）</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Set</span>&lt;Object&gt; <span class="title function_">drawAndRemove</span><span class="params">(String activityId, <span class="type">int</span> count)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForSet().pop(<span class="string">&quot;lottery:&quot;</span> + activityId, count);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="ZSet——排行榜与延迟队列"><a href="#ZSet——排行榜与延迟队列" class="headerlink" title="ZSet——排行榜与延迟队列"></a>ZSet——排行榜与延迟队列</h2><h3 id="底层实现-4"><a href="#底层实现-4" class="headerlink" title="底层实现"></a>底层实现</h3><p>ZSet 的底层是**「跳表（skiplist）+ 字典（dict）」双结构并存**，这是 Redis 在”范围查询”和”单点查询”之间做的精妙权衡。</p>
+<pre class="mermaid">flowchart TD
+    A["ZSet 有序集合"] --> B["zset 结构体"]
+    B --> C["skiplist 跳表: 按 score 排序"]
+    B --> D["dict 字典: member -> score"]
+    C --> E["ZRANGE / ZRANGEBYSCORE 范围查询 O(logN+M)"]
+    D --> F["ZSCORE 单点查分 O(1)"]
+    C --> G["rank 排名由跳表层级算出"]</pre>
+
+<p><strong>为什么需要两个结构？</strong> 单独用跳表时，<code>ZSCORE</code>（按成员查分数）要 O(logN) 遍历；单独用字典时有序性丢失，做范围查询要全量排序 O(NlogN)。Redis 让二者共享<strong>同一份成员和分值</strong>（dict 的 value 指针和 skiplist 的节点指向同一对象，不重复存数据），跳表负责”有序”、字典负责”查分”，各取所长。这种”空间换时间、双索引互补”的思路，和 MySQL 的”聚簇索引 + 二级索引”异曲同工。</p>
+<p><strong>跳表为什么比红黑树更适合？</strong> 跳表是多层有序链表：最底层是完整有序链表，每往上一级随机”抽稀”一部分节点作为快捷通道。查找从顶层开始，本层走不到就下沉，平均 O(logN)。Redis 选它而非红黑树，因为：① 范围查询（如取 Top10）只需定位起点后顺序遍历，红黑树要中序遍历且实现复杂；② 插入删除只改相邻指针、不需要旋转平衡；③ 代码量和调试难度远低于红黑树。代价是更占内存（多级指针），但 Redis 用”概率性层级”把平均指针数控制在约 1.33 个&#x2F;节点。</p>
+<h3 id="实战：排行榜（ZSet）"><a href="#实战：排行榜（ZSet）" class="headerlink" title="实战：排行榜（ZSet）"></a>实战：排行榜（ZSet）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RankZSetService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 更新分数</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">updateScore</span><span class="params">(String rankKey, String memberId, <span class="type">double</span> score)</span> &#123;</span><br><span class="line">        redisTemplate.opsForZSet().add(rankKey, memberId, score);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 增加分数（原子操作）</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Double</span> <span class="title function_">incrementScore</span><span class="params">(String rankKey, String memberId, <span class="type">double</span> delta)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().incrementScore(rankKey, memberId, delta);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 获取TOP N（降序）</span></span><br><span class="line">    <span class="keyword">public</span> Set&lt;ZSetOperations.TypedTuple&lt;Object&gt;&gt; getTopN(String rankKey, <span class="type">int</span> n) &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().reverseRangeWithScores(rankKey, <span class="number">0</span>, n - <span class="number">1</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 获取排名</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Long</span> <span class="title function_">getRank</span><span class="params">(String rankKey, String memberId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().reverseRank(rankKey, memberId);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 获取分数</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Double</span> <span class="title function_">getScore</span><span class="params">(String rankKey, String memberId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> redisTemplate.opsForZSet().score(rankKey, memberId);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：延迟队列（ZSet）"><a href="#实战：延迟队列（ZSet）" class="headerlink" title="实战：延迟队列（ZSet）"></a>实战：延迟队列（ZSet）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DelayQueueZSetService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 添加延迟任务</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：设备操作超时自动取消</span></span><br><span class="line"><span class="comment">     * score = 执行时间戳，到期后自动消费</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addDelayTask</span><span class="params">(String queue, String taskId, <span class="type">long</span> delaySeconds)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">executeTime</span> <span class="operator">=</span> System.currentTimeMillis() + delaySeconds * <span class="number">1000</span>;</span><br><span class="line">        redisTemplate.opsForZSet().add(queue, taskId, executeTime);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 消费到期任务（定时轮询）</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：每秒检查是否有超时操作需要取消</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Scheduled(fixedRate = 1000)</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">consumeDelayTask</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">queue</span> <span class="operator">=</span> <span class="string">&quot;delay:device:cancel&quot;</span>;</span><br><span class="line">        <span class="type">long</span> <span class="variable">now</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 获取所有到期任务</span></span><br><span class="line">        <span class="type">Set</span>&lt;Object&gt; <span class="variable">tasks</span> <span class="operator">=</span> redisTemplate.opsForZSet().rangeByScore(queue, <span class="number">0</span>, now);</span><br><span class="line">        <span class="keyword">if</span> (tasks != <span class="literal">null</span> &amp;&amp; !tasks.isEmpty()) &#123;</span><br><span class="line">            <span class="keyword">for</span> (Object task : tasks) &#123;</span><br><span class="line">                <span class="comment">// 尝试移除（保证只消费一次）</span></span><br><span class="line">                <span class="type">Long</span> <span class="variable">removed</span> <span class="operator">=</span> redisTemplate.opsForZSet().remove(queue, task);</span><br><span class="line">                <span class="keyword">if</span> (removed != <span class="literal">null</span> &amp;&amp; removed &gt; <span class="number">0</span>) &#123;</span><br><span class="line">                    processTask(String.valueOf(task));</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">void</span> <span class="title function_">processTask</span><span class="params">(String taskId)</span> &#123;</span><br><span class="line">        log.info(<span class="string">&quot;处理延迟任务: &#123;&#125;&quot;</span>, taskId);</span><br><span class="line">        <span class="comment">// 取消超时设备操作...</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="实战：滑动窗口限流（ZSet）"><a href="#实战：滑动窗口限流（ZSet）" class="headerlink" title="实战：滑动窗口限流（ZSet）"></a>实战：滑动窗口限流（ZSet）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">RateLimitZSetService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 滑动窗口限流（非原子版，生产环境需用Lua脚本）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">tryAcquire</span><span class="params">(String key, <span class="type">int</span> maxRequests, <span class="type">int</span> windowSeconds)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">limitKey</span> <span class="operator">=</span> <span class="string">&quot;rate:limit:&quot;</span> + key;</span><br><span class="line">        <span class="type">long</span> <span class="variable">now</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line">        <span class="type">long</span> <span class="variable">windowStart</span> <span class="operator">=</span> now - windowSeconds * <span class="number">1000</span>;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 移除窗口外的请求记录</span></span><br><span class="line">        redisTemplate.opsForZSet().removeRangeByScore(limitKey, <span class="number">0</span>, windowStart);</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 获取当前窗口内的请求数</span></span><br><span class="line">        <span class="type">Long</span> <span class="variable">count</span> <span class="operator">=</span> redisTemplate.opsForZSet().size(limitKey);</span><br><span class="line">        <span class="keyword">if</span> (count != <span class="literal">null</span> &amp;&amp; count &gt;= maxRequests) &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 添加当前请求时间戳</span></span><br><span class="line">        redisTemplate.opsForZSet().add(limitKey, String.valueOf(now), now);</span><br><span class="line">        redisTemplate.expire(limitKey, windowSeconds + <span class="number">10</span>, TimeUnit.SECONDS);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="编码方式与内存优化全景"><a href="#编码方式与内存优化全景" class="headerlink" title="编码方式与内存优化全景"></a>编码方式与内存优化全景</h2><p>理解每种结构的底层编码，才能真正做好内存优化。下面是五种结构的编码转换全景：</p>
+<table>
+<thead>
+<tr>
+<th>结构</th>
+<th>小数据编码</th>
+<th>大数据编码</th>
+<th>转换阈值（默认）</th>
+<th>时间复杂度要点</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>String</td>
+<td>int &#x2F; embstr</td>
+<td>raw</td>
+<td>&gt;44 字节转 raw</td>
+<td>GET&#x2F;SET O(1)</td>
+</tr>
+<tr>
+<td>Hash</td>
+<td>ziplist&#x2F;listpack</td>
+<td>hashtable</td>
+<td>字段&gt;128 或 value&gt;64B</td>
+<td>HGET O(1)，HGETALL O(N)</td>
+</tr>
+<tr>
+<td>List</td>
+<td>quicklist（listpack 段）</td>
+<td>同左</td>
+<td>每段约 8KB</td>
+<td>头尾 O(1)，中间 O(N)</td>
+</tr>
+<tr>
+<td>Set</td>
+<td>intset</td>
+<td>hashtable</td>
+<td>出现非整数或 &gt;512 个</td>
+<td>SADD&#x2F;SISMEMBER O(1)</td>
+</tr>
+<tr>
+<td>ZSet</td>
+<td>ziplist&#x2F;listpack</td>
+<td>skiplist+dict</td>
+<td>元素&gt;128 或 value&gt;64B</td>
+<td>ZADD O(logN)，ZRANGE O(logN+M)</td>
+</tr>
+</tbody></table>
+<p><strong>实战调优</strong>：把 <code>*-max-ziplist-entries</code>、<code>hash-max-ziplist-value</code>、<code>zset-max-listpack-size</code> 等阈值适当调大，能让更多 key 停留在紧凑编码，显著省内存（代价是少量 CPU）。但别调太大——紧凑编码修改中间元素的代价会随段变长而上升。智慧矿山里设备状态 Hash 字段稳定在 10 个以内、value 都很小，长期停留在 listpack，比 String(JSON) 省了约 40% 内存。反过来，若一个 Hash 字段暴涨到上千个，会自动转成 hashtable，此时”字段级更新省内存”的优势仍在，但紧凑性消失了——所以<strong>控制单 key 的元素规模</strong>永远是第一原则。</p>
+<h2 id="高级应用场景"><a href="#高级应用场景" class="headerlink" title="高级应用场景"></a>高级应用场景</h2><h3 id="布隆过滤器（基于BitMap）"><a href="#布隆过滤器（基于BitMap）" class="headerlink" title="布隆过滤器（基于BitMap）"></a>布隆过滤器（基于BitMap）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">BloomFilterService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">int</span> <span class="variable">BIT_SIZE</span> <span class="operator">=</span> <span class="number">100000000</span>;  <span class="comment">// 1亿位 = 12.5MB</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">BIT_KEY</span> <span class="operator">=</span> <span class="string">&quot;bloom:device:id&quot;</span>;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> StringRedisTemplate redisTemplate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> <span class="title function_">hash1</span><span class="params">(String value)</span> &#123; <span class="keyword">return</span> Math.abs(value.hashCode()) % BIT_SIZE; &#125;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> <span class="title function_">hash2</span><span class="params">(String value)</span> &#123; <span class="keyword">return</span> Math.abs(value.hashCode() * <span class="number">31</span>) % BIT_SIZE; &#125;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> <span class="title function_">hash3</span><span class="params">(String value)</span> &#123; <span class="keyword">return</span> Math.abs(value.hashCode() * <span class="number">17</span>) % BIT_SIZE; &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 添加设备ID到布隆过滤器</span></span><br><span class="line"><span class="comment">     * 智慧矿山场景：快速判断设备ID是否存在（避免查数据库）</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">add</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        redisTemplate.opsForValue().setBit(BIT_KEY, hash1(deviceId), <span class="literal">true</span>);</span><br><span class="line">        redisTemplate.opsForValue().setBit(BIT_KEY, hash2(deviceId), <span class="literal">true</span>);</span><br><span class="line">        redisTemplate.opsForValue().setBit(BIT_KEY, hash3(deviceId), <span class="literal">true</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 判断设备ID是否存在</span></span><br><span class="line"><span class="comment">     * 可能误判（说不存在则一定不存在），不会漏判</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">boolean</span> <span class="title function_">contains</span><span class="params">(String deviceId)</span> &#123;</span><br><span class="line">        <span class="type">boolean</span> <span class="variable">b1</span> <span class="operator">=</span> Boolean.TRUE.equals(redisTemplate.opsForValue().getBit(BIT_KEY, hash1(deviceId)));</span><br><span class="line">        <span class="type">boolean</span> <span class="variable">b2</span> <span class="operator">=</span> Boolean.TRUE.equals(redisTemplate.opsForValue().getBit(BIT_KEY, hash2(deviceId)));</span><br><span class="line">        <span class="type">boolean</span> <span class="variable">b3</span> <span class="operator">=</span> Boolean.TRUE.equals(redisTemplate.opsForValue().getBit(BIT_KEY, hash3(deviceId)));</span><br><span class="line">        <span class="keyword">return</span> b1 &amp;&amp; b2 &amp;&amp; b3;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="分布式Session共享（Hash）"><a href="#分布式Session共享（Hash）" class="headerlink" title="分布式Session共享（Hash）"></a>分布式Session共享（Hash）</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SessionHashService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> RedisTemplate&lt;String, Object&gt; redisTemplate;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">String</span> <span class="variable">SESSION_PREFIX</span> <span class="operator">=</span> <span class="string">&quot;session:&quot;</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">int</span> <span class="variable">SESSION_TIMEOUT</span> <span class="operator">=</span> <span class="number">1800</span>;  <span class="comment">// 30分钟</span></span><br><span class="line"></span><br><span class="line">    <span class="type">public</span> <span class="title function_">SessionHashService</span><span class="params">(RedisTemplate&lt;String, Object&gt; redisTemplate)</span> &#123;</span><br><span class="line">        <span class="built_in">this</span>.redisTemplate = redisTemplate;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">setSession</span><span class="params">(String sessionId, String key, Object value)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">hashKey</span> <span class="operator">=</span> SESSION_PREFIX + sessionId;</span><br><span class="line">        redisTemplate.opsForHash().put(hashKey, key, value);</span><br><span class="line">        redisTemplate.expire(hashKey, SESSION_TIMEOUT, TimeUnit.SECONDS);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">getSession</span><span class="params">(String sessionId, String key)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">hashKey</span> <span class="operator">=</span> SESSION_PREFIX + sessionId;</span><br><span class="line">        <span class="type">Object</span> <span class="variable">value</span> <span class="operator">=</span> redisTemplate.opsForHash().get(hashKey, key);</span><br><span class="line">        <span class="keyword">if</span> (value != <span class="literal">null</span>) &#123;</span><br><span class="line">            redisTemplate.expire(hashKey, SESSION_TIMEOUT, TimeUnit.SECONDS);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> value;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">invalidateSession</span><span class="params">(String sessionId)</span> &#123;</span><br><span class="line">        redisTemplate.delete(SESSION_PREFIX + sessionId);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="数据结构选型深度指南"><a href="#数据结构选型深度指南" class="headerlink" title="数据结构选型深度指南"></a>数据结构选型深度指南</h2><p><strong>智慧矿山数据结构选型决策树</strong>：</p>
+<p><strong>需要什么操作？</strong>：</p>
+<p><strong>智慧矿山：传感器数据缓存</strong>：</p>
+<p><strong>智慧矿山：设备状态(多字段独立更新)</strong>：</p>
+<p><strong>智慧矿山：最新告警列表、消息队列</strong>：</p>
+<p><strong>智慧矿山：设备标签、UV统计、抽奖</strong>：</p>
+<p><strong>智慧矿山：排行榜、延迟队列、滑动窗口限流</strong>：</p>
+<p><strong>智慧矿山：百万级UV统计</strong>：</p>
+<p><strong>智慧矿山：设备在线状态、布隆过滤器</strong>：</p>
+<ul>
+<li>地理位置 → GEO</li>
+<li>智慧矿山：附近设备定位</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>推荐方案</th>
+<th>智慧矿山示例</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>海量数据去重</td>
+<td>HyperLogLog</td>
+<td>百万级UV</td>
+<td>近似计数，0.81%误差，12KB</td>
+</tr>
+<tr>
+<td>位图统计</td>
+<td>BitMap</td>
+<td>设备在线状态</td>
+<td>日活、留存统计</td>
+</tr>
+<tr>
+<td>地理位置</td>
+<td>GEO</td>
+<td>附近设备</td>
+<td>GEORADIUS O(logN+M)</td>
+</tr>
+<tr>
+<td>排行榜</td>
+<td>ZSet</td>
+<td>班组安全积分榜</td>
+<td>天然有序O(logN)</td>
+</tr>
+<tr>
+<td>购物车</td>
+<td>Hash</td>
+<td>物资采购车</td>
+<td>字段级操作</td>
+</tr>
+<tr>
+<td>消息队列</td>
+<td>List</td>
+<td>简单指令队列</td>
+<td>LPUSH+BRPOP</td>
+</tr>
+<tr>
+<td>标签去重</td>
+<td>Set</td>
+<td>设备标签</td>
+<td>交并差运算</td>
+</tr>
+</tbody></table>
+<h2 id="性能对比"><a href="#性能对比" class="headerlink" title="性能对比"></a>性能对比</h2><h3 id="内存占用对比"><a href="#内存占用对比" class="headerlink" title="内存占用对比"></a>内存占用对比</h3><p><strong>存储1000个设备信息，内存占用对比</strong>：</p>
+<p><strong>方式       说明                   内存占用</strong>：</p>
+<p><strong>String    1000个key，每个存JSON  ~50KB</strong>：</p>
+<ul>
+<li>Hash      1个key，1000个field    ~30KB</li>
+<li>Hash(ziplist) 小数据量ziplist编码 ~15KB</li>
+</ul>
+<h3 id="操作性能对比"><a href="#操作性能对比" class="headerlink" title="操作性能对比"></a>操作性能对比</h3><table>
+<thead>
+<tr>
+<th>操作</th>
+<th>String(JSON)</th>
+<th>Hash</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>获取整个对象</td>
+<td>O(1)</td>
+<td>O(N)</td>
+</tr>
+<tr>
+<td>获取单个字段</td>
+<td>O(1)（需解析JSON）</td>
+<td>O(1)</td>
+</tr>
+<tr>
+<td>更新单个字段</td>
+<td>O(1)（需读-改-写）</td>
+<td>O(1)</td>
+</tr>
+</tbody></table>
+<h2 id="生产环境注意事项"><a href="#生产环境注意事项" class="headerlink" title="生产环境注意事项"></a>生产环境注意事项</h2><h3 id="1-大key处理"><a href="#1-大key处理" class="headerlink" title="1. 大key处理"></a>1. 大key处理</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 危险：一次性获取大量数据</span></span><br><span class="line"><span class="type">Set</span>&lt;Object&gt; <span class="variable">allMembers</span> <span class="operator">=</span> redisTemplate.opsForSet().members(<span class="string">&quot;huge:set&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 正确：分批获取</span></span><br><span class="line"><span class="type">ScanOptions</span> <span class="variable">options</span> <span class="operator">=</span> ScanOptions.scanOptions().count(<span class="number">1000</span>).build();</span><br><span class="line"><span class="type">Cursor</span>&lt;Object&gt; <span class="variable">cursor</span> <span class="operator">=</span> redisTemplate.opsForSet().scan(<span class="string">&quot;huge:set&quot;</span>, options);</span><br><span class="line"><span class="keyword">while</span> (cursor.hasNext()) &#123;</span><br><span class="line">    <span class="type">Object</span> <span class="variable">member</span> <span class="operator">=</span> cursor.next();</span><br><span class="line">    <span class="comment">// 处理单个元素</span></span><br><span class="line">&#125;</span><br><span class="line">cursor.close();</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-Pipeline批量操作"><a href="#2-Pipeline批量操作" class="headerlink" title="2. Pipeline批量操作"></a>2. Pipeline批量操作</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 使用Pipeline减少网络开销</span></span><br><span class="line"><span class="type">List</span>&lt;Object&gt; <span class="variable">results</span> <span class="operator">=</span> redisTemplate.executePipelined((RedisCallback&lt;Object&gt;) connection -&gt; &#123;</span><br><span class="line">    <span class="keyword">for</span> (Long id : ids) &#123;</span><br><span class="line">        connection.get((<span class="string">&quot;device:status:&quot;</span> + id).getBytes());</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">null</span>;</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-Lua脚本保证原子性"><a href="#3-Lua脚本保证原子性" class="headerlink" title="3. Lua脚本保证原子性"></a>3. Lua脚本保证原子性</h3><figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">-- 库存扣减Lua脚本</span></span><br><span class="line"><span class="keyword">local</span> key = KEYS[<span class="number">1</span>]</span><br><span class="line"><span class="keyword">local</span> delta = <span class="built_in">tonumber</span>(ARGV[<span class="number">1</span>])</span><br><span class="line"><span class="keyword">local</span> current = <span class="built_in">tonumber</span>(redis.call(<span class="string">&#x27;GET&#x27;</span>, key))</span><br><span class="line"><span class="keyword">if</span> current <span class="keyword">and</span> current &gt;= delta <span class="keyword">then</span></span><br><span class="line">    redis.call(<span class="string">&#x27;DECRBY&#x27;</span>, key, delta)</span><br><span class="line">    <span class="keyword">return</span> <span class="number">1</span></span><br><span class="line"><span class="keyword">else</span></span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span></span><br><span class="line"><span class="keyword">end</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="4-监控编码方式"><a href="#4-监控编码方式" class="headerlink" title="4. 监控编码方式"></a>4. 监控编码方式</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 查看key的编码方式</span></span><br><span class="line">redis-cli OBJECT ENCODING device:status:CR001</span><br><span class="line"><span class="comment"># ziplist    ← 压缩列表，省内存</span></span><br><span class="line"><span class="comment"># hashtable  ← 哈希表，查找快</span></span><br><span class="line"><span class="comment"># embstr     ← 短字符串</span></span><br><span class="line"><span class="comment"># raw        ← 长字符串</span></span><br><span class="line"><span class="comment"># intset     ← 整数集合</span></span><br><span class="line"><span class="comment"># skiplist   ← 跳表</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="常见踩坑与实战经验"><a href="#常见踩坑与实战经验" class="headerlink" title="常见踩坑与实战经验"></a>常见踩坑与实战经验</h2><p>理论要落地，下面是真实项目里反复踩过的坑。</p>
+<h3 id="踩坑1：用-String-存对象导致更新字段要”读-改-写”"><a href="#踩坑1：用-String-存对象导致更新字段要”读-改-写”" class="headerlink" title="踩坑1：用 String 存对象导致更新字段要”读-改-写”"></a>踩坑1：用 String 存对象导致更新字段要”读-改-写”</h3><p><strong>现象</strong>：<code>SET device:CR001 &#39;{&quot;name&quot;:&quot;采煤机1号&quot;,&quot;temp&quot;:45.2}&#39;</code>，要改 temp 得先 GET 整个 JSON、反序列化、改字段、再 SET 回去——三步且非原子，并发下会互相覆盖。</p>
+<p><strong>解法</strong>：多字段且会独立变化的对象用 Hash。只改 temp 用 <code>HINCRBY device:CR001 temp 1</code> 一步原子完成。判断标准：需要”整体读写”→ String(JSON)；需要”字段级操作”→ Hash。</p>
+<h3 id="踩坑2：大-Hash-大-Set-大-ZSet-引发慢查询"><a href="#踩坑2：大-Hash-大-Set-大-ZSet-引发慢查询" class="headerlink" title="踩坑2：大 Hash &#x2F; 大 Set &#x2F; 大 ZSet 引发慢查询"></a>踩坑2：大 Hash &#x2F; 大 Set &#x2F; 大 ZSet 引发慢查询</h3><p>当 Hash 字段数到几万、ZSet 成员到几十万时，一次 <code>HGETALL</code> &#x2F; <code>ZRANGE 0 -1</code> 会一次性返回海量数据，阻塞 Redis 主线程。务必用 <code>HSCAN</code> &#x2F; <code>SSCAN</code> &#x2F; <code>ZSCAN</code> 分批游标遍历（见上文生产环境注意事项）。智慧矿山曾因一个 10 万字段的设备大 Hash 做 <code>HGETALL</code>，导致监控接口 RT 从 5ms 飙升到 800ms。</p>
+<h3 id="踩坑3：ZSet-的-score-是-double，精度与排序陷阱"><a href="#踩坑3：ZSet-的-score-是-double，精度与排序陷阱" class="headerlink" title="踩坑3：ZSet 的 score 是 double，精度与排序陷阱"></a>踩坑3：ZSet 的 score 是 double，精度与排序陷阱</h3><p>ZSet 的 score 是 <code>double</code> 类型，整数范围虽大但<strong>超大整数会有精度损失</strong>；而且相同 score 时按 member 字典序排序。做”精确整数排行榜”时如果分值可能超过 2^53，要格外小心。另外 <code>ZINCRBY</code> 浮点累加可能产生 <code>0.30000000000000004</code> 这类尾巴，展示层记得四舍五入。</p>
+<h3 id="踩坑4：List-做消息队列丢消息、无-ACK"><a href="#踩坑4：List-做消息队列丢消息、无-ACK" class="headerlink" title="踩坑4：List 做消息队列丢消息、无 ACK"></a>踩坑4：List 做消息队列丢消息、无 ACK</h3><p><code>LPUSH</code> + <code>BRPOP</code> 看似能当队列，但进程崩溃会丢正在处理的消息，且没有消费确认和消费组。重要业务务必上 Kafka&#x2F;RocketMQ；Redis 只适合”最近告警列表”这类允许丢失的场景。若坚持用 Redis 做可靠队列，至少用 Stream（XADD&#x2F;XREADGROUP）替代 List。</p>
+<h3 id="踩坑5：INCR-计数器溢出与-TTL-丢失"><a href="#踩坑5：INCR-计数器溢出与-TTL-丢失" class="headerlink" title="踩坑5：INCR 计数器溢出与 TTL 丢失"></a>踩坑5：INCR 计数器溢出与 TTL 丢失</h3><p><code>INCR</code> 的值是有符号 64 位长整型，超过 <code>2^63-1</code> 会报错；且 <code>INCR</code> 本身不会设过期时间，若忘了配套 <code>EXPIRE</code>，计数器会一直累加变成”幽灵数据”。正确姿势是首次 <code>SET key 1 EX ttl</code>，或用 Lua 脚本保证 <code>INCR</code>+<code>EXPIRE</code> 原子（见前文限流示例）。</p>
+<h3 id="实战：用-TYPE-OBJECT-ENCODING-做结构健康检查"><a href="#实战：用-TYPE-OBJECT-ENCODING-做结构健康检查" class="headerlink" title="实战：用 TYPE + OBJECT ENCODING 做结构健康检查"></a>实战：用 TYPE + OBJECT ENCODING 做结构健康检查</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 上线前巡检：确认期望的编码，避免&quot;本该紧凑却变成 hashtable&quot;</span></span><br><span class="line">TYPE device:status:CR001              <span class="comment"># hash</span></span><br><span class="line">OBJECT ENCODING device:status:CR001   <span class="comment"># 期望 listpack/ziplist，若是 hashtable 说明字段过多</span></span><br><span class="line">DEBUG OBJECT device:status:CR001      <span class="comment"># 看编码、元素数、空闲字节，定位大 key</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>选型一句话总结</strong>：缓存对象整体读写用 String，字段级更新用 Hash，最新列表&#x2F;简单队列用 List，去重与集合运算用 Set，排序&#x2F;排行榜&#x2F;延迟任务用 ZSet，海量去重计数用 HyperLogLog，位状态用 BitMap，附近的人用 GEO。</p>
+<h2 id="数据结构选型的三个原则"><a href="#数据结构选型的三个原则" class="headerlink" title="数据结构选型的三个原则"></a>数据结构选型的三个原则</h2><p>结合智慧矿山的实际项目，我总结出三条选型原则。<strong>第一，先看访问模式再看数据形态</strong>：同样是”设备信息”，如果页面每次都整页读取，String 存 JSON 一次 GET 更划算；如果状态字段频繁单独变更（在线状态、电量），Hash 的 HSET 只改动一个 field，避免读改写的并发覆盖。<strong>第二，警惕隐式类型转换</strong>：Set 存入的全是整数时会用 intset 编码，一旦混入一个字符串就整体转 hashtable，内存可能翻几倍——曾经一个白名单功能混入了带空格的 ID，导致内存告警，排查半天才发现是编码退化。<strong>第三，容量估算要在设计期做完</strong>：ZSet 每个成员除了 value 还要维护 score 和 skiplist 指针，单个成员开销约 100 字节起，百万级成员的排行榜光结构就上百 MB，上线前必须用 <code>MEMORY USAGE</code> 实测，而不是拍脑袋。</p>
+<h2 id="面试高频问题深度解析"><a href="#面试高频问题深度解析" class="headerlink" title="面试高频问题深度解析"></a>面试高频问题深度解析</h2><h3 id="1-String和Hash存储对象怎么选？"><a href="#1-String和Hash存储对象怎么选？" class="headerlink" title="1. String和Hash存储对象怎么选？"></a>1. String和Hash存储对象怎么选？</h3><p>整体读写用String(JSON)，字段级操作用Hash。Hash的HGET&#x2F;HSET是O(1)，但HGETALL是O(N)；String的GET&#x2F;SET都是O(1)，但解析JSON需要时间。智慧矿山中：传感器数据整体读写用String，设备状态需要字段级更新用Hash。</p>
+<h3 id="2-ZSet底层的跳表是什么？"><a href="#2-ZSet底层的跳表是什么？" class="headerlink" title="2. ZSet底层的跳表是什么？"></a>2. ZSet底层的跳表是什么？</h3><p>多层有序链表结构，每一层都是下一层的”快捷方式”。查找从顶层开始逐层向下，时间复杂度O(logN)。Redis选择跳表而非红黑树的原因：实现更简单、范围查询更高效、插入删除不需要旋转。</p>
+<h3 id="3-List做消息队列有什么问题？"><a href="#3-List做消息队列有什么问题？" class="headerlink" title="3. List做消息队列有什么问题？"></a>3. List做消息队列有什么问题？</h3><p>不支持消息确认(ACK)、不支持消费组、没有持久化保障、消息堆积时内存压力大。生产环境建议用RabbitMQ&#x2F;RocketMQ&#x2F;Kafka。智慧矿山中List只用于简单的告警列表场景。</p>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/03/01/2f5c61f6aff1/">MyBatis参数映射原理——#{}与${}的本质区别</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/03/08/760e1f5f3190/">MyBatis插件机制——Interceptor的原理与实战</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E6%BA%90%E7%A0%81/" class="tag" aria-label="标签: #源码">#源码</a>
+            
+                <a href="/tags/Redis/" class="tag" aria-label="标签: #Redis">#Redis</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(61)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/Redis/" aria-label="分类: Redis">
+                        Redis
+                        <span>(7)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>

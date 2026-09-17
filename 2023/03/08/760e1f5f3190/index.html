@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html class="dark" lang="zh-CN" prefix="og: http://ogp.me/ns# 
+fb: http://ogp.me/ns/fb#
+article: http://ogp.me/ns/article#">
+<head>
+    <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="keywords" content="Java,MySQL,Redis,Spring,并发编程,微服务">
+
+<title>MyBatis插件机制——Interceptor的原理与实战 - grq</title>
+<link rel="icon" href="/images/grq.svg" type="image/svg+xml">
+
+
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" referrerpolicy="no-referrer"></script>
+
+
+
+<link rel="canonical" href="https://rq-g.github.io/2023/03/08/760e1f5f3190/">
+<meta name="description" content="前言实际项目上线第一周，运维就反馈：传感器数据查询偶发超时，但日志里看不到具体哪条SQL慢。最初的监控方案是在Service层用AOP记录耗时，但AOP只能拿到方法执行时间，无法获取到实际执行的SQL语句和参数。更头疼的是，某些批量操作涉及数千条传感器数据，逐条insert的性能问题在AOP层面完全看不出根因">
+
+<!-- Open Graph -->
+<meta property="og:title" content="MyBatis插件机制——Interceptor的原理与实战">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://rq-g.github.io/2023/03/08/760e1f5f3190/">
+<meta property="og:image" content="https://rq-g.github.io/images/grq.webp">
+<meta property="og:site_name" content="grq">
+<meta property="og:author" content="grq">
+<meta property="og:description" content="前言实际项目上线第一周，运维就反馈：传感器数据查询偶发超时，但日志里看不到具体哪条SQL慢。最初的监控方案是在Service层用AOP记录耗时，但AOP只能拿到方法执行时间，无法获取到实际执行的SQL语句和参数。更头疼的是，某些批量操作涉及数千条传感器数据，逐条insert的性能问题在AOP层面完全看不出根因">
+
+<meta property="article:published_time" content="2023-03-08T05:02:25.000Z">
+<meta property="article:author" content="grq">
+
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="MyBatis插件机制——Interceptor的原理与实战">
+<meta name="twitter:description" content="前言实际项目上线第一周，运维就反馈：传感器数据查询偶发超时，但日志里看不到具体哪条SQL慢。最初的监控方案是在Service层用AOP记录耗时，但AOP只能拿到方法执行时间，无法获取到实际执行的SQL语句和参数。更头疼的是，某些批量操作涉及数千条传感器数据，逐条insert的性能问题在AOP层面完全看不出根因">
+<meta name="twitter:image" content="https://rq-g.github.io/images/grq.webp">
+
+<!-- JSON-LD 结构化数据 -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","headline":"MyBatis插件机制——Interceptor的原理与实战","description":"前言实际项目上线第一周，运维就反馈：传感器数据查询偶发超时，但日志里看不到具体哪条SQL慢。最初的监控方案是在Service层用AOP记录耗时，但AOP只能拿到方法执行时间，无法获取到实际执行的SQL语句和参数。更头疼的是，某些批量操作涉及数千条传感器数据，逐条insert的性能问题在AOP层面完全看不出根因","image":"https://rq-g.github.io/images/grq.webp","datePublished":"2023-03-08T05:02:25.000Z","dateModified":"2023-03-08T05:02:25.000Z","author":{"@type":"Person","name":"grq"},"publisher":{"@type":"Organization","name":"grq"},"mainEntityOfPage":"https://rq-g.github.io/2023/03/08/760e1f5f3190/"}
+</script>
+
+<link rel="alternate" type="application/atom+xml" title="grq" href="/atom.xml">
+
+<link rel="stylesheet" href="/css/grq.css">
+
+<meta name="generator" content="Hexo 8.1.2"></head>
+<body>
+<main>
+    
+    <header>
+    <nav>
+        <ul>
+            
+                <li>
+                    <a href="/" rel="noopener">
+                        
+                            <img src="/images/menu_ico/home.svg" class="menu-icon" alt="首页">
+                        
+                        首页
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/archives" rel="noopener">
+                        
+                            <img src="/images/menu_ico/archives.svg" class="menu-icon" alt="归档">
+                        
+                        归档
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/categories" rel="noopener">
+                        
+                            <img src="/images/menu_ico/categories.svg" class="menu-icon" alt="分类">
+                        
+                        分类
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/tags" rel="noopener">
+                        
+                            <img src="/images/menu_ico/tags.svg" class="menu-icon" alt="标签">
+                        
+                        标签
+                    </a>
+                </li>
+            
+                <li>
+                    <a href="/about" rel="noopener">
+                        
+                            <img src="/images/menu_ico/about.svg" class="menu-icon" alt="关于">
+                        
+                        关于
+                    </a>
+                </li>
+            
+                <li>
+                    <a target="_blank" href="https://www.travellings.cn/go.html" rel="noopener">
+                        
+                            <img src="/images/menu_ico/train.svg" class="menu-icon" alt="开往">
+                        
+                        开往
+                    </a>
+                </li>
+            
+            
+                <li>
+                    <button class="search-toggle-btn" aria-label="打开搜索">
+                        <img src="/images/menu_ico/search.svg" class="menu-icon" alt="search">
+                        搜索
+                    </button>
+                </li>
+            
+        </ul>
+    </nav>
+</header>
+
+<script src="/js/header.js"></script>
+
+
+    
+        <!-- 搜索模态框 -->
+        <div id="search-modal" class="search-modal">
+          <div class="search-modal-content">
+            <div class="search-header">
+              <form class="search-form" action="#" onsubmit="return false;">
+                <input type="text" id="search-input" placeholder="输入关键词搜索" autocomplete="off">
+                <button type="button" class="search-close-btn" aria-label="关闭">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </form>
+            </div>
+            <div id="search-results"></div>
+          </div>
+        </div>
+
+        <script>
+        // 向全局对象添加i18n数据，以便search.js使用
+        window.GRQ_THEME = window.GRQ_THEME || {};
+        window.GRQ_THEME.i18n = {
+          search: {
+            noResults: '没有找到相关结果',
+            loading: '正在加载...',
+            placeholder: '输入关键词搜索',
+            close: '关闭',
+            shortcut_tip: '按 ESC 关闭',
+            toggle_search: '打开搜索',
+            error_loading: '加载搜索数据失败'
+          }
+        };
+        </script>
+    
+    <aside class="sidebar-container sidebar-left">
+    <div class="sidebar-left-content">
+        <!-- 装饰性元素 -->
+        <div class="deco-element deco-top"></div>
+        <div class="deco-element deco-bottom"></div>
+
+        <!-- 头像 -->
+        <div class="avatar-wrapper">
+            <img class="avatar avatar-round" src="/images/grq.webp" alt="网站头像">
+            <div class="avatar-glow"></div>
+        </div>
+
+        <!-- 打字效果名字 -->
+        <div class="author-name">
+            <span class="typed-text"></span>
+            <span class="cursor">|</span>
+        </div>
+
+        <!-- 表情动画区 -->
+        <div class="emotion-zone">
+            <div class="emotion emotion-1">💻</div>
+            <div class="emotion emotion-2">☕</div>
+            <div class="emotion emotion-3">🎉</div>
+        </div>
+
+        <!-- 装饰性线条 -->
+        <div class="deco-line">
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+            <span class="deco-dot"></span>
+        </div>
+
+        <!-- 社交链接 -->
+        <div class="social-links">
+            
+                
+                    <a href="https://github.com/rq-g" target="_blank" rel="noopener" class="social-link" title="GitHub">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="mailto:gaoruiqiang@email.com" target="_blank" rel="noopener" class="social-link" title="Email">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                            </svg>
+                        
+                    </a>
+                
+                    <a href="/atom.xml" target="_blank" rel="noopener" class="social-link" title="RSS">
+                        
+                            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.18 17.82a2.18 2.18 0 1 1-4.36 0 2.18 2.18 0 0 1 4.36 0zM1.82 10.87v3.06a8.25 8.25 0 0 1 8.25 8.25h3.06c0-6.25-5.06-11.31-11.31-11.31zM1.82 4.36v3.06c8.17 0 14.76 6.59 14.76 14.76h3.06c0-9.86-7.96-17.82-17.82-17.82z"/>
+                            </svg>
+                        
+                    </a>
+                
+            
+        </div>
+
+        <!-- 小贴士 -->
+        <div class="tips-section">
+            <div class="tip-icon">💡</div>
+            <div class="tip-text">感谢阅读！</div>
+        </div>
+    </div>
+</aside>
+<div class="post-page">
+<div class="post-container" id="post-container" data-post-date="2023-03-08T05:02:25.000Z">
+  <article class="post">
+    <h1 class="post-title">MyBatis插件机制——Interceptor的原理与实战</h1>
+
+    <div class="post-meta">
+      <span class="post-date">发布于 <time datetime="2023-03-08T05:02:25.000Z">2023-03-08</time></span>
+      
+        <span class="post-categories">
+          分类：<a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/">技术</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/">2023</a>, <a class="category-link" href="/categories/%E6%8A%80%E6%9C%AF/2023/MyBatis%E6%BA%90%E7%A0%81/">MyBatis源码</a>
+        </span>
+      
+      
+      
+      
+      <span style="margin-left:10px;">👁<span id="busuanzi_value_page_pv"></span></span>
+      
+    </div>
+    <div class="post-content">
+      <h1 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h1><hr>
+<p>实际项目上线第一周，运维就反馈：传感器数据查询偶发超时，但日志里看不到具体哪条SQL慢。最初的监控方案是在Service层用AOP记录耗时，但AOP只能拿到方法执行时间，无法获取到实际执行的SQL语句和参数。更头疼的是，某些批量操作涉及数千条传感器数据，逐条insert的性能问题在AOP层面完全看不出根因。</p>
+<p>后来深入研究MyBatis的Interceptor机制，发现它能精准拦截SQL执行的全过程——从SQL构建、参数设置到结果映射，每一个环节都可以增强。基于Interceptor，我为实际项目实现了慢SQL监控、分表路由、数据权限过滤、操作审计四个核心插件，彻底解决了SQL层面的可观测性和安全性问题。</p>
+<h2 id="插件机制原理"><a href="#插件机制原理" class="headerlink" title="插件机制原理"></a>插件机制原理</h2><h3 id="MyBatis可拦截的四大对象"><a href="#MyBatis可拦截的四大对象" class="headerlink" title="MyBatis可拦截的四大对象"></a>MyBatis可拦截的四大对象</h3><p><strong>架构流程</strong>：</p>
+<pre class="mermaid">flowchart TD
+    N1["MyBatis 四大可拦截对象"]
+    N2["修改SQL"]
+    N3["StatementHandler.prepare"]
+    N4["监控耗时"]
+    N5["Executor.query"]
+    N6["StatementHandler.query 修改参数"]
+    N7["ParameterHandler.setParameters"]
+    N8["修改结果"]
+    N9["ResultSetHandler.handleResultSets"]
+    N10["数据权限"]
+    N11["StatementHandler.prepare修改SQL追加条件"]
+    N12["分表路由"]
+    N13["StatementHandler.prepare修改表名"]
+    N1 --> N2
+    N2 --> N3
+    N2 --> N4
+    N3 --> N5
+    N3 --> N6
+    N4 --> N5
+    N4 --> N6
+    N5 --> N7
+    N5 --> N8
+    N6 --> N7
+    N6 --> N8
+    N7 --> N9
+    N7 --> N10
+    N8 --> N9
+    N8 --> N10
+    N9 --> N11
+    N9 --> N12
+    N10 --> N11
+    N10 --> N12
+    N11 --> N13
+    N12 --> N13</pre>
+
+<h3 id="为什么用-JDK-动态代理而非-CGLIB"><a href="#为什么用-JDK-动态代理而非-CGLIB" class="headerlink" title="为什么用 JDK 动态代理而非 CGLIB"></a>为什么用 JDK 动态代理而非 CGLIB</h3><p>MyBatis 选择 JDK 动态代理来包裹插件，而不是 CGLIB，背后有清晰的取舍：<strong>四大可拦截对象（Executor、StatementHandler、ParameterHandler、ResultSetHandler）本身都是接口或实现了接口的类</strong>，JDK 动态代理天然要求被代理对象实现接口，正好契合；而 CGLIB 通过继承生成子类，会破坏 MyBatis 内部对象的封装，还可能因为 final 方法、构造函数等问题引入不确定性。</p>
+<p>更关键的是，<strong>插件的拦截点不是按”类”拦截，而是按 <code>@Signature</code> 标注的”具体方法”拦截</strong>。比如你用一个插件拦截 <code>Executor</code>，但只声明了 <code>query</code> 方法，那么 <code>update</code>、<code>commit</code> 等方法仍会直接调用原对象。这种”精确到方法”的能力，只有先建立 <code>signatureMap</code>、在 <code>Plugin.invoke()</code> 中做命中判断才能实现，而 JDK 动态代理的 <code>InvocationHandler</code> 正是承载这一判断的天然载体。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 为什么 interceptor.plugin() 可以返回原对象本身？</span></span><br><span class="line"><span class="comment">// 当被代理类没有实现任何 @Intercepts 声明的接口时，wrap() 直接返回 target</span></span><br><span class="line"><span class="comment">// 这意味着：插件链上未被命中的对象不会被无意义地包裹一层代理</span></span><br><span class="line"><span class="comment">// 既保证了正确性，也避免了代理层数膨胀带来的反射开销</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="动态代理实现源码"><a href="#动态代理实现源码" class="headerlink" title="动态代理实现源码"></a>动态代理实现源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// MyBatis插件本质是JDK动态代理</span></span><br><span class="line"><span class="comment">// 在创建四大对象时，依次应用所有插件</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// InterceptorChain.pluginAll()</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">InterceptorChain</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">List</span>&lt;Interceptor&gt; <span class="variable">interceptors</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ArrayList</span>&lt;&gt;();</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">pluginAll</span><span class="params">(Object target)</span> &#123;</span><br><span class="line">        <span class="comment">// 依次应用每个插件，形成代理链</span></span><br><span class="line">        <span class="keyword">for</span> (Interceptor interceptor : interceptors) &#123;</span><br><span class="line">            target = interceptor.plugin(target);  <span class="comment">// 逐层代理</span></span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> target;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">addInterceptor</span><span class="params">(Interceptor interceptor)</span> &#123;</span><br><span class="line">        interceptors.add(interceptor);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// Interceptor.plugin()默认实现</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line">    <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable;</span><br><span class="line">    </span><br><span class="line">    <span class="keyword">default</span> <span class="type">Object</span> <span class="title function_">plugin</span><span class="params">(Object target)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> Plugin.wrap(target, <span class="built_in">this</span>);  <span class="comment">// 使用Plugin创建代理</span></span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="keyword">default</span> <span class="type">void</span> <span class="title function_">setProperties</span><span class="params">(Properties properties)</span> &#123;</span><br><span class="line">        <span class="comment">// 初始化参数</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="Plugin-wrap-核心源码"><a href="#Plugin-wrap-核心源码" class="headerlink" title="Plugin.wrap()核心源码"></a>Plugin.wrap()核心源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Plugin.wrap() — 创建JDK动态代理</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">Plugin</span> <span class="keyword">implements</span> <span class="title class_">InvocationHandler</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Object target;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Interceptor interceptor;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Map&lt;Class&lt;?&gt;, Set&lt;Method&gt;&gt; signatureMap;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">Object</span> <span class="title function_">wrap</span><span class="params">(Object target, Interceptor interceptor)</span> &#123;</span><br><span class="line">        <span class="comment">// 1. 获取拦截器标注的@Intercepts注解</span></span><br><span class="line">        <span class="type">Map</span>&lt;Class&lt;?&gt;, Set&lt;Method&gt;&gt; <span class="variable">signatureMap</span> <span class="operator">=</span> getSignatureMap(interceptor);</span><br><span class="line">        <span class="comment">// 2. 检查target是否是需要拦截的类型</span></span><br><span class="line">        <span class="type">Class</span>&lt;?&gt; <span class="variable">type</span> <span class="operator">=</span> target.getClass();</span><br><span class="line">        <span class="type">Class</span>&lt;?&gt;[] <span class="variable">interfaces</span> <span class="operator">=</span> getAllInterfaces(type, signatureMap);</span><br><span class="line">        <span class="keyword">if</span> (interfaces.length &gt; <span class="number">0</span>) &#123;</span><br><span class="line">            <span class="comment">// 3. 创建JDK动态代理</span></span><br><span class="line">            <span class="keyword">return</span> Proxy.newProxyInstance(</span><br><span class="line">                type.getClassLoader(), interfaces,</span><br><span class="line">                <span class="keyword">new</span> <span class="title class_">Plugin</span>(target, interceptor, signatureMap));</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> target;  <span class="comment">// 不需要拦截，返回原对象</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">invoke</span><span class="params">(Object proxy, Method method, Object[] args)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="comment">// 1. 检查当前方法是否需要拦截</span></span><br><span class="line">        <span class="type">Set</span>&lt;Method&gt; <span class="variable">methods</span> <span class="operator">=</span> signatureMap.get(method.getDeclaringClass());</span><br><span class="line">        <span class="keyword">if</span> (methods != <span class="literal">null</span> &amp;&amp; methods.contains(method)) &#123;</span><br><span class="line">            <span class="comment">// 2. 需要拦截 → 调用interceptor.intercept()</span></span><br><span class="line">            <span class="keyword">return</span> interceptor.intercept(<span class="keyword">new</span> <span class="title class_">Invocation</span>(target, method, args));</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 3. 不需要拦截 → 直接执行原方法</span></span><br><span class="line">        <span class="keyword">return</span> method.invoke(target, args);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="type">Map</span>&lt;Class&lt;?&gt;, Set&lt;Method&gt;&gt; <span class="title function_">getSignatureMap</span><span class="params">(Interceptor interceptor)</span> &#123;</span><br><span class="line">        <span class="type">Intercepts</span> <span class="variable">interceptsAnnotation</span> <span class="operator">=</span> interceptor.getClass()</span><br><span class="line">            .getAnnotation(Intercepts.class);</span><br><span class="line">        <span class="keyword">if</span> (interceptsAnnotation == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">PluginException</span>(<span class="string">&quot;No @Intercepts annotation was found&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="type">Signature</span>[] <span class="variable">sigs</span> <span class="operator">=</span> interceptsAnnotation.value();</span><br><span class="line">        <span class="type">Map</span>&lt;Class&lt;?&gt;, Set&lt;Method&gt;&gt; <span class="variable">signatureMap</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">HashMap</span>&lt;&gt;();</span><br><span class="line">        <span class="keyword">for</span> (Signature sig : sigs) &#123;</span><br><span class="line">            <span class="type">Set</span>&lt;Method&gt; <span class="variable">methods</span> <span class="operator">=</span> signatureMap.computeIfAbsent(</span><br><span class="line">                sig.type(), k -&gt; <span class="keyword">new</span> <span class="title class_">HashSet</span>&lt;&gt;());</span><br><span class="line">            <span class="keyword">try</span> &#123;</span><br><span class="line">                <span class="type">Method</span> <span class="variable">method</span> <span class="operator">=</span> sig.type().getMethod(sig.method(), sig.args());</span><br><span class="line">                methods.add(method);</span><br><span class="line">            &#125; <span class="keyword">catch</span> (NoSuchMethodException e) &#123;</span><br><span class="line">                <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">PluginException</span>(<span class="string">&quot;Could not find method on &quot;</span></span><br><span class="line">                    + sig.type() + <span class="string">&quot; named &quot;</span> + sig.method(), e);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> signatureMap;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="代理链的完整结构"><a href="#代理链的完整结构" class="headerlink" title="代理链的完整结构"></a>代理链的完整结构</h3><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">MyBatis 插件代理链（洋葱模型）：</span><br><span class="line"></span><br><span class="line">调用方</span><br><span class="line">  ↓</span><br><span class="line">Plugin1 代理 (SqlCostInterceptor)      ← 后注册的插件在最外层</span><br><span class="line">  ↓ invocation.proceed()</span><br><span class="line">Plugin2 代理 (DataPermissionInterceptor)</span><br><span class="line">  ↓ invocation.proceed()</span><br><span class="line">Plugin3 代理 (ShardingInterceptor)</span><br><span class="line">  ↓ invocation.proceed()</span><br><span class="line">实际 Executor 方法</span><br><span class="line">  ↓</span><br><span class="line">返回时逐层穿回：Plugin3 → Plugin2 → Plugin1 → 调用方</span><br></pre></td></tr></table></figure>
+
+<p>每个插件都能在 <code>proceed()</code> 前后插入自己的逻辑，也可以直接短路返回、不调用真实方法——这就是分页插件能”改写SQL”、监控插件能”统计耗时”的机制基础。<strong>注册顺序决定包裹顺序</strong>：<code>interceptorChain.pluginAll()</code> 按注册列表依次包裹，后注册的包在最外面、最先被调用；生产上建议把轻量通用插件（监控）放外层、重量改写插件（分表）放内层，减少无效的深层调用。</p>
+<p><strong>执行时序（sequenceDiagram）</strong>：</p>
+<pre class="mermaid">sequenceDiagram
+    participant C as 调用方
+    participant P1 as 插件1(分表)
+    participant P2 as 插件2(权限)
+    participant P3 as 插件3(监控)
+    participant E as 实际Executor
+    C->>P1: query()
+    P1->>P2: invocation.proceed()
+    P2->>P3: invocation.proceed()
+    P3->>E: invocation.proceed()
+    E-->>P3: 结果
+    P3-->>P2: 结果(含耗时统计)
+    P2-->>P1: 结果
+    P1-->>C: 结果</pre>
+
+<blockquote>
+<p>关键点：每个插件的”前置逻辑”在外层 <code>intercept()</code> 中、调用 <code>proceed()</code> 之前执行；”后置逻辑”则放在 <code>proceed()</code> 之后。所以<strong>先注册的插件前置逻辑先跑，但后置逻辑最后跑</strong>——这正是洋葱模型的本质。</p>
+</blockquote>
+<h3 id="四大拦截对象如何选型"><a href="#四大拦截对象如何选型" class="headerlink" title="四大拦截对象如何选型"></a>四大拦截对象如何选型</h3><p>并不是所有需求都该挂在 <code>StatementHandler</code> 上。选错拦截点，要么拿不到想要的信息，要么引入性能或正确性问题。下面的对比表是我在选型时反复用的速查表：</p>
+<table>
+<thead>
+<tr>
+<th>拦截对象</th>
+<th>触发时机</th>
+<th>能拿到的关键信息</th>
+<th>典型用途</th>
+<th>主要风险</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Executor</code></td>
+<td>SQL 执行入口（query&#x2F;update 前）</td>
+<td><code>MappedStatement</code>、完整参数对象、SQL 类型</td>
+<td>操作审计、读写分离、缓存</td>
+<td>拿不到最终改写后的 SQL 文本</td>
+</tr>
+<tr>
+<td><code>StatementHandler</code></td>
+<td>SQL 编译前（prepare）</td>
+<td><code>BoundSql</code> 原始 SQL、可改写 SQL</td>
+<td>分表路由、数据权限、多租户、分页</td>
+<td>改写 SQL 字符串易出错，需小心子查询</td>
+</tr>
+<tr>
+<td><code>ParameterHandler</code></td>
+<td>参数绑定到 <code>PreparedStatement</code> 时</td>
+<td><code>parameterObject</code>、参数映射</td>
+<td>特殊类型处理、参数脱敏</td>
+<td>拿不到 SQL 文本，只能在参数层面动手</td>
+</tr>
+<tr>
+<td><code>ResultSetHandler</code></td>
+<td>结果集映射时</td>
+<td><code>Statement</code>、原始 <code>ResultSet</code></td>
+<td>大结果集保护、字段加解密</td>
+<td>已执行完 SQL，无法阻断查询本身</td>
+</tr>
+</tbody></table>
+<p><strong>选型口诀</strong>：想”改 SQL”用 <code>StatementHandler</code>，想”拦操作”用 <code>Executor</code>，想”动参数”用 <code>ParameterHandler</code>，想”管结果”用 <code>ResultSetHandler</code>。多个插件同时改写 SQL 时，务必用注册顺序约定好先后（见后文插件顺序规范）。</p>
+<h2 id="自定义插件"><a href="#自定义插件" class="headerlink" title="自定义插件"></a>自定义插件</h2><h3 id="Intercepts注解详解"><a href="#Intercepts注解详解" class="headerlink" title="@Intercepts注解详解"></a>@Intercepts注解详解</h3><table>
+<thead>
+<tr>
+<th>&#x2F;&#x2F;</th>
+<th>拦截目标</th>
+<th>@Signature</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>&#x2F;&#x2F;</td>
+<td>查询SQL执行</td>
+<td>type&#x3D;Executor, method&#x3D;”query”</td>
+</tr>
+<tr>
+<td>&#x2F;&#x2F;</td>
+<td>更新SQL执行</td>
+<td>type&#x3D;Executor, method&#x3D;”update”</td>
+</tr>
+<tr>
+<td>&#x2F;&#x2F;</td>
+<td>Statement准备</td>
+<td>type&#x3D;StatementHandler, method&#x3D;”prepare”</td>
+</tr>
+<tr>
+<td>&#x2F;&#x2F;</td>
+<td>参数设置</td>
+<td>type&#x3D;ParameterHandler,</td>
+</tr>
+<tr>
+<td>&#x2F;&#x2F;</td>
+<td>结果集处理</td>
+<td>type&#x3D;ResultSetHandler,</td>
+</tr>
+</tbody></table>
+<h3 id="Invocation对象"><a href="#Invocation对象" class="headerlink" title="Invocation对象"></a>Invocation对象</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Invocation — 封装了被拦截的方法调用信息</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">Invocation</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Object target;      <span class="comment">// 被代理的目标对象</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Method method;      <span class="comment">// 被拦截的方法</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> Object[] args;      <span class="comment">// 方法参数</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">proceed</span><span class="params">()</span> <span class="keyword">throws</span> InvocationTargetException, IllegalAccessException &#123;</span><br><span class="line">        <span class="comment">// 调用原方法（或下一个代理）</span></span><br><span class="line">        <span class="keyword">return</span> method.invoke(target, args);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="实战1：慢SQL监控插件"><a href="#实战1：慢SQL监控插件" class="headerlink" title="实战1：慢SQL监控插件"></a>实战1：慢SQL监控插件</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：SQL耗时监控，精准定位慢查询</span></span><br><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = StatementHandler.class, method = &quot;query&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;Statement.class, ResultHandler.class&#125;),</span></span><br><span class="line"><span class="meta">    @Signature(type = StatementHandler.class, method = &quot;update&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;Statement.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SqlCostInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;mybatis.slow-sql-threshold:1000&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> slowThreshold;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;mybatis.warn-sql-threshold:500&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> warnThreshold;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;mybatis.sql-log-sample-rate:1.0&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">double</span> sampleRate;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> <span class="type">ThreadLocal</span>&lt;Random&gt; <span class="variable">randomHolder</span> <span class="operator">=</span> ThreadLocal.withInitial(Random::<span class="keyword">new</span>);</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="type">StatementHandler</span> <span class="variable">handler</span> <span class="operator">=</span> (StatementHandler) invocation.getTarget();</span><br><span class="line">        <span class="type">MetaObject</span> <span class="variable">metaObject</span> <span class="operator">=</span> SystemMetaObject.forObject(handler);</span><br><span class="line">        <span class="type">String</span> <span class="variable">mapperId</span> <span class="operator">=</span> (String) metaObject.getValue(<span class="string">&quot;delegate.mappedStatement.id&quot;</span>);</span><br><span class="line">        <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> handler.getBoundSql();</span><br><span class="line">        <span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> boundSql.getSql();</span><br><span class="line"></span><br><span class="line">        <span class="type">long</span> <span class="variable">start</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            <span class="type">long</span> <span class="variable">cost</span> <span class="operator">=</span> System.currentTimeMillis() - start;</span><br><span class="line">            <span class="keyword">if</span> (cost &gt; slowThreshold) &#123;</span><br><span class="line">                log.warn(<span class="string">&quot;[慢SQL] mapperId=&#123;&#125;, 耗时=&#123;&#125;ms, SQL=&#123;&#125;&quot;</span>, </span><br><span class="line">                    mapperId, cost, sql.replaceAll(<span class="string">&quot;\\s+&quot;</span>, <span class="string">&quot; &quot;</span>));</span><br><span class="line">                sendSlowSqlAlert(mapperId, cost, sql);</span><br><span class="line">            &#125; <span class="keyword">else</span> <span class="keyword">if</span> (cost &gt; warnThreshold) &#123;</span><br><span class="line">                <span class="keyword">if</span> (shouldSample()) &#123;</span><br><span class="line">                    log.info(<span class="string">&quot;[较慢SQL] mapperId=&#123;&#125;, 耗时=&#123;&#125;ms&quot;</span>, mapperId, cost);</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">shouldSample</span><span class="params">()</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> randomHolder.get().nextDouble() &lt; sampleRate;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">void</span> <span class="title function_">sendSlowSqlAlert</span><span class="params">(String mapperId, <span class="type">long</span> cost, String sql)</span> &#123;</span><br><span class="line">        <span class="comment">// 对接告警系统（钉钉/企业微信）</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="实战2：分表路由插件"><a href="#实战2：分表路由插件" class="headerlink" title="实战2：分表路由插件"></a>实战2：分表路由插件</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：根据设备类型自动路由到分表</span></span><br><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = StatementHandler.class, method = &quot;prepare&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;Connection.class, Integer.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ShardingInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Set</span>&lt;String&gt; <span class="variable">SHARDED_TABLES</span> <span class="operator">=</span> Set.of(</span><br><span class="line">        <span class="string">&quot;sensor_data&quot;</span>, <span class="string">&quot;alert_record&quot;</span>, <span class="string">&quot;location_data&quot;</span></span><br><span class="line">    );</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="type">StatementHandler</span> <span class="variable">handler</span> <span class="operator">=</span> (StatementHandler) invocation.getTarget();</span><br><span class="line">        <span class="type">MetaObject</span> <span class="variable">metaObject</span> <span class="operator">=</span> SystemMetaObject.forObject(handler);</span><br><span class="line">        <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> handler.getBoundSql();</span><br><span class="line">        <span class="type">String</span> <span class="variable">originalSql</span> <span class="operator">=</span> boundSql.getSql();</span><br><span class="line">        <span class="type">String</span> <span class="variable">mapperId</span> <span class="operator">=</span> (String) metaObject.getValue(<span class="string">&quot;delegate.mappedStatement.id&quot;</span>);</span><br><span class="line"></span><br><span class="line">        <span class="type">ShardingContext</span> <span class="variable">context</span> <span class="operator">=</span> ShardingContextHolder.get();</span><br><span class="line">        <span class="keyword">if</span> (context != <span class="literal">null</span> &amp;&amp; needSharding(originalSql)) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">shardedSql</span> <span class="operator">=</span> applySharding(originalSql, context);</span><br><span class="line">            metaObject.setValue(<span class="string">&quot;delegate.boundSql.sql&quot;</span>, shardedSql);</span><br><span class="line">            log.debug(<span class="string">&quot;[分表路由] mapperId=&#123;&#125;, 路由完成&quot;</span>, mapperId);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">needSharding</span><span class="params">(String sql)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">lowerSql</span> <span class="operator">=</span> sql.toLowerCase();</span><br><span class="line">        <span class="keyword">return</span> SHARDED_TABLES.stream().anyMatch(table -&gt; lowerSql.contains(table));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">String</span> <span class="title function_">applySharding</span><span class="params">(String sql, ShardingContext context)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">result</span> <span class="operator">=</span> sql;</span><br><span class="line">        <span class="keyword">if</span> (sql.toLowerCase().contains(<span class="string">&quot;sensor_data&quot;</span>) &amp;&amp; context.getMonth() != <span class="literal">null</span>) &#123;</span><br><span class="line">            result = result.replaceAll(<span class="string">&quot;(?i)sensor_data&quot;</span>, <span class="string">&quot;sensor_data_&quot;</span> + context.getMonth());</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (sql.toLowerCase().contains(<span class="string">&quot;alert_record&quot;</span>) &amp;&amp; context.getAlertType() != <span class="literal">null</span>) &#123;</span><br><span class="line">            result = result.replaceAll(<span class="string">&quot;(?i)alert_record&quot;</span>, <span class="string">&quot;alert_record_&quot;</span> + context.getAlertType());</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (sql.toLowerCase().contains(<span class="string">&quot;location_data&quot;</span>) &amp;&amp; context.getAreaCode() != <span class="literal">null</span>) &#123;</span><br><span class="line">            result = result.replaceAll(<span class="string">&quot;(?i)location_data&quot;</span>, <span class="string">&quot;location_data_&quot;</span> + context.getAreaCode());</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> result;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Data</span></span><br><span class="line"><span class="meta">@AllArgsConstructor</span></span><br><span class="line"><span class="meta">@NoArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ShardingContext</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> String month;</span><br><span class="line">    <span class="keyword">private</span> String alertType;</span><br><span class="line">    <span class="keyword">private</span> String areaCode;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ShardingContextHolder</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">ThreadLocal</span>&lt;ShardingContext&gt; <span class="variable">CONTEXT</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ThreadLocal</span>&lt;&gt;();</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">void</span> <span class="title function_">set</span><span class="params">(ShardingContext context)</span> &#123; CONTEXT.set(context); &#125;</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">ShardingContext</span> <span class="title function_">get</span><span class="params">()</span> &#123; <span class="keyword">return</span> CONTEXT.get(); &#125;</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">void</span> <span class="title function_">clear</span><span class="params">()</span> &#123; CONTEXT.remove(); &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// Filter清理ThreadLocal（必须！）</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ShardingContextFilter</span> <span class="keyword">implements</span> <span class="title class_">Filter</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">void</span> <span class="title function_">doFilter</span><span class="params">(ServletRequest request, ServletResponse response, </span></span><br><span class="line"><span class="params">            FilterChain chain)</span> <span class="keyword">throws</span> IOException, ServletException &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            chain.doFilter(request, response);</span><br><span class="line">        &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">            ShardingContextHolder.clear();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="实战3：数据权限插件"><a href="#实战3：数据权限插件" class="headerlink" title="实战3：数据权限插件"></a>实战3：数据权限插件</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：自动追加矿区数据权限条件</span></span><br><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = StatementHandler.class, method = &quot;prepare&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;Connection.class, Integer.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DataPermissionInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> SecurityService securityService;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Set</span>&lt;String&gt; <span class="variable">PERMISSION_TABLES</span> <span class="operator">=</span> Set.of(</span><br><span class="line">        <span class="string">&quot;sensor_data&quot;</span>, <span class="string">&quot;device&quot;</span>, <span class="string">&quot;alert_record&quot;</span>, </span><br><span class="line">        <span class="string">&quot;location_data&quot;</span>, <span class="string">&quot;inspection_record&quot;</span></span><br><span class="line">    );</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Set</span>&lt;String&gt; <span class="variable">WHITELIST_MAPPERS</span> <span class="operator">=</span> Set.of(</span><br><span class="line">        <span class="string">&quot;com.mine.mapper.SysUserMapper&quot;</span>,</span><br><span class="line">        <span class="string">&quot;com.mine.mapper.SysDictMapper&quot;</span></span><br><span class="line">    );</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="type">StatementHandler</span> <span class="variable">handler</span> <span class="operator">=</span> (StatementHandler) invocation.getTarget();</span><br><span class="line">        <span class="type">MetaObject</span> <span class="variable">metaObject</span> <span class="operator">=</span> SystemMetaObject.forObject(handler);</span><br><span class="line">        <span class="type">String</span> <span class="variable">mapperId</span> <span class="operator">=</span> (String) metaObject.getValue(<span class="string">&quot;delegate.mappedStatement.id&quot;</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (isWhitelisted(mapperId)) <span class="keyword">return</span> invocation.proceed();</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 只拦截SELECT</span></span><br><span class="line">        <span class="type">String</span> <span class="variable">sqlCommandType</span> <span class="operator">=</span> (String) metaObject.getValue(</span><br><span class="line">            <span class="string">&quot;delegate.mappedStatement.sqlCommandType.name&quot;</span>);</span><br><span class="line">        <span class="keyword">if</span> (!<span class="string">&quot;SELECT&quot;</span>.equals(sqlCommandType)) <span class="keyword">return</span> invocation.proceed();</span><br><span class="line"></span><br><span class="line">        <span class="type">UserContext</span> <span class="variable">user</span> <span class="operator">=</span> securityService.getCurrentUser();</span><br><span class="line">        <span class="keyword">if</span> (user == <span class="literal">null</span> || user.isSuperAdmin()) <span class="keyword">return</span> invocation.proceed();</span><br><span class="line"></span><br><span class="line">        <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> handler.getBoundSql();</span><br><span class="line">        <span class="type">String</span> <span class="variable">originalSql</span> <span class="operator">=</span> boundSql.getSql();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (needsPermission(originalSql)) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">permissionSql</span> <span class="operator">=</span> addPermissionCondition(originalSql, user);</span><br><span class="line">            metaObject.setValue(<span class="string">&quot;delegate.boundSql.sql&quot;</span>, permissionSql);</span><br><span class="line">            log.debug(<span class="string">&quot;[数据权限] mapperId=&#123;&#125;, userId=&#123;&#125;&quot;</span>, mapperId, user.getUserId());</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">isWhitelisted</span><span class="params">(String mapperId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> WHITELIST_MAPPERS.stream().anyMatch(mapperId::startsWith);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">needsPermission</span><span class="params">(String sql)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">lowerSql</span> <span class="operator">=</span> sql.toLowerCase();</span><br><span class="line">        <span class="keyword">return</span> PERMISSION_TABLES.stream().anyMatch(t -&gt; lowerSql.contains(t));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">String</span> <span class="title function_">addPermissionCondition</span><span class="params">(String sql, UserContext user)</span> &#123;</span><br><span class="line">        <span class="type">List</span>&lt;String&gt; <span class="variable">areas</span> <span class="operator">=</span> user.getAuthorizedAreas();</span><br><span class="line">        <span class="keyword">if</span> (areas.isEmpty()) <span class="keyword">return</span> sql;</span><br><span class="line">        <span class="type">String</span> <span class="variable">areaCondition</span> <span class="operator">=</span> areas.stream().map(a -&gt; <span class="string">&quot;&#x27;&quot;</span> + a + <span class="string">&quot;&#x27;&quot;</span>)</span><br><span class="line">            .collect(Collectors.joining(<span class="string">&quot;,&quot;</span>));</span><br><span class="line">        <span class="type">String</span> <span class="variable">condition</span> <span class="operator">=</span> <span class="string">&quot; area_code IN (&quot;</span> + areaCondition + <span class="string">&quot;)&quot;</span>;</span><br><span class="line">        <span class="keyword">if</span> (sql.toUpperCase().contains(<span class="string">&quot;WHERE&quot;</span>)) &#123;</span><br><span class="line">            <span class="keyword">return</span> sql.replaceFirst(<span class="string">&quot;(?i)WHERE&quot;</span>, <span class="string">&quot;WHERE &quot;</span> + condition + <span class="string">&quot; AND&quot;</span>);</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            <span class="type">int</span> <span class="variable">pos</span> <span class="operator">=</span> findInsertPosition(sql);</span><br><span class="line">            <span class="keyword">return</span> sql.substring(<span class="number">0</span>, pos) + <span class="string">&quot; WHERE &quot;</span> + condition + sql.substring(pos);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> <span class="title function_">findInsertPosition</span><span class="params">(String sql)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">upper</span> <span class="operator">=</span> sql.toUpperCase();</span><br><span class="line">        <span class="type">int</span> <span class="variable">pos</span> <span class="operator">=</span> sql.length();</span><br><span class="line">        <span class="keyword">for</span> (String kw : <span class="keyword">new</span> <span class="title class_">String</span>[]&#123;<span class="string">&quot;ORDER BY&quot;</span>, <span class="string">&quot;GROUP BY&quot;</span>, <span class="string">&quot;LIMIT&quot;</span>&#125;) &#123;</span><br><span class="line">            <span class="type">int</span> <span class="variable">idx</span> <span class="operator">=</span> upper.indexOf(kw);</span><br><span class="line">            <span class="keyword">if</span> (idx &gt; <span class="number">0</span> &amp;&amp; idx &lt; pos) pos = idx;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> pos;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="实战4：操作审计插件"><a href="#实战4：操作审计插件" class="headerlink" title="实战4：操作审计插件"></a>实战4：操作审计插件</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = Executor.class, method = &quot;update&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;MappedStatement.class, Object.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AuditInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> AuditLogProducer auditLogProducer;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Set</span>&lt;String&gt; <span class="variable">AUDIT_MAPPERS</span> <span class="operator">=</span> Set.of(</span><br><span class="line">        <span class="string">&quot;com.mine.mapper.DeviceMapper&quot;</span>,</span><br><span class="line">        <span class="string">&quot;com.mine.mapper.AlertMapper&quot;</span>,</span><br><span class="line">        <span class="string">&quot;com.mine.mapper.UserMapper&quot;</span></span><br><span class="line">    );</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="type">MappedStatement</span> <span class="variable">ms</span> <span class="operator">=</span> (MappedStatement) invocation.getArgs()[<span class="number">0</span>];</span><br><span class="line">        <span class="type">Object</span> <span class="variable">parameter</span> <span class="operator">=</span> invocation.getArgs()[<span class="number">1</span>];</span><br><span class="line">        <span class="type">String</span> <span class="variable">mapperId</span> <span class="operator">=</span> ms.getId();</span><br><span class="line">        <span class="keyword">if</span> (!needsAudit(mapperId)) <span class="keyword">return</span> invocation.proceed();</span><br><span class="line"></span><br><span class="line">        <span class="type">SqlCommandType</span> <span class="variable">commandType</span> <span class="operator">=</span> ms.getSqlCommandType();</span><br><span class="line">        <span class="type">UserContext</span> <span class="variable">user</span> <span class="operator">=</span> SecurityService.getCurrentUser();</span><br><span class="line">        <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> ms.getBoundSql(parameter);</span><br><span class="line">        <span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> boundSql.getSql();</span><br><span class="line"></span><br><span class="line">        <span class="type">long</span> <span class="variable">start</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="type">Object</span> <span class="variable">result</span> <span class="operator">=</span> invocation.proceed();</span><br><span class="line">            <span class="type">long</span> <span class="variable">cost</span> <span class="operator">=</span> System.currentTimeMillis() - start;</span><br><span class="line">            publishAuditLog(user, mapperId, commandType, sql, parameter, cost, <span class="literal">true</span>, <span class="literal">null</span>);</span><br><span class="line">            <span class="keyword">return</span> result;</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            <span class="type">long</span> <span class="variable">cost</span> <span class="operator">=</span> System.currentTimeMillis() - start;</span><br><span class="line">            publishAuditLog(user, mapperId, commandType, sql, parameter, cost, <span class="literal">false</span>, e.getMessage());</span><br><span class="line">            <span class="keyword">throw</span> e;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">needsAudit</span><span class="params">(String mapperId)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> AUDIT_MAPPERS.stream().anyMatch(mapperId::startsWith);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">void</span> <span class="title function_">publishAuditLog</span><span class="params">(UserContext user, String mapperId, </span></span><br><span class="line"><span class="params">            SqlCommandType commandType, String sql, Object parameter,</span></span><br><span class="line"><span class="params">            <span class="type">long</span> cost, <span class="type">boolean</span> success, String error)</span> &#123;</span><br><span class="line">        <span class="type">AuditLog</span> <span class="variable">log</span> <span class="operator">=</span> AuditLog.builder()</span><br><span class="line">            .userId(user != <span class="literal">null</span> ? user.getUserId() : <span class="string">&quot;SYSTEM&quot;</span>)</span><br><span class="line">            .userName(user != <span class="literal">null</span> ? user.getUserName() : <span class="string">&quot;系统&quot;</span>)</span><br><span class="line">            .operation(commandType.name())</span><br><span class="line">            .mapperId(mapperId)</span><br><span class="line">            .sql(sql.replaceAll(<span class="string">&quot;\\s+&quot;</span>, <span class="string">&quot; &quot;</span>))</span><br><span class="line">            .parameter(JSON.toJSONString(parameter))</span><br><span class="line">            .costTime(cost)</span><br><span class="line">            .success(success)</span><br><span class="line">            .error(error)</span><br><span class="line">            .timestamp(LocalDateTime.now())</span><br><span class="line">            .build();</span><br><span class="line">        auditLogProducer.send(log);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Data</span></span><br><span class="line"><span class="meta">@Builder</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AuditLog</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> String userId;</span><br><span class="line">    <span class="keyword">private</span> String userName;</span><br><span class="line">    <span class="keyword">private</span> String operation;</span><br><span class="line">    <span class="keyword">private</span> String mapperId;</span><br><span class="line">    <span class="keyword">private</span> String sql;</span><br><span class="line">    <span class="keyword">private</span> String parameter;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> costTime;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> success;</span><br><span class="line">    <span class="keyword">private</span> String error;</span><br><span class="line">    <span class="keyword">private</span> String clientIp;</span><br><span class="line">    <span class="keyword">private</span> LocalDateTime timestamp;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="实战5：分页插件"><a href="#实战5：分页插件" class="headerlink" title="实战5：分页插件"></a>实战5：分页插件</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = StatementHandler.class, method = &quot;prepare&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;Connection.class, Integer.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">PageInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="type">StatementHandler</span> <span class="variable">handler</span> <span class="operator">=</span> (StatementHandler) invocation.getTarget();</span><br><span class="line">        <span class="type">MetaObject</span> <span class="variable">metaObject</span> <span class="operator">=</span> SystemMetaObject.forObject(handler);</span><br><span class="line">        <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> handler.getBoundSql();</span><br><span class="line">        <span class="type">String</span> <span class="variable">originalSql</span> <span class="operator">=</span> boundSql.getSql();</span><br><span class="line">        <span class="type">PageParam</span> <span class="variable">pageParam</span> <span class="operator">=</span> PageContext.get();</span><br><span class="line">        <span class="keyword">if</span> (pageParam == <span class="literal">null</span>) <span class="keyword">return</span> invocation.proceed();</span><br><span class="line"></span><br><span class="line">        <span class="type">Connection</span> <span class="variable">conn</span> <span class="operator">=</span> (Connection) invocation.getArgs()[<span class="number">0</span>];</span><br><span class="line">        <span class="keyword">if</span> (pageParam.isNeedCount()) &#123;</span><br><span class="line">            <span class="type">long</span> <span class="variable">total</span> <span class="operator">=</span> queryTotal(conn, originalSql, metaObject);</span><br><span class="line">            pageParam.setTotal(total);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="type">String</span> <span class="variable">pageSql</span> <span class="operator">=</span> buildPageSql(originalSql, pageParam);</span><br><span class="line">        metaObject.setValue(<span class="string">&quot;delegate.boundSql.sql&quot;</span>, pageSql);</span><br><span class="line">        <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> <span class="title function_">queryTotal</span><span class="params">(Connection conn, String sql, MetaObject metaObject)</span> </span><br><span class="line">            <span class="keyword">throws</span> SQLException &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">countSql</span> <span class="operator">=</span> optimizeCountSql(sql);</span><br><span class="line">        <span class="keyword">try</span> (<span class="type">PreparedStatement</span> <span class="variable">ps</span> <span class="operator">=</span> conn.prepareStatement(countSql)) &#123;</span><br><span class="line">            <span class="type">ParameterHandler</span> <span class="variable">handler</span> <span class="operator">=</span> (ParameterHandler) </span><br><span class="line">                metaObject.getValue(<span class="string">&quot;delegate.parameterHandler&quot;</span>);</span><br><span class="line">            handler.setParameters(ps);</span><br><span class="line">            <span class="type">ResultSet</span> <span class="variable">rs</span> <span class="operator">=</span> ps.executeQuery();</span><br><span class="line">            <span class="keyword">return</span> rs.next() ? rs.getLong(<span class="number">1</span>) : <span class="number">0L</span>;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">String</span> <span class="title function_">optimizeCountSql</span><span class="params">(String sql)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">countSql</span> <span class="operator">=</span> sql.replaceAll(<span class="string">&quot;(?i)\\s+ORDER\\s+BY\\s+[^)]+$&quot;</span>, <span class="string">&quot;&quot;</span>);</span><br><span class="line">        <span class="keyword">if</span> (countSql.toUpperCase().contains(<span class="string">&quot;GROUP BY&quot;</span>)) &#123;</span><br><span class="line">            countSql = <span class="string">&quot;SELECT COUNT(*) FROM (&quot;</span> + countSql + <span class="string">&quot;) t&quot;</span>;</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            countSql = countSql.replaceFirst(</span><br><span class="line">                <span class="string">&quot;(?i)SELECT\\s+.+?\\s+FROM&quot;</span>, <span class="string">&quot;SELECT COUNT(*) FROM&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> countSql;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">String</span> <span class="title function_">buildPageSql</span><span class="params">(String sql, PageParam pageParam)</span> &#123;</span><br><span class="line">        <span class="type">long</span> <span class="variable">offset</span> <span class="operator">=</span> (pageParam.getPageNum() - <span class="number">1</span>) * pageParam.getPageSize();</span><br><span class="line">        <span class="keyword">return</span> sql + <span class="string">&quot; LIMIT &quot;</span> + offset + <span class="string">&quot;,&quot;</span> + pageParam.getPageSize();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">@Data</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">PageParam</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> <span class="variable">pageNum</span> <span class="operator">=</span> <span class="number">1</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> <span class="variable">pageSize</span> <span class="operator">=</span> <span class="number">10</span>;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">long</span> total;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="variable">needCount</span> <span class="operator">=</span> <span class="literal">true</span>;</span><br><span class="line">    <span class="keyword">public</span> <span class="type">long</span> <span class="title function_">getOffset</span><span class="params">()</span> &#123; <span class="keyword">return</span> (<span class="type">long</span>) (pageNum - <span class="number">1</span>) * pageSize; &#125;</span><br><span class="line">    <span class="keyword">public</span> <span class="type">int</span> <span class="title function_">getTotalPages</span><span class="params">()</span> &#123; <span class="keyword">return</span> (<span class="type">int</span>) ((total + pageSize - <span class="number">1</span>) / pageSize); &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">PageContext</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">ThreadLocal</span>&lt;PageParam&gt; <span class="variable">CONTEXT</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">ThreadLocal</span>&lt;&gt;();</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">void</span> <span class="title function_">set</span><span class="params">(PageParam param)</span> &#123; CONTEXT.set(param); &#125;</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">PageParam</span> <span class="title function_">get</span><span class="params">()</span> &#123; <span class="keyword">return</span> CONTEXT.get(); &#125;</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">void</span> <span class="title function_">clear</span><span class="params">()</span> &#123; CONTEXT.remove(); &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="PageHelper分页插件"><a href="#PageHelper分页插件" class="headerlink" title="PageHelper分页插件"></a>PageHelper分页插件</h2><figure class="highlight xml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="tag">&lt;<span class="name">dependency</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>com.github.pagehelper<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>pagehelper-spring-boot-starter<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">version</span>&gt;</span>1.4.7<span class="tag">&lt;/<span class="name">version</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">dependency</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">@Service</span></span><br><span class="line"><span class="meta">@RequiredArgsConstructor</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">DeviceService</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">final</span> DeviceMapper deviceMapper;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="type">PageInfo</span>&lt;DeviceVO&gt; <span class="title function_">list</span><span class="params">(DeviceQueryDTO query)</span> &#123;</span><br><span class="line">        PageHelper.startPage(query.getPageNum(), query.getPageSize());</span><br><span class="line">        <span class="type">List</span>&lt;DeviceVO&gt; <span class="variable">list</span> <span class="operator">=</span> deviceMapper.selectList(query);</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">PageInfo</span>&lt;&gt;(list);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ❌ 常见错误：startPage和查询之间有其他查询</span></span><br><span class="line">PageHelper.startPage(<span class="number">1</span>, <span class="number">10</span>);</span><br><span class="line"><span class="type">int</span> <span class="variable">count</span> <span class="operator">=</span> deviceMapper.count();     <span class="comment">// 这个查询也被分页了！</span></span><br><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">list</span> <span class="operator">=</span> deviceMapper.list();</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 正确用法：startPage紧挨着查询</span></span><br><span class="line">PageHelper.startPage(<span class="number">1</span>, <span class="number">10</span>);</span><br><span class="line"><span class="type">List</span>&lt;Device&gt; <span class="variable">list</span> <span class="operator">=</span> deviceMapper.list();</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 安全用法：finally清除</span></span><br><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    PageHelper.startPage(<span class="number">1</span>, <span class="number">10</span>);</span><br><span class="line">    <span class="type">List</span>&lt;Device&gt; <span class="variable">list</span> <span class="operator">=</span> deviceMapper.list();</span><br><span class="line">    <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">PageInfo</span>&lt;&gt;(list);</span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    PageHelper.clearPage();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="注册插件的三种方式"><a href="#注册插件的三种方式" class="headerlink" title="注册插件的三种方式"></a>注册插件的三种方式</h2><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 方式1：SpringBoot自动注册</span></span><br><span class="line"><span class="meta">@Component</span>  <span class="comment">// 实现Interceptor的类加@Component即可</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 方式2：手动注册（推荐，可以控制顺序）</span></span><br><span class="line"><span class="meta">@Configuration</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">MyBatisConfig</span> &#123;</span><br><span class="line">    <span class="comment">// 注册顺序决定执行顺序：分表路由 → 数据权限 → 慢SQL监控</span></span><br><span class="line">    <span class="meta">@Bean</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Interceptor</span>[] <span class="title function_">mybatisInterceptors</span><span class="params">(</span></span><br><span class="line"><span class="params">            ShardingInterceptor sharding,</span></span><br><span class="line"><span class="params">            DataPermissionInterceptor permission,</span></span><br><span class="line"><span class="params">            SqlCostInterceptor cost)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="keyword">new</span> <span class="title class_">Interceptor</span>[]&#123;sharding, permission, cost&#125;;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 方式3：XML配置</span></span><br><span class="line"><span class="comment">// &lt;plugins&gt;</span></span><br><span class="line"><span class="comment">//     &lt;plugin interceptor=&quot;com.mine.interceptor.SqlCostInterceptor&quot;&gt;</span></span><br><span class="line"><span class="comment">//         &lt;property name=&quot;slowThreshold&quot; value=&quot;1000&quot;/&gt;</span></span><br><span class="line"><span class="comment">//     &lt;/plugin&gt;</span></span><br><span class="line"><span class="comment">// &lt;/plugins&gt;</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="插件开发注意事项"><a href="#插件开发注意事项" class="headerlink" title="插件开发注意事项"></a>插件开发注意事项</h2><h3 id="1-插件顺序至关重要"><a href="#1-插件顺序至关重要" class="headerlink" title="1. 插件顺序至关重要"></a>1. 插件顺序至关重要</h3><p><strong>实际项目插件执行顺序规范</strong>：</p>
+<ul>
+<li>推荐顺序：</li>
+<li><ol>
+<li>ShardingInterceptor       (分表路由 — 先改表名)</li>
+</ol>
+</li>
+<li><ol start="2">
+<li>DataPermissionInterceptor (数据权限 — 再加WHERE条件)</li>
+</ol>
+</li>
+<li><ol start="3">
+<li>PageInterceptor           (分页 — 最后加LIMIT)</li>
+</ol>
+</li>
+<li><ol start="4">
+<li>SqlCostInterceptor        (耗时监控 — 包裹最外层)</li>
+</ol>
+</li>
+<li><ol start="5">
+<li>AuditInterceptor          (操作审计 — 不改SQL，只记录)</li>
+</ol>
+</li>
+<li>错误顺序示例：</li>
+<li>PageInterceptor → ShardingInterceptor</li>
+<li>→ 先加分页LIMIT，再改表名，LIMIT加到了错误的表上</li>
+</ul>
+<h3 id="2-不要在插件中做重逻辑"><a href="#2-不要在插件中做重逻辑" class="headerlink" title="2. 不要在插件中做重逻辑"></a>2. 不要在插件中做重逻辑</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// ❌ 在插件中做重逻辑</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> &#123;</span><br><span class="line">    <span class="comment">// 不要做：远程调用、复杂计算、大量字符串操作、数据库查询</span></span><br><span class="line">    <span class="comment">// 每条SQL都会经过，会严重拖慢性能</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ✅ 插件逻辑要轻量</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> &#123;</span><br><span class="line">    <span class="comment">// 只做：读取参数/SQL、修改SQL、记录时间、异步发送消息</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="3-反射修改私有属性"><a href="#3-反射修改私有属性" class="headerlink" title="3. 反射修改私有属性"></a>3. 反射修改私有属性</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">MetaObject</span> <span class="variable">metaObject</span> <span class="operator">=</span> SystemMetaObject.forObject(target);</span><br><span class="line"><span class="comment">// 修改SQL</span></span><br><span class="line">metaObject.setValue(<span class="string">&quot;delegate.boundSql.sql&quot;</span>, newSql);</span><br><span class="line"><span class="comment">// 获取属性</span></span><br><span class="line"><span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> (String) metaObject.getValue(<span class="string">&quot;delegate.boundSql.sql&quot;</span>);</span><br><span class="line"><span class="type">String</span> <span class="variable">mapperId</span> <span class="operator">=</span> (String) metaObject.getValue(<span class="string">&quot;delegate.mappedStatement.id&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// MetaObject常用路径：</span></span><br><span class="line"><span class="comment">// delegate.boundSql.sql                → SQL文本</span></span><br><span class="line"><span class="comment">// delegate.boundSql.parameterObject    → 参数对象</span></span><br><span class="line"><span class="comment">// delegate.mappedStatement.id          → Mapper ID</span></span><br><span class="line"><span class="comment">// delegate.mappedStatement.sqlCommandType → SQL类型</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="4-插件异常隔离"><a href="#4-插件异常隔离" class="headerlink" title="4. 插件异常隔离"></a>4. 插件异常隔离</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SafeInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> doIntercept(invocation);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">            log.error(<span class="string">&quot;[插件异常] interceptor=&#123;&#125;&quot;</span>, <span class="built_in">this</span>.getClass().getSimpleName(), e);</span><br><span class="line">            <span class="keyword">return</span> invocation.proceed();  <span class="comment">// 降级</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">protected</span> <span class="type">Object</span> <span class="title function_">doIntercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="面试高频问题"><a href="#面试高频问题" class="headerlink" title="面试高频问题"></a>面试高频问题</h2><h3 id="1-MyBatis插件的原理？"><a href="#1-MyBatis插件的原理？" class="headerlink" title="1. MyBatis插件的原理？"></a>1. MyBatis插件的原理？</h3><p>基于JDK动态代理，在创建四大对象时通过InterceptorChain依次应用所有插件，生成代理对象。每个插件通过Plugin.wrap()创建代理，在Plugin.invoke()中检查@Intercepts签名决定是否拦截。多个插件形成代理链（洋葱模型）。</p>
+<h3 id="2-MyBatis能拦截哪些对象？"><a href="#2-MyBatis能拦截哪些对象？" class="headerlink" title="2. MyBatis能拦截哪些对象？"></a>2. MyBatis能拦截哪些对象？</h3><p>Executor（SQL执行、事务管理）、StatementHandler（SQL语句处理）、ParameterHandler（参数映射）、ResultSetHandler（结果集映射）。最常用的是StatementHandler.prepare和Executor.query。</p>
+<h3 id="3-PageHelper的原理？"><a href="#3-PageHelper的原理？" class="headerlink" title="3. PageHelper的原理？"></a>3. PageHelper的原理？</h3><p>拦截StatementHandler.prepare方法，从ThreadLocal取分页参数，拼接LIMIT实现分页，优化COUNT SQL获取总数。关键：startPage必须紧挨查询，使用后必须清理ThreadLocal。</p>
+<h3 id="4-插件的注册顺序有什么影响？"><a href="#4-插件的注册顺序有什么影响？" class="headerlink" title="4. 插件的注册顺序有什么影响？"></a>4. 插件的注册顺序有什么影响？</h3><p>先注册的插件在最外层，最先执行intercept逻辑，最后执行proceed之后的逻辑（洋葱模型）。修改SQL的插件顺序尤其重要：分表路由先于数据权限，数据权限先于分页，监控在最外层。</p>
+<h2 id="自定义TypeHandler插件"><a href="#自定义TypeHandler插件" class="headerlink" title="自定义TypeHandler插件"></a>自定义TypeHandler插件</h2><h3 id="插件方式注册TypeHandler"><a href="#插件方式注册TypeHandler" class="headerlink" title="插件方式注册TypeHandler"></a>插件方式注册TypeHandler</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：通过插件自动为特定字段设置TypeHandler</span></span><br><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = ParameterHandler.class, method = &quot;setParameters&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;PreparedStatement.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">AutoTypeHandlerInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="comment">// 获取ParameterHandler</span></span><br><span class="line">        <span class="type">ParameterHandler</span> <span class="variable">parameterHandler</span> <span class="operator">=</span> (ParameterHandler) invocation.getTarget();</span><br><span class="line">        <span class="comment">// 通过反射获取parameterObject和boundSql</span></span><br><span class="line">        <span class="type">MetaObject</span> <span class="variable">metaObject</span> <span class="operator">=</span> SystemMetaObject.forObject(parameterHandler);</span><br><span class="line">        <span class="type">Object</span> <span class="variable">parameterObject</span> <span class="operator">=</span> metaObject.getValue(<span class="string">&quot;parameterObject&quot;</span>);</span><br><span class="line">        </span><br><span class="line">        <span class="comment">// 对特定类型做特殊处理</span></span><br><span class="line">        <span class="keyword">if</span> (parameterObject <span class="keyword">instanceof</span> DeviceQueryDTO) &#123;</span><br><span class="line">            <span class="type">DeviceQueryDTO</span> <span class="variable">dto</span> <span class="operator">=</span> (DeviceQueryDTO) parameterObject;</span><br><span class="line">            <span class="comment">// 确保枚举类型使用正确的TypeHandler</span></span><br><span class="line">            <span class="keyword">if</span> (dto.getStatus() != <span class="literal">null</span>) &#123;</span><br><span class="line">                log.debug(<span class="string">&quot;[TypeHandler] 设备状态枚举: &#123;&#125;&quot;</span>, dto.getStatus());</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="结果集处理插件"><a href="#结果集处理插件" class="headerlink" title="结果集处理插件"></a>结果集处理插件</h2><h3 id="大结果集保护插件"><a href="#大结果集保护插件" class="headerlink" title="大结果集保护插件"></a>大结果集保护插件</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：防止大结果集导致OOM</span></span><br><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = ResultSetHandler.class, method = &quot;handleResultSets&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;Statement.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ResultSetLimitInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 最大返回行数</span></span><br><span class="line">    <span class="meta">@Value(&quot;$&#123;mybatis.max-result-rows:10000&#125;&quot;)</span></span><br><span class="line">    <span class="keyword">private</span> <span class="type">int</span> maxResultRows;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="comment">// 获取MappedStatement</span></span><br><span class="line">        <span class="type">Statement</span> <span class="variable">stmt</span> <span class="operator">=</span> (Statement) invocation.getArgs()[<span class="number">0</span>];</span><br><span class="line">        <span class="type">ResultSet</span> <span class="variable">rs</span> <span class="operator">=</span> stmt.getResultSet();</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">if</span> (rs != <span class="literal">null</span> &amp;&amp; rs.getType() != ResultSet.TYPE_FORWARD_ONLY) &#123;</span><br><span class="line">            rs.last();</span><br><span class="line">            <span class="type">int</span> <span class="variable">rowCount</span> <span class="operator">=</span> rs.getRow();</span><br><span class="line">            rs.beforeFirst();</span><br><span class="line">            </span><br><span class="line">            <span class="keyword">if</span> (rowCount &gt; maxResultRows) &#123;</span><br><span class="line">                <span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> stmt.toString();</span><br><span class="line">                log.warn(<span class="string">&quot;[大结果集] 结果集行数=&#123;&#125;, 超过限制=&#123;&#125;, SQL=&#123;&#125;&quot;</span>, </span><br><span class="line">                    rowCount, maxResultRows, sql);</span><br><span class="line">                <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">BusinessException</span>(</span><br><span class="line">                    String.format(<span class="string">&quot;查询结果超过%d条，请添加查询条件&quot;</span>, maxResultRows));</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="SQL重写插件"><a href="#SQL重写插件" class="headerlink" title="SQL重写插件"></a>SQL重写插件</h2><h3 id="多租户隔离插件"><a href="#多租户隔离插件" class="headerlink" title="多租户隔离插件"></a>多租户隔离插件</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：自动追加租户隔离条件</span></span><br><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = StatementHandler.class, method = &quot;prepare&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;Connection.class, Integer.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">TenantInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Autowired</span></span><br><span class="line">    <span class="keyword">private</span> TenantContext tenantContext;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 需要租户隔离的表</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Set</span>&lt;String&gt; <span class="variable">TENANT_TABLES</span> <span class="operator">=</span> Set.of(</span><br><span class="line">        <span class="string">&quot;device&quot;</span>, <span class="string">&quot;sensor_data&quot;</span>, <span class="string">&quot;alert_record&quot;</span>, <span class="string">&quot;location_data&quot;</span></span><br><span class="line">    );</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 排除的Mapper（系统管理，不需要租户隔离）</span></span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="type">Set</span>&lt;String&gt; <span class="variable">EXCLUDED_MAPPERS</span> <span class="operator">=</span> Set.of(</span><br><span class="line">        <span class="string">&quot;com.mine.mapper.SysUserMapper&quot;</span>,</span><br><span class="line">        <span class="string">&quot;com.mine.mapper.SysTenantMapper&quot;</span></span><br><span class="line">    );</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="type">StatementHandler</span> <span class="variable">handler</span> <span class="operator">=</span> (StatementHandler) invocation.getTarget();</span><br><span class="line">        <span class="type">MetaObject</span> <span class="variable">metaObject</span> <span class="operator">=</span> SystemMetaObject.forObject(handler);</span><br><span class="line">        <span class="type">String</span> <span class="variable">mapperId</span> <span class="operator">=</span> (String) metaObject.getValue(<span class="string">&quot;delegate.mappedStatement.id&quot;</span>);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (EXCLUDED_MAPPERS.stream().anyMatch(mapperId::startsWith)) &#123;</span><br><span class="line">            <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="type">BoundSql</span> <span class="variable">boundSql</span> <span class="operator">=</span> handler.getBoundSql();</span><br><span class="line">        <span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> boundSql.getSql();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (needsTenantFilter(sql)) &#123;</span><br><span class="line">            <span class="type">String</span> <span class="variable">tenantId</span> <span class="operator">=</span> tenantContext.getTenantId();</span><br><span class="line">            <span class="keyword">if</span> (tenantId != <span class="literal">null</span>) &#123;</span><br><span class="line">                <span class="type">String</span> <span class="variable">tenantCondition</span> <span class="operator">=</span> <span class="string">&quot; tenant_id = &#x27;&quot;</span> + tenantId + <span class="string">&quot;&#x27;&quot;</span>;</span><br><span class="line">                <span class="type">String</span> <span class="variable">newSql</span> <span class="operator">=</span> addCondition(sql, tenantCondition);</span><br><span class="line">                metaObject.setValue(<span class="string">&quot;delegate.boundSql.sql&quot;</span>, newSql);</span><br><span class="line">                log.debug(<span class="string">&quot;[租户隔离] mapperId=&#123;&#125;, tenantId=&#123;&#125;&quot;</span>, mapperId, tenantId);</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> invocation.proceed();</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">boolean</span> <span class="title function_">needsTenantFilter</span><span class="params">(String sql)</span> &#123;</span><br><span class="line">        <span class="type">String</span> <span class="variable">lowerSql</span> <span class="operator">=</span> sql.toLowerCase();</span><br><span class="line">        <span class="keyword">return</span> TENANT_TABLES.stream().anyMatch(t -&gt; lowerSql.contains(t));</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">private</span> <span class="type">String</span> <span class="title function_">addCondition</span><span class="params">(String sql, String condition)</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (sql.toUpperCase().contains(<span class="string">&quot;WHERE&quot;</span>)) &#123;</span><br><span class="line">            <span class="keyword">return</span> sql.replaceFirst(<span class="string">&quot;(?i)WHERE&quot;</span>, <span class="string">&quot;WHERE &quot;</span> + condition + <span class="string">&quot; AND&quot;</span>);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="type">int</span> <span class="variable">pos</span> <span class="operator">=</span> sql.length();</span><br><span class="line">        <span class="type">String</span> <span class="variable">upper</span> <span class="operator">=</span> sql.toUpperCase();</span><br><span class="line">        <span class="keyword">for</span> (String kw : <span class="keyword">new</span> <span class="title class_">String</span>[]&#123;<span class="string">&quot;ORDER BY&quot;</span>, <span class="string">&quot;GROUP BY&quot;</span>, <span class="string">&quot;LIMIT&quot;</span>&#125;) &#123;</span><br><span class="line">            <span class="type">int</span> <span class="variable">idx</span> <span class="operator">=</span> upper.indexOf(kw);</span><br><span class="line">            <span class="keyword">if</span> (idx &gt; <span class="number">0</span> &amp;&amp; idx &lt; pos) pos = idx;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> sql.substring(<span class="number">0</span>, pos) + <span class="string">&quot; WHERE &quot;</span> + condition + sql.substring(pos);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="SQL性能分析插件"><a href="#SQL性能分析插件" class="headerlink" title="SQL性能分析插件"></a>SQL性能分析插件</h2><h3 id="执行计划分析"><a href="#执行计划分析" class="headerlink" title="执行计划分析"></a>执行计划分析</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 实际项目：开发环境SQL执行计划分析</span></span><br><span class="line"><span class="meta">@Intercepts(&#123;</span></span><br><span class="line"><span class="meta">    @Signature(type = StatementHandler.class, method = &quot;query&quot;, </span></span><br><span class="line"><span class="meta">               args = &#123;Statement.class, ResultHandler.class&#125;)</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"><span class="meta">@Component</span></span><br><span class="line"><span class="meta">@Slf4j</span></span><br><span class="line"><span class="meta">@Profile(&quot;dev&quot;)</span>  <span class="comment">// 仅开发环境启用</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">ExplainInterceptor</span> <span class="keyword">implements</span> <span class="title class_">Interceptor</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">intercept</span><span class="params">(Invocation invocation)</span> <span class="keyword">throws</span> Throwable &#123;</span><br><span class="line">        <span class="type">Statement</span> <span class="variable">stmt</span> <span class="operator">=</span> (Statement) invocation.getArgs()[<span class="number">0</span>];</span><br><span class="line">        </span><br><span class="line">        <span class="keyword">if</span> (stmt <span class="keyword">instanceof</span> PreparedStatement) &#123;</span><br><span class="line">            <span class="type">PreparedStatement</span> <span class="variable">ps</span> <span class="operator">=</span> (PreparedStatement) stmt;</span><br><span class="line">            <span class="type">String</span> <span class="variable">sql</span> <span class="operator">=</span> ps.toString().replaceFirst(<span class="string">&quot;^.*: &quot;</span>, <span class="string">&quot;&quot;</span>);</span><br><span class="line">            </span><br><span class="line">            <span class="comment">// 检查执行计划</span></span><br><span class="line">            <span class="keyword">if</span> (!sql.toUpperCase().startsWith(<span class="string">&quot;EXPLAIN&quot;</span>)) &#123;</span><br><span class="line">                <span class="keyword">try</span> (<span class="type">Connection</span> <span class="variable">conn</span> <span class="operator">=</span> stmt.getConnection();</span><br><span class="line">                     <span class="type">PreparedStatement</span> <span class="variable">explainPs</span> <span class="operator">=</span> conn.prepareStatement(<span class="string">&quot;EXPLAIN &quot;</span> + sql)) &#123;</span><br><span class="line">                    <span class="type">ResultSet</span> <span class="variable">rs</span> <span class="operator">=</span> explainPs.executeQuery();</span><br><span class="line">                    <span class="keyword">while</span> (rs.next()) &#123;</span><br><span class="line">                        <span class="type">String</span> <span class="variable">type</span> <span class="operator">=</span> rs.getString(<span class="string">&quot;type&quot;</span>);</span><br><span class="line">                        <span class="type">String</span> <span class="variable">key</span> <span class="operator">=</span> rs.getString(<span class="string">&quot;key&quot;</span>);</span><br><span class="line">                        <span class="type">Long</span> <span class="variable">rows</span> <span class="operator">=</span> rs.getLong(<span class="string">&quot;rows);</span></span><br><span class="line"><span class="string">                        String extra = rs.getString(&quot;</span>Extra<span class="string">&quot;);</span></span><br><span class="line"><span class="string">                        </span></span><br><span class="line"><span class="string">                        // ALL类型 = 全表扫描</span></span><br><span class="line"><span class="string">                        if (&quot;</span>ALL<span class="string">&quot;.equals(type)) &#123;</span></span><br><span class="line"><span class="string">                            log.warn(&quot;</span>[执行计划] 全表扫描! type=&#123;&#125;, key=&#123;&#125;, rows=&#123;&#125;, extra=&#123;&#125;<span class="string">&quot;, </span></span><br><span class="line"><span class="string">                                type, key, rows, extra);</span></span><br><span class="line"><span class="string">                        &#125;</span></span><br><span class="line"><span class="string">                    &#125;</span></span><br><span class="line"><span class="string">                &#125; catch (Exception e) &#123;</span></span><br><span class="line"><span class="string">                    // 分析失败不影响业务</span></span><br><span class="line"><span class="string">                    log.debug(&quot;</span>[执行计划] 分析失败: &#123;&#125;<span class="string">&quot;, e.getMessage());</span></span><br><span class="line"><span class="string">                &#125;</span></span><br><span class="line"><span class="string">            &#125;</span></span><br><span class="line"><span class="string">        &#125;</span></span><br><span class="line"><span class="string">        </span></span><br><span class="line"><span class="string">        return invocation.proceed();</span></span><br><span class="line"><span class="string">    &#125;</span></span><br><span class="line"><span class="string">&#125;</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="插件开发完整清单"><a href="#插件开发完整清单" class="headerlink" title="插件开发完整清单"></a>插件开发完整清单</h2><p>把上面所有经验浓缩成一个可落地的检查清单，每次写新插件前过一遍，能避开 90% 的坑：</p>
+<p><strong>定义阶段</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> 是否真的需要插件？能用 MyBatis 原生功能（如 <code>@SelectProvider</code>、TypeHandler、拦截器之外的 <code>Setting</code>）解决就不要写插件。</li>
+<li><input disabled="" type="checkbox"> 拦截点是否选对？对照上文选型表确认 <code>Executor / StatementHandler / ParameterHandler / ResultSetHandler</code>。</li>
+<li><input disabled="" type="checkbox"> <code>@Signature</code> 的方法签名（<code>type/method/args</code>）是否与目标 MyBatis 版本一致？参数类型写错会导致插件”静默失效”。</li>
+</ul>
+<p><strong>实现阶段</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> <code>intercept()</code> 内是否一定调用了 <code>invocation.proceed()</code>？漏掉会导致 SQL 永远不执行。</li>
+<li><input disabled="" type="checkbox"> 改写 SQL 后用 <code>MetaObject.setValue(&quot;delegate.boundSql.sql&quot;, newSql)</code> 是否同时保留了参数映射？避免改完表名后参数错位。</li>
+<li><input disabled="" type="checkbox"> 是否用 <code>try/finally</code> 包裹了耗时统计与 ThreadLocal 清理？</li>
+<li><input disabled="" type="checkbox"> 重逻辑（远程调用、复杂计算）是否移出了插件主路径（改为异步）？</li>
+</ul>
+<p><strong>注册与顺序</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> 多插件时是否用 <code>@Configuration</code> 手动注册以固定顺序？顺序约定：分表 → 数据权限 → 分页 → 监控 → 审计。</li>
+<li><input disabled="" type="checkbox"> 是否给每个插件加了异常隔离（catch 后降级 <code>proceed()</code>），避免一个插件崩了拖垮全站？</li>
+</ul>
+<p><strong>测试与上线</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> 是否覆盖”无 <code>@Intercepts</code> 注解””签名不匹配”等降级路径的单测？</li>
+<li><input disabled="" type="checkbox"> 是否在预发环境用 <code>ExplainInterceptor</code> 验证没有引入全表扫描？</li>
+<li><input disabled="" type="checkbox"> 生产环境是否确认插件 <code>sampleRate</code>、阈值等配置可按环境动态调整？</li>
+</ul>
+<blockquote>
+<p>一句话总结：MyBatis 插件是”能力越大责任越大”的典型。它让你能在 SQL 执行的毛细血管里做增强，但也意味着任何一行错误代码都会被<strong>每一条 SQL</strong> 放大。写好插件的核心心法是——<strong>轻量、可降级、顺序可控</strong>。</p>
+</blockquote>
+
+    </div>
+  </article>
+  <nav class="post-pagination">
+    
+      <div class="post-prev">
+        <span class="nav-label">上一篇</span>
+        <a href="/2023/03/05/89cb6fe6f654/">Redis五种数据结构深度解析——选对数据结构事半功倍</a>
+      </div>
+    
+    
+      <div class="post-next">
+        <span class="nav-label">下一篇</span>
+        <a href="/2023/03/26/c80650e53f14/">Redis持久化——RDB与AOF的选择</a>
+      </div>
+    
+  </nav>
+  
+
+</div>
+</div>
+
+<script src="/js/copy.js"></script>
+
+<aside class="sidebar-container sidebar-right">
+    <div class="sidebar-bg">
+        <p id="date"></p>
+<script>
+  function updateDate() {
+    var now = new Date();
+    var dateString = now.toISOString().slice(0, 10);
+    document.getElementById('date').textContent = dateString;
+  }
+
+  window.addEventListener('load', function() {
+    updateDate();
+    // 更新频率为每5分钟更新一次，减少不必要的更新
+    setInterval(updateDate, 300000);
+  });
+</script>
+        <span id="clock" role="timer" aria-live="polite"></span>
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const clockElement = document.getElementById('clock');
+    let timerInterval;
+
+    // 格式化时间函数
+    function formatTime(unit) {
+      return unit < 10 ? '0' + unit : unit;
+    }
+
+    // 更新时钟 - 包含秒
+    function updateClock() {
+      const now = new Date();
+      const hours = formatTime(now.getHours());
+      const minutes = formatTime(now.getMinutes());
+      const seconds = formatTime(now.getSeconds());
+      clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+    }
+
+    // 初始化时钟
+    function startClock() {
+      // 立即更新一次时间
+      updateClock();
+      // 每秒更新一次
+      timerInterval = setInterval(updateClock, 1000);
+    }
+
+    // 页面可见性变化时的优化
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        // 页面不可见时停止更新
+        clearInterval(timerInterval);
+      } else {
+        // 页面重新可见时，重新开始
+        clearInterval(timerInterval);
+        startClock();
+      }
+    });
+
+    // 启动时钟
+    startClock();
+  });
+</script>
+
+
+    </div>
+    
+    <div class="sidebar-bg">
+        <div class="card-tags">
+            
+                <a href="/tags/Java/" class="tag" aria-label="标签: #Java">#Java</a>
+            
+                <a href="/tags/%E6%BA%90%E7%A0%81/" class="tag" aria-label="标签: #源码">#源码</a>
+            
+                <a href="/tags/%E5%B7%A5%E7%A8%8B%E5%AE%9E%E8%B7%B5/" class="tag" aria-label="标签: #工程实践">#工程实践</a>
+            
+                <a href="/tags/MyBatis/" class="tag" aria-label="标签: #MyBatis">#MyBatis</a>
+            
+        </div>
+    </div>
+    <div>
+        <div class="categories-list">
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
+                        技术
+                        <span>(253)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/" aria-label="分类: 2023">
+                        2023
+                        <span>(61)</span>
+                    </a>
+                </div>
+            
+                <div class="category-item">
+                    <a href="/categories/%E6%8A%80%E6%9C%AF/2023/MyBatis%E6%BA%90%E7%A0%81/" aria-label="分类: MyBatis源码">
+                        MyBatis源码
+                        <span>(6)</span>
+                    </a>
+                </div>
+            
+        </div>
+    </div>
+</aside>
+
+
+
+
+
+    <footer>
+    
+    
+      <script src='https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js'
+              integrity="sha384-+NGfjU8KzpDLXRHduEqW+ZiJr2rIg+cidUVk7B51R5xK7cHwMKQfrdFwGdrq1Bcz"
+              crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <style>
+        .mermaid-wrapper {
+          position: relative;
+          margin: 16px 0;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+        .mermaid-zoom-btn {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          background: rgba(99, 102, 241, 0.9);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 100;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+          opacity: 1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+        }
+        .mermaid-zoom-btn:hover {
+          background: rgba(99, 102, 241, 1);
+          transform: scale(1.15);
+          box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+        }
+        .mermaid-modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.92);
+          z-index: 10000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .mermaid-modal-overlay.active {
+          display: flex;
+        }
+        .mermaid-modal-content {
+          max-width: 95%;
+          max-height: 95%;
+          width: 95%;
+          height: 95%;
+          background: #1e1e2e;
+          border-radius: 12px;
+          padding: 24px;
+          position: relative;
+          overflow: auto;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-modal-content svg {
+          max-width: none;
+          max-height: none;
+          width: auto;
+          height: auto;
+          display: block;
+          cursor: grab;
+          margin: 0 auto;
+        }
+        .mermaid-modal-content svg:active {
+          cursor: grabbing;
+        }
+        .mermaid-svg-container {
+          width: 100%;
+          min-height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: visible;
+          padding: 20px;
+          box-sizing: border-box;
+        }
+        .mermaid-zoom-controls {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 8px;
+          z-index: 10030;
+          background: rgba(30, 30, 46, 0.95);
+          padding: 8px 16px;
+          border-radius: 8px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .mermaid-zoom-btn-sm {
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 16px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-zoom-btn-sm:hover {
+          background: rgba(99, 102, 241, 0.8);
+          transform: scale(1.1);
+        }
+        .mermaid-zoom-info {
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 8px 16px;
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          z-index: 10030;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        .mermaid-modal-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10010;
+          color: #fff;
+          font-size: 20px;
+          transition: all 0.2s ease;
+        }
+        .mermaid-modal-close:hover {
+          background: rgba(239, 68, 68, 0.8);
+          transform: rotate(90deg);
+        }
+        .mermaid-wrapper svg {
+          display: block;
+        }
+      </style>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          if (window.mermaid) {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: 'dark',
+              flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 100
+              },
+              themeVariables: {
+                primaryColor: '#6366f1',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#818cf8',
+                lineColor: '#818cf8',
+                secondaryColor: '#4f46e5',
+                tertiaryColor: '#3730a3',
+                backgroundColor: '#1e1e2e',
+                mainBkg: '#312e81',
+                edgeColor: '#818cf8',
+                textColor: '#ffffff',
+                fontSize: '14px'
+              }
+            });
+
+            var mermaidPres = document.querySelectorAll('pre.mermaid');
+            mermaidPres.forEach(function(pre) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = pre.textContent || pre.innerText;
+              pre.parentNode.replaceChild(div, pre);
+            });
+
+            /* 说明：此处原本还有一段扫描 `pre code`、按首行关键字（graph / pie / gantt …）
+               把代码块改写成 .mermaid 的逻辑。它与 hexo-filter-mermaid-diagrams 插件的
+               职责重复（```mermaid 已由插件在构建期转成 <pre class="mermaid">），
+               而且会误伤「正文里恰好以 graph / pie / gantt 开头的普通代码块」，故已移除。
+               现在只保留 pre.mermaid → div.mermaid 这一处必要的 DOM 规整（用于套用主题样式）。 */
+
+            function setupMermaidZoom() {
+              console.log('Setting up mermaid zoom feature...');
+              var mermaidDivs = document.querySelectorAll('.mermaid');
+              console.log('Found ' + mermaidDivs.length + ' mermaid divs');
+              
+              if (mermaidDivs.length === 0) {
+                return;
+              }
+              
+              var modal = document.getElementById('mermaid-modal');
+              if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'mermaid-modal';
+                modal.className = 'mermaid-modal-overlay';
+                modal.innerHTML = '<div class="mermaid-modal-content"><div class="mermaid-zoom-controls"><button class="mermaid-zoom-btn-sm" data-zoom="out">-</button><button class="mermaid-zoom-btn-sm" data-zoom="reset">1:1</button><button class="mermaid-zoom-btn-sm" data-zoom="in">+</button></div><div class="mermaid-zoom-info">缩放: 100%</div><button class="mermaid-modal-close">&times;</button><div class="mermaid-svg-container"></div></div>';
+                document.body.appendChild(modal);
+                
+                modal.zoomState = { scale: 1, translateX: 0, translateY: 0 };
+                
+                var closeBtn = modal.querySelector('.mermaid-modal-close');
+                closeBtn.addEventListener('click', function() {
+                  modal.classList.remove('active');
+                  document.body.style.overflow = '';
+                });
+                
+                modal.addEventListener('click', function(e) {
+                  if (e.target === modal) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                document.addEventListener('keydown', function(e) {
+                  if (e.key === 'Escape' && modal.classList.contains('active')) {
+                    modal.classList.remove('active');
+                    document.body.style.overflow = '';
+                  }
+                });
+                
+                var zoomInBtn = modal.querySelector('[data-zoom="in"]');
+                var zoomOutBtn = modal.querySelector('[data-zoom="out"]');
+                var zoomResetBtn = modal.querySelector('[data-zoom="reset"]');
+                
+                zoomInBtn.addEventListener('click', function() {
+                  zoomSvg(1.2);
+                });
+                
+                zoomOutBtn.addEventListener('click', function() {
+                  zoomSvg(0.8);
+                });
+                
+                zoomResetBtn.addEventListener('click', function() {
+                  resetZoom();
+                });
+                
+                var svgContainer = modal.querySelector('.mermaid-svg-container');
+                
+                svgContainer.addEventListener('mousedown', function(e) {
+                  if (e.target.tagName === 'svg') {
+                    modal.zoomState.isDragging = true;
+                    modal.zoomState.startX = e.clientX - modal.zoomState.translateX;
+                    modal.zoomState.startY = e.clientY - modal.zoomState.translateY;
+                    e.preventDefault();
+                  }
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (modal.zoomState.isDragging) {
+                    modal.zoomState.translateX = e.clientX - modal.zoomState.startX;
+                    modal.zoomState.translateY = e.clientY - modal.zoomState.startY;
+                    updateTransform();
+                  }
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  modal.zoomState.isDragging = false;
+                });
+                
+                svgContainer.addEventListener('wheel', function(e) {
+                  e.preventDefault();
+                  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+                  zoomSvg(delta);
+                }, { passive: false });
+                
+                function zoomSvg(factor) {
+                  modal.zoomState.scale = Math.max(0.5, Math.min(5, modal.zoomState.scale * factor));
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function resetZoom() {
+                  modal.zoomState.scale = 1;
+                  modal.zoomState.translateX = 0;
+                  modal.zoomState.translateY = 0;
+                  updateTransform();
+                  updateZoomInfo();
+                }
+                
+                function updateTransform() {
+                  var svg = svgContainer.querySelector('svg');
+                  if (svg) {
+                    svg.style.transform = 'translate(' + modal.zoomState.translateX + 'px, ' + modal.zoomState.translateY + 'px) scale(' + modal.zoomState.scale + ')';
+                    svg.style.transformOrigin = 'center center';
+                  }
+                }
+                
+                function updateZoomInfo() {
+                  var info = modal.querySelector('.mermaid-zoom-info');
+                  if (info) {
+                    info.textContent = '缩放: ' + Math.round(modal.zoomState.scale * 100) + '%';
+                  }
+                }
+                
+                modal.updateTransform = updateTransform;
+                modal.updateZoomInfo = updateZoomInfo;
+              }
+              
+              mermaidDivs.forEach(function(div) {
+                if (div.parentNode.classList.contains('mermaid-wrapper')) {
+                  return;
+                }
+                
+                var wrapper = document.createElement('div');
+                wrapper.className = 'mermaid-wrapper';
+                
+                var zoomBtn = document.createElement('button');
+                zoomBtn.className = 'mermaid-zoom-btn';
+                zoomBtn.innerHTML = '&#x1F50D;';
+                zoomBtn.title = '点击放大';
+                
+                div.parentNode.insertBefore(wrapper, div);
+                wrapper.appendChild(div);
+                wrapper.appendChild(zoomBtn);
+                
+                zoomBtn.addEventListener('click', function() {
+                  console.log('Zoom button clicked');
+                  var content = modal.querySelector('.mermaid-modal-content');
+                  var svgContainer = modal.querySelector('.mermaid-svg-container');
+                  var svg = div.querySelector('svg');
+                  console.log('Found SVG:', !!svg);
+                  
+                  if (svg) {
+                    var clonedSvg = svg.cloneNode(true);
+                    clonedSvg.style.maxWidth = 'none';
+                    clonedSvg.style.maxHeight = 'none';
+                    clonedSvg.style.width = 'auto';
+                    clonedSvg.style.height = 'auto';
+                    clonedSvg.style.display = 'block';
+                    clonedSvg.style.transformOrigin = 'center center';
+                    var existingSvg = svgContainer.querySelector('svg');
+                    if (existingSvg) {
+                      existingSvg.remove();
+                    }
+                    svgContainer.appendChild(clonedSvg);
+                  }
+                  
+                  modal.classList.add('active');
+                  document.body.style.overflow = 'hidden';
+                  
+                  setTimeout(function() {
+                    var svgEl = svgContainer.querySelector('svg');
+                    if (svgEl) {
+                      var svgRect = svgEl.getBoundingClientRect();
+                      var contentRect = content.getBoundingClientRect();
+                      console.log('SVG rect:', svgRect.width, svgRect.height);
+                      console.log('Content rect:', contentRect.width, contentRect.height);
+                      
+                      if (svgRect.width > 0 && svgRect.height > 0) {
+                        var scaleX = (contentRect.width * 0.9) / svgRect.width;
+                        var scaleY = (contentRect.height * 0.9) / svgRect.height;
+                        var scale = Math.min(scaleX, scaleY);
+                        console.log('Calculated scale:', scale);
+                        
+                        modal.zoomState.scale = scale;
+                        modal.zoomState.translateX = (contentRect.width - svgRect.width * scale) / 2;
+                        modal.zoomState.translateY = (contentRect.height - svgRect.height * scale) / 2;
+                        modal.updateTransform();
+                        modal.updateZoomInfo();
+                      }
+                    }
+                  }, 100);
+                });
+              });
+            }
+            
+            try {
+              console.log('Calling mermaid.run()...');
+              var runResult = mermaid.run();
+              console.log('mermaid.run() returned:', runResult);
+              
+              if (runResult && typeof runResult.then === 'function') {
+                runResult.then(function() {
+                  console.log('mermaid.run() promise resolved');
+                  setupMermaidZoom();
+                }).catch(function(err) {
+                  console.error('Mermaid run error:', err);
+                  setTimeout(setupMermaidZoom, 500);
+                });
+              } else {
+                console.log('mermaid.run() is not a promise, calling setupMermaidZoom directly');
+                setTimeout(setupMermaidZoom, 300);
+              }
+            } catch (e) {
+              console.error('Error running mermaid:', e);
+              setTimeout(setupMermaidZoom, 1000);
+            }
+            
+            setTimeout(setupMermaidZoom, 2000);
+          }
+        });
+      </script>
+    
+    
+    <span id="busuanzi_container_site_pv" style="display: inline;"></span>
+    
+
+
+    <!-- 带图片的链接 -->
+    <div class="footer-links">
+        
+    </div>
+
+    <!-- 纯文本链接 -->
+    <div class="footer-text-links">
+        
+    </div>
+</footer>
+    
+<script src="/js/background.js"></script>
+    
+        
+<script src="/js/search.js"></script>
+    
+</main>
+</body>
+</html>
