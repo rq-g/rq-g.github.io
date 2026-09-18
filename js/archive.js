@@ -1,167 +1,136 @@
-document.addEventListener('DOMContentLoaded', function() {
+/**
+ * 归档页交互
+ *   1. 顶层分类筛选（默认分类由主题 _config.yml 的 archive_filter.default 决定）
+ *   2. 侧栏年月时间线（计数随当前分类重算）
+ *   3. 卡片「网格 / 列表」布局切换
+ *
+ * 所有可见性都由 render() 统一计算，避免分类筛选与月份筛选互相覆盖。
+ */
+document.addEventListener('DOMContentLoaded', function () {
+    /* 仅在 archive_filter.enable: false（页面上没有筛选按钮）时用作兜底：该值表示「不过滤」 */
+    var ALL = '*';
+
+    var filterEl = document.getElementById('archive-cat-filter');
+    var catButtons = filterEl ? Array.prototype.slice.call(filterEl.querySelectorAll('.cat-btn')) : [];
+
+    /* 没有筛选栏（archive_filter.enable: false）时退化为「显示全部」 */
+    var currentCat = filterEl ? (filterEl.getAttribute('data-default') || ALL) : ALL;
     var currentMonth = '';
     var currentPage = 1;
     var pageSize = 12;
 
     var monthList = [];
     var yearMonthsData = {};
-    document.querySelectorAll('.archive-card').forEach(function(card) {
-        var ym = card.getAttribute('data-ym');
-        if (!yearMonthsData[ym]) yearMonthsData[ym] = 0;
-        yearMonthsData[ym]++;
-    });
-    Object.keys(yearMonthsData).sort(function(a, b) { return b.localeCompare(a); }).forEach(function(ym) {
-        monthList.push(ym);
-    });
 
-    initScrollHighlight();
+    var cards = Array.prototype.slice.call(document.querySelectorAll('.archive-card'));
+    var gridEl = document.getElementById('archive-grid');
+    var emptyEl = document.getElementById('archive-empty');
+    var emptyTextEl = emptyEl ? emptyEl.querySelector('p') : null;
+    /* 「该分类下暂无文章」/「该月份暂无文章」两套文案，由模板注入 */
+    var emptyTextByCat = emptyEl ? emptyEl.getAttribute('data-text-empty-cat') || '' : '';
+    var emptyTextByMonth = emptyEl ? emptyEl.getAttribute('data-text-empty-month') || '' : '';
+    var headerEl = document.getElementById('archive-month-header');
+    var paginationEl = document.getElementById('archive-pagination');
+    var mainEl = document.querySelector('.archive-main');
+    var countEl = document.getElementById('total-post-count');
 
-    function initScrollHighlight() {
-        var highlightEnabled = true;
-        var lastScrollTime = 0;
+    /* ---------------- 数据查询 ---------------- */
 
-        window.addEventListener('scroll', function() {
-            if (!highlightEnabled) return;
-
-            var now = Date.now();
-            if (now - lastScrollTime < 100) return;
-            lastScrollTime = now;
-
-            updateScrollHighlight();
-        });
-
-        updateScrollHighlight();
-
-        document.querySelectorAll('.timeline-link').forEach(function(link) {
-            link.addEventListener('click', function() {
-                highlightEnabled = false;
-                setTimeout(function() {
-                    highlightEnabled = true;
-                }, 3000);
-            });
+    function cardsOfCat(cat) {
+        if (cat === ALL) return cards;
+        return cards.filter(function (card) {
+            return card.getAttribute('data-cat') === cat;
         });
     }
 
-    function updateScrollHighlight() {
-        var cards = document.querySelectorAll('.archive-card');
-        var visibleYm = '';
-        var windowHeight = window.innerHeight;
-        var threshold = windowHeight * 0.4;
+    function rebuildMonthData() {
+        yearMonthsData = {};
+        cardsOfCat(currentCat).forEach(function (card) {
+            var ym = card.getAttribute('data-ym');
+            yearMonthsData[ym] = (yearMonthsData[ym] || 0) + 1;
+        });
+        monthList = Object.keys(yearMonthsData).sort(function (a, b) {
+            return b.localeCompare(a);
+        });
+    }
 
-        cards.forEach(function(card) {
-            var rect = card.getBoundingClientRect();
-            var cardCenter = rect.top + rect.height / 2;
+    function refreshTimeline() {
+        document.querySelectorAll('.timeline-item').forEach(function (item) {
+            var count = yearMonthsData[item.getAttribute('data-ym')] || 0;
+            var isEmpty = count === 0;
 
-            if (cardCenter >= 0 && cardCenter <= windowHeight) {
-                var distance = Math.abs(cardCenter - windowHeight / 2);
-                if (!visibleYm || distance < 200) {
-                    visibleYm = card.getAttribute('data-ym');
-                }
+            item.classList.toggle('empty', isEmpty);
+            var link = item.querySelector('.timeline-link');
+            if (link) {
+                link.classList.toggle('disabled', isEmpty);
+                link.classList.remove('active');
             }
+            var countEl2 = item.querySelector('.timeline-count');
+            if (countEl2) countEl2.textContent = count;
         });
 
-        updateTimelineHighlight(visibleYm);
+        document.querySelectorAll('.timeline-year-label').forEach(function (label) {
+            var year = label.getAttribute('data-year');
+            var monthsEl = document.querySelector('.timeline-months[data-year="' + year + '"]');
+            var total = 0;
+            for (var m = 1; m <= 12; m++) {
+                total += yearMonthsData[year + '-' + (m < 10 ? '0' + m : m)] || 0;
+            }
+
+            /* 该分类下没有文章的年份整体隐藏 */
+            label.style.display = total === 0 ? 'none' : '';
+            if (monthsEl) {
+                monthsEl.style.display = total === 0 ? 'none' : '';
+                monthsEl.classList.remove('expanded');
+            }
+            var icon = label.querySelector('.year-toggle-icon');
+            if (icon) icon.textContent = '▶';
+        });
     }
 
-    function updateTimelineHighlight(ym) {
-        document.querySelectorAll('.timeline-year-label').forEach(function(el) {
-            el.classList.remove('scroll-highlight');
-        });
-        document.querySelectorAll('.timeline-link').forEach(function(el) {
-            el.classList.remove('scroll-highlight');
-        });
+    /* ---------------- 渲染 ---------------- */
 
-        if (!ym) return;
+    function render() {
+        var pool = cardsOfCat(currentCat);
+        var visible = currentMonth
+            ? pool.filter(function (card) { return card.getAttribute('data-ym') === currentMonth; })
+            : pool;
 
-        var year = ym.substring(0, 4);
+        var totalPages = currentMonth ? Math.max(1, Math.ceil(visible.length / pageSize)) : 1;
+        if (currentPage > totalPages) currentPage = totalPages;
 
-        var yearLabel = document.querySelector('.timeline-year-label[data-year="' + year + '"]');
-        if (yearLabel) {
-            yearLabel.classList.add('scroll-highlight');
+        var pageCards = visible;
+        if (currentMonth) {
+            var start = (currentPage - 1) * pageSize;
+            pageCards = visible.slice(start, start + pageSize);
         }
 
-        var monthLink = document.querySelector('.timeline-item[data-ym="' + ym + '"] .timeline-link');
-        if (monthLink) {
-            monthLink.classList.add('scroll-highlight');
-        }
-    }
+        var show = [];
+        pageCards.forEach(function (card) { show.push(card); });
+        cards.forEach(function (card) {
+            card.style.display = show.indexOf(card) === -1 ? 'none' : '';
+        });
 
-    window.toggleYear = function(year) {
-        var monthsEl = document.querySelector('.timeline-months[data-year="' + year + '"]');
-        var yearLabel = document.querySelector('.timeline-year-label[data-year="' + year + '"]');
-        var icon = yearLabel.querySelector('.year-toggle-icon');
-        if (monthsEl.classList.contains('expanded')) {
-            monthsEl.classList.remove('expanded');
-            icon.textContent = '▶';
+        emptyEl.style.display = visible.length === 0 ? 'block' : 'none';
+        if (emptyTextEl) {
+            emptyTextEl.textContent = currentMonth ? emptyTextByMonth : emptyTextByCat;
+        }
+
+        if (currentMonth) {
+            var parts = currentMonth.split('-');
+            headerEl.textContent = parts[0] + '年' + parseInt(parts[1], 10) + '月';
+            headerEl.style.display = 'block';
         } else {
-            monthsEl.classList.add('expanded');
-            icon.textContent = '▼';
-        }
-    };
-
-    window.filterByMonth = function(ym, linkEl) {
-        var allCards = document.querySelectorAll('.archive-card');
-        var links = document.querySelectorAll('.timeline-link');
-        var emptyMsg = document.getElementById('archive-empty');
-        var headerEl = document.getElementById('archive-month-header');
-
-        if (currentMonth === ym) {
-            currentMonth = '';
-            currentPage = 1;
-            allCards.forEach(function(card) { card.style.display = ''; });
-            links.forEach(function(link) { link.classList.remove('active'); });
-            emptyMsg.style.display = 'none';
             headerEl.style.display = 'none';
-            document.getElementById('archive-pagination').innerHTML = '';
-            return;
         }
 
-        currentMonth = ym;
-        currentPage = 1;
+        if (countEl) countEl.textContent = pool.length;
 
-        links.forEach(function(link) { link.classList.remove('active'); });
-        if (linkEl) linkEl.classList.add('active');
-
-        var parts = ym.split('-');
-        headerEl.textContent = parts[0] + '年' + parseInt(parts[1]) + '月';
-        headerEl.style.display = 'block';
-
-        var filteredCards = [];
-        allCards.forEach(function(card) {
-            if (card.getAttribute('data-ym') === ym) {
-                filteredCards.push(card);
-            } else {
-                card.style.display = 'none';
-            }
-        });
-
-        if (filteredCards.length === 0) {
-            emptyMsg.style.display = 'block';
-            document.getElementById('archive-pagination').innerHTML = '';
-        } else {
-            emptyMsg.style.display = 'none';
-            renderPage(filteredCards);
-        }
-    };
-
-    function renderPage(filteredCards) {
-        var total = filteredCards.length;
-        var totalPages = Math.ceil(total / pageSize);
-
-        filteredCards.forEach(function(card) { card.style.display = 'none'; });
-
-        var start = (currentPage - 1) * pageSize;
-        var end = Math.min(start + pageSize, total);
-        for (var i = start; i < end; i++) {
-            filteredCards[i].style.display = '';
-        }
-
-        renderPagination(totalPages);
+        renderPagination(currentMonth ? totalPages : 0);
     }
 
     function renderPagination(totalPages) {
-        var paginationEl = document.getElementById('archive-pagination');
-        if (totalPages <= 1 && monthList.length <= 1) {
+        if (!currentMonth || (totalPages <= 1 && monthList.length <= 1)) {
             paginationEl.innerHTML = '';
             return;
         }
@@ -202,83 +171,161 @@ document.addEventListener('DOMContentLoaded', function() {
         paginationEl.innerHTML = html;
     }
 
-    window.goToPage = function(page) {
-        currentPage = page;
-        var filteredCards = getFilteredCards();
-        renderPage(filteredCards);
-        document.querySelector('.archive-main').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    };
+    /* ---------------- 滚动高亮 ---------------- */
 
-    window.goToMonthFirstPage = function(ym) {
-        currentMonth = ym;
+    function initScrollHighlight() {
+        var highlightEnabled = true;
+        var lastScrollTime = 0;
+
+        window.addEventListener('scroll', function () {
+            if (!highlightEnabled) return;
+
+            var now = Date.now();
+            if (now - lastScrollTime < 100) return;
+            lastScrollTime = now;
+
+            updateScrollHighlight();
+        });
+
+        updateScrollHighlight();
+
+        document.querySelectorAll('.timeline-link').forEach(function (link) {
+            link.addEventListener('click', function () {
+                highlightEnabled = false;
+                setTimeout(function () { highlightEnabled = true; }, 3000);
+            });
+        });
+    }
+
+    function updateScrollHighlight() {
+        var visibleYm = '';
+        var windowHeight = window.innerHeight;
+
+        cards.forEach(function (card) {
+            /* display:none 的卡片 rect 全为 0，会被误判成「在视口顶部」，必须跳过 */
+            if (card.style.display === 'none') return;
+
+            var rect = card.getBoundingClientRect();
+            var cardCenter = rect.top + rect.height / 2;
+
+            if (cardCenter >= 0 && cardCenter <= windowHeight) {
+                var distance = Math.abs(cardCenter - windowHeight / 2);
+                if (!visibleYm || distance < 200) {
+                    visibleYm = card.getAttribute('data-ym');
+                }
+            }
+        });
+
+        updateTimelineHighlight(visibleYm);
+    }
+
+    function updateTimelineHighlight(ym) {
+        document.querySelectorAll('.timeline-year-label').forEach(function (el) {
+            el.classList.remove('scroll-highlight');
+        });
+        document.querySelectorAll('.timeline-link').forEach(function (el) {
+            el.classList.remove('scroll-highlight');
+        });
+
+        if (!ym) return;
+
+        var yearLabel = document.querySelector('.timeline-year-label[data-year="' + ym.substring(0, 4) + '"]');
+        if (yearLabel) yearLabel.classList.add('scroll-highlight');
+
+        var monthLink = document.querySelector('.timeline-item[data-ym="' + ym + '"] .timeline-link');
+        if (monthLink) monthLink.classList.add('scroll-highlight');
+    }
+
+    /* ---------------- 对外交互 ---------------- */
+
+    window.switchCategory = function (cat) {
+        if (cat === currentCat) return;
+
+        currentCat = cat;
+        currentMonth = '';
         currentPage = 1;
-        selectMonth(ym);
+
+        catButtons.forEach(function (btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-cat') === cat);
+        });
+
+        rebuildMonthData();
+        refreshTimeline();
+        render();
     };
 
-    window.goToMonthLastPage = function(ym) {
-        currentMonth = ym;
-        var count = yearMonthsData[ym] || 0;
-        currentPage = Math.ceil(count / pageSize);
-        selectMonth(ym);
+    window.toggleYear = function (year) {
+        var monthsEl = document.querySelector('.timeline-months[data-year="' + year + '"]');
+        var yearLabel = document.querySelector('.timeline-year-label[data-year="' + year + '"]');
+        if (!monthsEl) return;
+
+        var icon = yearLabel ? yearLabel.querySelector('.year-toggle-icon') : null;
+        if (monthsEl.classList.contains('expanded')) {
+            monthsEl.classList.remove('expanded');
+            if (icon) icon.textContent = '▶';
+        } else {
+            monthsEl.classList.add('expanded');
+            if (icon) icon.textContent = '▼';
+        }
     };
 
-    function selectMonth(ym) {
-        var links = document.querySelectorAll('.timeline-link');
-        var headerEl = document.getElementById('archive-month-header');
+    window.filterByMonth = function (ym, linkEl) {
+        if (!(yearMonthsData[ym] > 0)) return; /* 空月份不响应点击 */
 
-        links.forEach(function(link) { link.classList.remove('active'); });
-        var targetItem = document.querySelector('.timeline-item[data-ym="' + ym + '"]');
-        if (targetItem) {
-            var targetLink = targetItem.querySelector('.timeline-link');
-            if (targetLink) targetLink.classList.add('active');
+        if (currentMonth === ym) {
+            currentMonth = '';
+            currentPage = 1;
+            document.querySelectorAll('.timeline-link').forEach(function (link) {
+                link.classList.remove('active');
+            });
+            render();
+            return;
         }
 
-        var parts = ym.split('-');
-        headerEl.textContent = parts[0] + '年' + parseInt(parts[1]) + '月';
-        headerEl.style.display = 'block';
+        selectMonth(ym, 1);
+    };
+
+    function selectMonth(ym, page) {
+        currentMonth = ym;
+        currentPage = page || 1;
 
         var year = ym.substring(0, 4);
         var monthsEl = document.querySelector('.timeline-months[data-year="' + year + '"]');
         var yearLabel = document.querySelector('.timeline-year-label[data-year="' + year + '"]');
         if (monthsEl && !monthsEl.classList.contains('expanded')) {
             monthsEl.classList.add('expanded');
-            var icon = yearLabel.querySelector('.year-toggle-icon');
+            var icon = yearLabel ? yearLabel.querySelector('.year-toggle-icon') : null;
             if (icon) icon.textContent = '▼';
         }
 
-        var allCards = document.querySelectorAll('.archive-card');
-        var filteredCards = [];
-        allCards.forEach(function(card) {
-            if (card.getAttribute('data-ym') === ym) {
-                filteredCards.push(card);
-            } else {
-                card.style.display = 'none';
-            }
+        document.querySelectorAll('.timeline-link').forEach(function (link) {
+            link.classList.remove('active');
         });
+        var activeLink = document.querySelector('.timeline-item[data-ym="' + ym + '"] .timeline-link');
+        if (activeLink) activeLink.classList.add('active');
 
-        document.getElementById('archive-empty').style.display = filteredCards.length === 0 ? 'block' : 'none';
-        if (filteredCards.length > 0) {
-            renderPage(filteredCards);
-        }
-
-        document.querySelector('.archive-main').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        render();
+        if (mainEl) mainEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
-    function getFilteredCards() {
-        var filteredCards = [];
-        document.querySelectorAll('.archive-card').forEach(function(card) {
-            if (card.getAttribute('data-ym') === currentMonth) {
-                filteredCards.push(card);
-            }
-        });
-        return filteredCards;
-    }
+    window.goToPage = function (page) {
+        currentPage = page;
+        render();
+        if (mainEl) mainEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
 
-    window.switchLayout = function(layout) {
-        var grid = document.getElementById('archive-grid');
+    window.goToMonthFirstPage = function (ym) {
+        selectMonth(ym, 1);
+    };
+
+    window.goToMonthLastPage = function (ym) {
+        selectMonth(ym, Math.ceil((yearMonthsData[ym] || 0) / pageSize));
+    };
+
+    window.switchLayout = function (layout) {
         var buttons = document.querySelectorAll('.layout-btn');
 
-        buttons.forEach(function(btn) {
+        buttons.forEach(function (btn) {
             btn.classList.remove('active');
             if (btn.getAttribute('data-layout') === layout) {
                 btn.classList.add('active');
@@ -286,16 +333,31 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         if (layout === 'list') {
-            grid.classList.add('list-mode');
+            gridEl.classList.add('list-mode');
         } else {
-            grid.classList.remove('list-mode');
+            gridEl.classList.remove('list-mode');
         }
 
         localStorage.setItem('archive-layout', layout);
     };
 
+    /* ---------------- 首屏 ---------------- */
+
+    catButtons.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            window.switchCategory(btn.getAttribute('data-cat'));
+        });
+    });
+
+    /* 服务端已按同一默认分类输出，这里重算一遍保证数据与 DOM 完全一致 */
+    rebuildMonthData();
+    refreshTimeline();
+    render();
+
+    initScrollHighlight();
+
     var savedLayout = localStorage.getItem('archive-layout') || 'grid';
     if (savedLayout === 'list') {
-        switchLayout('list');
+        window.switchLayout('list');
     }
 });

@@ -50,7 +50,8 @@ article: http://ogp.me/ns/article#">
 <body>
 <main>
     
-    <header>
+    
+<header id="site-header">
     <nav>
         <ul>
             
@@ -287,10 +288,89 @@ article: http://ogp.me/ns/article#">
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">HandlerAuth         鉴权</span><br><span class="line">HandlerLogin        登录</span><br><span class="line">HandlerRealtimeStatus   实时状态</span><br><span class="line">HandlerDeviceResponse   设备响应</span><br><span class="line">HandlerOther           其他</span><br><span class="line">DefaultHandlerMqttProto 兜底</span><br></pre></td></tr></table></figure>
 
 <p><strong>“MQTT 承载业务、JT808 只作为应用层报文格式”</strong> —— 这是个很务实的取舍。JT808 是部标道路运输车辆协议（北斗&#x2F;GPS 定位），天然适合车载终端，但它的 TCP 长连接在移动网络下维护成本高（矿区信号也不稳）。用 MQTT 做传输层，保留了 JT808 的报文语义，又拿到了 MQTT 的断线重连、QoS、海量连接能力。</p>
-<h3 id="1-2-Netty-参数"><a href="#1-2-Netty-参数" class="headerlink" title="1.2 Netty 参数"></a>1.2 Netty 参数</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// NettyServerConfiguration</span></span><br><span class="line">bossGroup   = <span class="number">2</span></span><br><span class="line">workerGroup = <span class="number">20</span></span><br><span class="line">.option(ChannelOption.SO_BACKLOG, <span class="number">100</span>)</span><br><span class="line">.childOption(ChannelOption.SO_KEEPALIVE, <span class="literal">true</span>)</span><br><span class="line">.childOption(ChannelOption.TCP_NODELAY, <span class="literal">true</span>)</span><br><span class="line"></span><br><span class="line"><span class="comment">// ServerChannelInitializer</span></span><br><span class="line">IdleStateHandler(<span class="number">100</span>, <span class="number">0</span>, <span class="number">0</span>)          <span class="comment">// 100s 读空闲</span></span><br><span class="line">DelimiterBasedFrameDecoder(<span class="number">1024</span>, <span class="number">0x7e</span>)</span><br><span class="line">ReadTimeoutHandler(<span class="number">10</span>)</span><br><span class="line">WriteTimeoutHandler(<span class="number">10</span>)</span><br></pre></td></tr></table></figure>
+<h4 id="1-1-1-MQTT-通道的实测配置（三个值得注意的值）"><a href="#1-1-1-MQTT-通道的实测配置（三个值得注意的值）" class="headerlink" title="1.1.1 MQTT 通道的实测配置（三个值得注意的值）"></a>1.1.1 MQTT 通道的实测配置（三个值得注意的值）</h4><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># rcloud-common-mqtt.yaml（线上值）</span></span><br><span class="line"><span class="attr">rockai:</span></span><br><span class="line">  <span class="attr">mqtt:</span></span><br><span class="line">    <span class="attr">services:</span> <span class="string">tcp://172.28.1.81:1883</span>    <span class="comment"># 单 EMQX，无集群</span></span><br><span class="line">    <span class="attr">qos:</span> <span class="number">2</span>                              <span class="comment"># 遥测也用 QoS2</span></span><br><span class="line">    <span class="attr">keepAliveInterval:</span> <span class="number">3000</span>             <span class="comment"># 心跳 3s</span></span><br><span class="line">    <span class="attr">cleanSession:</span> <span class="literal">true</span></span><br><span class="line">    <span class="attr">completionTimeout:</span> <span class="number">5000</span></span><br></pre></td></tr></table></figure>
 
+<table>
+<thead>
+<tr>
+<th>值</th>
+<th>问题</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong><code>qos: 2</code></strong></td>
+<td>QoS2 每条消息要 4 次握手（PUBLISH→PUBREC→PUBREL→PUBCOMP）。它保证”恰好一次”，适合<strong>控制指令</strong>；但矿卡实时状态是 1Hz 的高频遥测，丢了下一秒还会再来——用 QoS2 是<strong>把最贵的等级用在了最不值钱的数据上</strong>，代价是双倍网络往返与 broker 状态维护</td>
+</tr>
+<tr>
+<td><strong>单 EMQX</strong></td>
+<td>与 Redis 一样是单点。它挂掉 &#x3D; 全车队失联，且重连风暴会瞬间打满鉴权与缓存</td>
+</tr>
+<tr>
+<td><strong><code>cleanSession: true</code></strong></td>
+<td>重连不恢复会话，离线期间的 QoS1&#x2F;2 消息全部丢弃；配合 3s 心跳，网络抖动时会话重建频繁</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>建议拆分通道：<strong>控制指令（急停、任务下发）走 QoS2 + 独立 topic + 独立消费线程池；遥测状态走 QoS1</strong>。这不只是省带宽——更重要的是让”安全指令”不会被 1Hz 的遥测洪水挤在后面，这一点在<a href="/2026/07/28/e8ffc4d9d553/" title="露天矿山无人驾驶调度平台（七）：性能瓶颈与容量评估——100 台矿卡到底能不能上">第七篇</a>里会展开（MQ 反压与指令延迟的耦合）。</p>
+</blockquote>
+<h3 id="1-2-Netty-参数：先说清是哪一个-pipeline"><a href="#1-2-Netty-参数：先说清是哪一个-pipeline" class="headerlink" title="1.2 Netty 参数：先说清是哪一个 pipeline"></a>1.2 Netty 参数：<strong>先说清是哪一个 pipeline</strong></h3><p>这里必须先纠正一个极易踩的坑：exchange 里有<strong>两套完整的 Netty 服务端</strong>，参数不一样，而<strong>只有一套在跑</strong>。</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>🟢 在跑：<code>WithOutTCPServer</code></th>
+<th>⚪ 已停用：<code>TCPServer</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ChannelInitializer</td>
+<td><code>WithOutServerChannelInitializer</code></td>
+<td><code>ServerChannelInitializer</code></td>
+</tr>
+<tr>
+<td>启动入口</td>
+<td><code>RCloudExchangeApplication.main()</code> 里 <code>withOutTCPServer.start()</code></td>
+<td>同一处 <code>tcpServer.start()</code> 两行<strong>被注释</strong></td>
+</tr>
+<tr>
+<td>配置前缀 &#x2F; 端口</td>
+<td><code>withOut.*</code> → <strong>20001</strong></td>
+<td><code>netty.*</code> → <strong>8900</strong></td>
+</tr>
+<tr>
+<td>报文格式</td>
+<td>逗号分隔文本（<code>WithOutServerHandler</code> 里 <code>withOutDto.split(&quot;,&quot;)</code>）</td>
+<td>JT808 私有化二进制</td>
+</tr>
+<tr>
+<td>帧解码器</td>
+<td><strong>没有任何 decoder</strong>（只有 <code>StringEncoder</code> + <code>ByteArrayEncoder</code>）</td>
+<td><code>DelimiterBasedFrameDecoder(1024, 0x7e)</code></td>
+</tr>
+<tr>
+<td>读超时</td>
+<td><strong><code>ReadTimeoutHandler(60)</code></strong></td>
+<td><code>ReadTimeoutHandler(10)</code></td>
+</tr>
+<tr>
+<td>写超时</td>
+<td><code>WriteTimeoutHandler(10)</code></td>
+<td><code>WriteTimeoutHandler(10)</code></td>
+</tr>
+<tr>
+<td>业务 handler</td>
+<td><code>WithOutServerHandler</code></td>
+<td><code>DispatchMsgHandler</code></td>
+</tr>
+<tr>
+<td>连接数&#x2F;线程</td>
+<td>boss 2 &#x2F; worker 20，backlog 100，keepalive true</td>
+<td>同左</td>
+</tr>
+</tbody></table>
+<p>（两台服务都读同一组空闲参数：<code>READER_IDLE_TIME_SECONDS = 100</code>、<code>WRITER_IDLE = 0</code>、<code>ALL_IDLE = 0</code>，所以 <code>IdleStateHandler(100, 0, 0)</code> 对两者都成立；<code>NettyServerBootstrapRunner</code> 那个类整个是注释状态，也印证了 JT808 TCP 通道确实下线了。）</p>
 <p><code>TCP_NODELAY = true</code> 是对的——车载终端的心跳和状态包都是小包，Nagle 算法会带来延迟。</p>
-<p><strong>但 <code>DelimiterBasedFrameDecoder(1024, 0x7e)</code> 是整个协议层最大的坑</strong>，下面细说。</p>
+<p><strong>所以”Netty 参数”要分两句话说</strong>：在跑的 DTU&#x2F;MQTT 通道读超时是 <strong>60 秒</strong>；<code>DelimiterBasedFrameDecoder(1024, 0x7e)</code> 只存在于<strong>那条没启用的</strong> JT808 管线里。</p>
 <h3 id="1-3-JT808-私有化改造与它的三个坑"><a href="#1-3-JT808-私有化改造与它的三个坑" class="headerlink" title="1.3 JT808 私有化改造与它的三个坑"></a>1.3 JT808 私有化改造与它的三个坑</h3><p>标准 JT808 的帧结构是 <code>0x7E | 消息头 | 消息体 | 校验码 | 0x7E</code>，消息头里<strong>有终端手机号 BCD[6] 和消息体长度字段</strong>。这个项目做的是：</p>
 <table>
 <thead>
@@ -304,30 +384,40 @@ article: http://ogp.me/ns/article#">
 <td>不再兼容标准 JT808，属于私有裁剪协议</td>
 </tr>
 <tr>
-<td><strong>用 <code>DelimiterBasedFrameDecoder</code> 按 0x7E 切帧</strong>，而不是按长度字段切</td>
-<td>见下方坑 ①</td>
+<td>停用了 JT808 TCP 通道，改由 MQTT 承载报文体</td>
+<td>下文坑 ①② 因此<strong>在生产链路上不成立</strong></td>
 </tr>
 <tr>
-<td><strong><code>bCheckCRCCode = false</code></strong>（生产环境）</td>
-<td>见下方坑 ③</td>
+<td><strong><code>bCheckCRCCode = false</code></strong></td>
+<td>见下方坑 ③，<strong>这一条在生产链路上依然成立</strong></td>
 </tr>
 </tbody></table>
-<p><strong>坑 ①：靠分隔符切帧，必须手工处理空帧。</strong></p>
-<p>数据里出现 <code>7E 7E</code>（帧尾紧接帧首）时，解码器会切出一个长度为 0 的空帧。所以业务代码里必须：</p>
-<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// DispatchMsgHandler.channelRead</span></span><br><span class="line"><span class="keyword">if</span> (buf.readableBytes() == <span class="number">0</span>) &#123;</span><br><span class="line">    <span class="keyword">return</span>;   <span class="comment">// 丢弃 7e7e 产生的空帧</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>坑 ①（仅存在于已停用的 JT808&#x2F;TCP 管线）：靠分隔符切帧，必须手工处理空帧。</strong></p>
+<p>数据里出现 <code>7E 7E</code>（帧尾紧接帧首）时，<code>DelimiterBasedFrameDecoder</code> 会切出一个长度为 0 的空帧，所以 <code>DispatchMsgHandler.channelRead</code> 里写了：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> (buf.readableBytes() == <span class="number">0</span>) &#123;</span><br><span class="line">    <span class="keyword">return</span>;   <span class="comment">// 丢弃 7e7e 产生的空帧</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<p><strong>坑 ②：消息体里出现 0x7E 必须转义。</strong></p>
-<p>标准做法是转义：<code>0x7E → 0x7D 0x02</code>，<code>0x7D → 0x7D 0x01</code>。项目里 <code>EscapeUtils</code> 实现了：</p>
-<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> <span class="type">byte</span>[] <span class="title function_">unescape</span><span class="params">(<span class="type">byte</span>[] source)</span> &#123;</span><br><span class="line">    <span class="comment">// 0x7d 0x01 → 0x7d</span></span><br><span class="line">    <span class="comment">// 0x7d 0x02 → 0x7e</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>DispatchMsgHandler</code> 挂在 <code>ServerChannelInitializer</code> 上，而后者服务的 <code>TCPServer</code> 已经被注释掉——<strong>这段代码当前不会被触发</strong>。它不是错的，但它是一段”为一条下线管线保留的防御代码”。</p>
+<p><strong>坑 ②（同上，仅存在于 JT808&#x2F;TCP 管线）：消息体里出现 0x7E 必须转义。</strong></p>
+<p>标准做法是 <code>0x7E → 0x7D 0x02</code>、<code>0x7D → 0x7D 0x01</code>，项目里 <code>EscapeUtils</code> 实现了：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> <span class="type">ByteBuf</span> <span class="title function_">unescape</span><span class="params">(ByteBuf source)</span> &#123; ... &#125;</span><br></pre></td></tr></table></figure>
 
-<p><strong>但 <code>EscapeUtils</code> 的实现里用 <code>slice()</code> 拿到的是共享缓冲区的视图，然后直接 <code>setByte</code> 改写源 ByteBuf</strong>——这是 Netty 编程里典型的引用计数&#x2F;共享内存副作用，在高并发下可能改到别的帧的数据。</p>
-<p><strong>坑 ③：校验码关了。</strong></p>
-<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// JT808MessageDecoder</span></span><br><span class="line"><span class="keyword">private</span> <span class="type">boolean</span> <span class="variable">bCheckCRCCode</span> <span class="operator">=</span> <span class="literal">false</span>;   <span class="comment">// 生产未开校验</span></span><br></pre></td></tr></table></figure>
+<p><strong>但 <code>EscapeUtils.slice()</code> 的实现里用 <code>slice()</code> 拿到的是共享缓冲区的视图，然后直接 <code>setByte</code> 改写源 ByteBuf</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">protected</span> <span class="keyword">static</span> <span class="type">ByteBuf</span> <span class="title function_">slice</span><span class="params">(ByteBuf byteBuf, <span class="type">int</span> index, <span class="type">int</span> length)</span> &#123;</span><br><span class="line">    ...</span><br><span class="line">    byteBuf.setByte(index + length - <span class="number">2</span>, <span class="number">0x7e</span>);   <span class="comment">// 直接改源缓冲区</span></span><br><span class="line">    <span class="keyword">return</span> byteBuf.slice(index, length - <span class="number">1</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
-<p>关掉校验码意味着：<strong>网络传输中任何一个比特翻转都不会被发现</strong>。而这条链路上跑的是”派车指令””紧急停车”这类控制指令。</p>
+<p>这是 Netty 编程里典型的引用计数&#x2F;共享内存副作用——在”转义后再拼帧”的场景下可能改到别的帧的数据。同样地，它作用于那条已停用的管线。</p>
+<p><strong>坑 ③（这条真的在跑）：校验码关了。</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// JT808MessageDecoder</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> <span class="type">Boolean</span> <span class="variable">bCheckCRCCode</span> <span class="operator">=</span> <span class="literal">false</span>;   <span class="comment">// 生产未开校验</span></span><br><span class="line"><span class="comment">// SimulationJT808MessageDecoder 里也是 false</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>MQTT 通道收到 hex 报文后仍复用 <code>JT808MessageDecoder</code> 解码</strong>（<code>MqttConsumerHandler</code>），所以这条”关校验”的影响是真实的：<strong>网络传输中任何一个比特翻转都不会被发现</strong>，而这条链路上跑的是”派车指令””紧急停车”这类控制指令。</p>
 <p>关的原因不难猜——协议被私有化改造后，某些字段的 CRC 计算口径没对齐，开着会大量丢包。但正确做法是<strong>把口径对齐然后打开</strong>，而不是关掉。</p>
+<p><strong>而真正需要补的是另一件事</strong>：在跑的 DTU 通道（<code>WithOutServerChannelInitializer</code>）<strong>连帧解码器都没有</strong>，报文由 <code>WithOutServerHandler</code> 直接 <code>split(&quot;,&quot;)</code> 解析。也就是说这条链路<strong>既没有长度字段、也没有分隔符分隔、也没有校验码</strong>——一个截断或错位的报文会安静地变成一条字段数目不对的记录。这是比”关 CRC”更靠前的风险：</p>
 <blockquote>
-<p>如果一定要关，至少要在 MQTT 层用 QoS 1 + 应用层加 <code>seq</code> 序号做连续性校验。</p>
+<p>建议（按性价比排序）：</p>
+<ol>
+<li><code>WithOutServerHandler</code> 里补一条”字段数不符即丢弃并计数”的硬校验（改动最小）；</li>
+<li><code>bCheckCRCCode</code> 对齐口径后灰度打开；MQTT 层统一 QoS 1 + 应用层 <code>seq</code> 连续性校验；</li>
+<li>若 JT808&#x2F;TCP 通道确定不再启用，把 <code>ServerChannelInitializer</code> &#x2F; <code>DispatchMsgHandler</code> &#x2F; <code>EscapeUtils</code> 一并清理，避免下一个人误判为现役链路。</li>
+</ol>
 </blockquote>
 <h3 id="1-4-下行指令的”同步等待”：一个死掉的实现和一个活着的土办法"><a href="#1-4-下行指令的”同步等待”：一个死掉的实现和一个活着的土办法" class="headerlink" title="1.4 下行指令的”同步等待”：一个死掉的实现和一个活着的土办法"></a>1.4 下行指令的”同步等待”：一个死掉的实现和一个活着的土办法</h3><p>代码里有一个 <code>SyncFuture</code>，标准实现：</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">SyncFuture</span> <span class="keyword">implements</span> <span class="title class_">Future</span>&lt;Object&gt; &#123;</span><br><span class="line">    <span class="keyword">private</span> <span class="type">CountDownLatch</span> <span class="variable">latch</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">CountDownLatch</span>(<span class="number">1</span>);</span><br><span class="line">    <span class="keyword">public</span> <span class="type">Object</span> <span class="title function_">get</span><span class="params">(<span class="type">long</span> timeout, TimeUnit unit)</span> &#123;</span><br><span class="line">        latch.await(timeout, unit);</span><br><span class="line">        <span class="keyword">return</span> response;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
@@ -368,12 +458,12 @@ article: http://ogp.me/ns/article#">
 
 <p><strong>新增一种设备协议，只需要往表里插一行配置，不用改网关代码、不用重新发版。</strong> 对于一个要对接矿卡、挖机、装载机、DTU、红绿灯、破碎站十几种设备的系统，这个设计的价值非常大。</p>
 <hr>
-<h2 id="二、rcloud-map：每天都在变的地图"><a href="#二、rcloud-map：每天都在变的地图" class="headerlink" title="二、rcloud-map：每天都在变的地图"></a>二、rcloud-map：每天都在变的地图</h2><h3 id="2-1-数据模型：lanelet2"><a href="#2-1-数据模型：lanelet2" class="headerlink" title="2.1 数据模型：lanelet2"></a>2.1 数据模型：lanelet2</h3><p>高精地图用的是自动驾驶领域标准的 <strong>lanelet2</strong> 模型，分四层：</p>
+<h2 id="二、rcloud-map：每天都在变的地图"><a href="#二、rcloud-map：每天都在变的地图" class="headerlink" title="二、rcloud-map：每天都在变的地图"></a>二、rcloud-map：每天都在变的地图</h2><h3 id="2-1-数据模型：lanelet2"><a href="#2-1-数据模型：lanelet2" class="headerlink" title="2.1 数据模型：lanelet2"></a>2.1 数据模型：lanelet2</h3><p>高精地图用的是自动驾驶领域标准的 <strong>lanelet2</strong> 模型。落到库里是 <code>lanelet2_</code> 前缀的 <strong>7 张表</strong>（不是 6 张）：</p>
 <table>
 <thead>
 <tr>
 <th>层级</th>
-<th>表</th>
+<th>表 &#x2F; 字段</th>
 <th>含义</th>
 </tr>
 </thead>
@@ -390,7 +480,12 @@ article: http://ogp.me/ns/article#">
 <tr>
 <td>车道</td>
 <td><code>lanelet2_lane</code></td>
-<td>left_line &#x2F; center_line &#x2F; right_line，含空载&#x2F;满载限速、转向</td>
+<td>left_line &#x2F; center_line &#x2F; right_line，含<strong>空载&#x2F;满载限速、转向</strong>，以及 <code>right_of_ways</code>（路权ID数组）、<code>regulatory_elements</code>（锁定车道ID数组）两个字段</td>
+</tr>
+<tr>
+<td>车道锁</td>
+<td><code>lanelet2_lane_lock</code></td>
+<td>类似的锁定关系（<code>lane_relation_id</code> + <code>regulatory_elements</code> 数组）</td>
 </tr>
 <tr>
 <td>区域</td>
@@ -403,17 +498,25 @@ article: http://ogp.me/ns/article#">
 <td><code>next_lane_ids</code> —— 下一条车道</td>
 </tr>
 <tr>
-<td>路权</td>
-<td><code>regulatory_elements</code></td>
-<td>right_of_way &#x2F; yield —— 交叉口谁先走</td>
+<td>OSM 文件</td>
+<td><code>lanelet2_osm_map</code></td>
+<td>版本 + MinIO 上的 osm 路径 + 文件大小</td>
 </tr>
 </tbody></table>
+<blockquote>
+<p><strong>两个容易写错的地方</strong>：</p>
+<ol>
+<li><strong><code>regulatory_elements</code> 不是一张表</strong>，它是 <code>lanelet2_lane</code> &#x2F; <code>lanelet2_lane_lock</code> 上的 varchar <strong>字段</strong>。路权同理，落在 <code>lanelet2_lane.right_of_ways</code> 字段上，Java 侧由 <code>OSMRightOfWay</code> 对象承载——<strong>“路权&#x2F;锁定”是车道上的两个 ID 数组，不是独立的表</strong>。</li>
+<li>说”四层”也不准：这 7 张表加 2 个字段一起构成 lanelet2 的要素图，真正驱动路径规划的是<strong>有向图</strong>那一层（<code>lane_relation</code> 的 <code>next_lane_ids</code>），而不是层级。</li>
+</ol>
+</blockquote>
+<p>同库还有一批非 lanelet2 前缀的地图表：<code>lane_details</code>、<code>lane_track</code>、<code>tif_map</code>、<code>three_dimension_map</code>、<code>electronic_fence</code>（电子围栏）、<code>poi_access</code>、<code>poi_connection</code>、<code>father_child_poi</code>。</p>
 <p>Java 侧的模型在 <code>rcloud-map-api/.../domain/osm/</code>：</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">OSMLane</span> &#123;</span><br><span class="line">    <span class="keyword">private</span> List&lt;Long&gt; preLaneIdList;      <span class="comment">// 前序车道</span></span><br><span class="line">    <span class="keyword">private</span> List&lt;Long&gt; nextLaneIdList;     <span class="comment">// 后继车道 → 构成有向图</span></span><br><span class="line">    <span class="keyword">private</span> List&lt;Long&gt; rightOfWayIdList;   <span class="comment">// 冲突车道</span></span><br><span class="line">    <span class="keyword">private</span> List&lt;Long&gt; regulatoryElementList;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <p><strong>计划路径的本质就是在这个有向图上跑最短路。</strong></p>
 <blockquote>
-<p>有意思的一点：<code>lanelet2_*</code> 六张表在数据库里，但 <strong>Java 侧没有任何对应的 Entity&#x2F;Mapper</strong>。这些表是外部工具（地图采集&#x2F;编辑）写入的，Java 只从 MinIO 拉 OSM 文件解析到内存。这是典型的”数据库表 ≠ 应用模型”。</p>
+<p>有意思的一点：<code>lanelet2_*</code> 这 7 张表在数据库里，但 <strong>Java 侧没有任何对应的 Entity&#x2F;Mapper</strong>。这些表是外部工具（地图采集&#x2F;编辑）写入的，Java 只从 MinIO 拉 OSM 文件解析到内存。这是典型的”数据库表 ≠ 应用模型”。</p>
 </blockquote>
 <h3 id="2-2-地图版本：MD5-全局唯一-version"><a href="#2-2-地图版本：MD5-全局唯一-version" class="headerlink" title="2.2 地图版本：MD5 + 全局唯一 version"></a>2.2 地图版本：MD5 + 全局唯一 version</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// OSMMapService.addOsm</span></span><br><span class="line"><span class="type">String</span> <span class="variable">md5</span> <span class="operator">=</span> MD5Utils.MD51(osmFile);</span><br><span class="line">checkMapVersionExist(version);     <span class="comment">// 全局唯一版本校验</span></span><br></pre></td></tr></table></figure>
 
@@ -434,20 +537,28 @@ article: http://ogp.me/ns/article#">
 
 <p><strong>这是全链路最有技术含量的一环</strong>——把”物理世界的持续变化”转换成”版本号递增的数字地图”，还要保证车端和云端版本一致。</p>
 <p><strong>但它也是最容易出问题的地方</strong>，代码里有两个明显缺陷：</p>
-<p><strong>(1) 读写锁的 <code>finally</code> 里无条件 unlock：</strong></p>
-<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (writeLock.tryLock(<span class="number">30</span>, TimeUnit.SECONDS)) &#123;</span><br><span class="line">        <span class="comment">// 改内存、重生成 OSM</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// tryLock 失败时会走到这里</span></span><br><span class="line">&#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">    writeLock.unlock();   <span class="comment">// 没拿到锁却 unlock → IllegalMonitorStateException</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>(1) 读写锁的 <code>finally</code> 里无条件 unlock —— 而且 javadoc 和实现自相矛盾。</strong></p>
+<p>问题不在 <code>MapFusionService</code> 本身，在它调用的 <code>OSMMapService.batchUpdateBoundaryLineByPOIId()</code>（<code>MapFusionService:531</code>）：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * 该方法没有进行同步锁锁定，由上层融合算法进行统一锁定，这里不进行锁定控制，需要注意</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">public</span> <span class="type">void</span> <span class="title function_">batchUpdateBoundaryLineByPOIId</span><span class="params">(...)</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="keyword">if</span> (writeLock.tryLock(<span class="number">30</span>, TimeUnit.SECONDS)) &#123;</span><br><span class="line">            <span class="comment">// 改内存 OSM → 上传 MinIO → 落 OSMMap 记录</span></span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            log.debug(<span class="string">&quot;没有获取到写锁，超时结束调用&quot;</span>);   <span class="comment">// 走到这里说明没拿到锁</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</span><br><span class="line">        log.error(...);</span><br><span class="line">    &#125; <span class="keyword">finally</span> &#123;</span><br><span class="line">        writeLock.unlock();   <span class="comment">// 没拿到锁却 unlock → IllegalMonitorStateException</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
+<p>两个问题叠在一起：注释说”这里不锁定”，代码却自己 <code>tryLock</code>；而 <code>tryLock</code> 返回 false 时 <code>finally</code> 仍然会 <code>unlock()</code>——<strong>没持有锁的线程调用 <code>unlock()</code> 必然抛 <code>IllegalMonitorStateException</code></strong>。<code>OSMMapService</code> 里这套 <code>tryLock + 无条件 unlock</code> 的模式一共出现 <strong>8 处</strong>（4 处 readLock + 4 处 writeLock），是模式化的写法问题，不是偶发。</p>
 <p><strong>(2) 融合失败会跳过 max(id)</strong>：<code>MapFusionService</code> 里自己留了 TODO——如果某个 POI 融合失败，断点续传的游标已经推进，这批数据就永久丢失了。</p>
 <h3 id="2-4-JTS-地理计算"><a href="#2-4-JTS-地理计算" class="headerlink" title="2.4 JTS 地理计算"></a>2.4 JTS 地理计算</h3><p>用的是 <code>org.locationtech.jts:jts-core</code>，典型场景：</p>
 <figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 电子围栏：点在多边形内 / 相交</span></span><br><span class="line">CoordinateUtil.withinAndIntersects(point, polygon);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 点到车道线的距离（×100000 转米）</span></span><br><span class="line">CoordinateUtil.getPointDistanceToLine(point, lineString);</span><br></pre></td></tr></table></figure>
 
 <p>电子围栏结果用 Caffeine 缓存 10 分钟。</p>
-<p><strong>有个必现 NPE 被 catch 吞了</strong>：</p>
-<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// CoordinateCalculateService.getPointDistanceToLine</span></span><br><span class="line"><span class="type">LineString</span> <span class="variable">lineString</span> <span class="operator">=</span> <span class="literal">null</span>;</span><br><span class="line"><span class="comment">// ...</span></span><br><span class="line"><span class="keyword">return</span> DistanceToPoint.computeDistance(lineString, point);   <span class="comment">// 传 null</span></span><br></pre></td></tr></table></figure>
+<p><strong>有个必现的 NPE 被 catch 吞了，链路横跨两个类</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Map 服务：CoordinateCalculateService.getPointDistanceToLine</span></span><br><span class="line"><span class="type">Coordinate</span> <span class="variable">point</span> <span class="operator">=</span> <span class="literal">null</span>;</span><br><span class="line"><span class="type">LineString</span> <span class="variable">lineString</span> <span class="operator">=</span> <span class="literal">null</span>;                       <span class="comment">// ← 全程没有被赋值</span></span><br><span class="line">...</span><br><span class="line"><span class="type">Coordinate</span>[] <span class="variable">linePointCoordinateArray</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">Coordinate</span>[pointStrDTOList.size()];</span><br><span class="line"><span class="type">int</span> <span class="variable">forCount</span> <span class="operator">=</span> <span class="number">0</span>;</span><br><span class="line"><span class="keyword">for</span> (CoordinateDTO.PointStrDTO p : pointStrDTOList) &#123;</span><br><span class="line">    linePointCoordinateArray[forCount++] = <span class="keyword">new</span> <span class="title class_">Coordinate</span>(...);   <span class="comment">// 老老实实拼好了数组</span></span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">return</span> CoordinateUtil.getPointDistanceToLine(point, lineString);  <span class="comment">// 却把没赋值的 lineString 传了出去</span></span><br></pre></td></tr></table></figure>
 
-<p>被 try-catch 兜住返回 0，于是”点到车道距离”永远是 0——如果哪个业务逻辑依赖这个值，结果会莫名其妙。</p>
+<p>也就是说：<strong>参数转换做了一半——点转好了、线的坐标数组也拼好了，但最后没用它，还是把 <code>lineString</code>（&#x3D; null）传给了 <code>CoordinateUtil</code></strong>（这个工具类在 map &#x2F; dispatch &#x2F; keda 三个服务里各有一份副本）。而 <code>CoordinateUtil</code> 内部：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> <span class="type">double</span> <span class="title function_">getPointDistanceToLine</span><span class="params">(Coordinate point, LineString line)</span> &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        <span class="type">PointPairDistance</span> <span class="variable">ppd</span> <span class="operator">=</span> <span class="keyword">new</span> <span class="title class_">PointPairDistance</span>();</span><br><span class="line">        DistanceToPoint.computeDistance(line, point, ppd);   <span class="comment">// line 为 null → NPE</span></span><br><span class="line">        <span class="keyword">return</span> ppd.getDistance() * DISTANCE_TO_METRE;        <span class="comment">// ×100000 转米</span></span><br><span class="line">    &#125; <span class="keyword">catch</span> (Exception e) &#123;</span><br><span class="line">        log.error(<span class="string">&quot;计算点到直线的距离错误，错误消息：&quot;</span> + e.getMessage(), e);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;                                                <span class="comment">// 一律吞掉并返回 0</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>于是”点到车道距离”永远是 0——而且<strong>每次调用都会在日志里刷一条 error 堆栈</strong>（这个排查线索其实一直在那儿）。如果哪个业务逻辑依赖这个值做净空&#x2F;占位判断，结果会莫名其妙地偏向”贴得最近”。</p>
+<blockquote>
+<p>修法：把 <code>lineString</code> 真正构造出来（<code>geometryFactory.createLineString(linePointCoordinateArray)</code>），并把 <code>catch (Exception) → return 0</code> 改成<strong>返回一个可判定的失败</strong>（抛业务异常或返回 <code>Double</code> 空值）——“静默返回 0”在这种几何量上比报错危险得多。</p>
+</blockquote>
 <hr>
-<h2 id="三、rcloud-algorithm：JNI-调-C"><a href="#三、rcloud-algorithm：JNI-调-C" class="headerlink" title="三、rcloud-algorithm：JNI 调 C++"></a>三、rcloud-algorithm：JNI 调 C++</h2><h3 id="3-1-JNI-接入方式"><a href="#3-1-JNI-接入方式" class="headerlink" title="3.1 JNI 接入方式"></a>3.1 JNI 接入方式</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LocalPathJNI</span> &#123;</span><br><span class="line">    <span class="keyword">static</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            System.load(<span class="string">&quot;/home/rockai/lk/app/jni/libmodule.so&quot;</span>);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (UnsatisfiedLinkError e) &#123;</span><br><span class="line">            e.printStackTrace();   <span class="comment">// 只打印，不抛！</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">native</span> <span class="type">int</span> <span class="title function_">putInPath</span><span class="params">(<span class="type">int</span> planType, <span class="type">long</span> areaPoi,</span></span><br><span class="line"><span class="params">                                        JNIPointJNI point, JNILoadPointJNIDTO[] points)</span>;</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">native</span> <span class="type">String</span> <span class="title function_">getMapUrl</span><span class="params">(String url, String md5)</span>;</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">native</span> <span class="type">void</span> <span class="title function_">initParam</span><span class="params">(JNIAlgorithmReedsSheppParamJNIDTO param)</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h2 id="三、rcloud-algorithm：JNI-调-C"><a href="#三、rcloud-algorithm：JNI-调-C" class="headerlink" title="三、rcloud-algorithm：JNI 调 C++"></a>三、rcloud-algorithm：JNI 调 C++</h2><h3 id="3-1-JNI-接入方式"><a href="#3-1-JNI-接入方式" class="headerlink" title="3.1 JNI 接入方式"></a>3.1 JNI 接入方式</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">LocalPathJNI</span> &#123;</span><br><span class="line">    <span class="keyword">static</span> &#123;</span><br><span class="line">        <span class="keyword">try</span> &#123;</span><br><span class="line">            System.load(<span class="string">&quot;/home/rockai/lk/app/jni/libmodule.so&quot;</span>);</span><br><span class="line">        &#125; <span class="keyword">catch</span> (UnsatisfiedLinkError e) &#123;</span><br><span class="line">            e.printStackTrace();   <span class="comment">// 只打印，不抛！</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">native</span> <span class="type">JNIPointJNIVO</span> <span class="title function_">putInPath</span><span class="params">(<span class="type">int</span> planType, <span class="type">long</span> areaPoi, ...)</span>;</span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">native</span> <span class="type">void</span> <span class="title function_">getMapUrl</span><span class="params">(String url, String md5)</span>;   <span class="comment">// 注意是 void，不是返回 String</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">native</span> <span class="type">void</span> <span class="title function_">initParam</span><span class="params">(JNIAlgorithmReedsSheppParamJNIDTO param)</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
 
 <p>用的是<strong>原生 JNI</strong>（不是 JNA），所以 JNI 模块里另建了一套 <code>JNI*</code> 镜像 DTO（<code>JNIPointJNI</code>、<code>JNILoadPointJNIDTO</code>…），<strong>字段顺序与 C++ 结构体强耦合</strong>。</p>
 <p>三个风险：</p>
@@ -634,28 +745,28 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(253)</span>
+                        <span>(255)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2026/" aria-label="分类: 2026">
                         2026
-                        <span>(52)</span>
+                        <span>(54)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%99%BA%E6%85%A7%E7%9F%BF%E5%B1%B1/" aria-label="分类: 智慧矿山">
                         智慧矿山
-                        <span>(6)</span>
+                        <span>(8)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%99%BA%E6%85%A7%E7%9F%BF%E5%B1%B1/%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1/" aria-label="分类: 架构设计">
                         架构设计
-                        <span>(5)</span>
+                        <span>(7)</span>
                     </a>
                 </div>
             
@@ -1075,6 +1186,44 @@ article: http://ogp.me/ns/article#">
             }
             
             setTimeout(setupMermaidZoom, 2000);
+
+            /* 加密文章专用：正文要等解密成功后才由 hexo-blog-encrypt 注入 DOM，
+               上面这轮扫描看到的只有解密表单，所以图表不会被渲染。
+               这里等原始正文出现（.post-content 里出现 mermaid），再补跑一轮
+               规整 + run；跑完立即断开观察者。 */
+            if (typeof page !== 'undefined' && page && page.encrypt) {
+              var mermaidBooted = false;
+              var mermaidObserver = new MutationObserver(function() {
+                if (mermaidBooted) return;
+                var pending = document.querySelectorAll(
+                  '.post-content pre.mermaid, .post-content .mermaid:not([data-processed])');
+                if (!pending.length) return;
+
+                mermaidBooted = true;
+                mermaidObserver.disconnect();
+
+                document.querySelectorAll('.post-content pre.mermaid').forEach(function(pre) {
+                  var div = document.createElement('div');
+                  div.className = 'mermaid';
+                  div.textContent = pre.textContent || pre.innerText;
+                  pre.parentNode.replaceChild(div, pre);
+                });
+
+                try {
+                  var result = mermaid.run();
+                  if (result && typeof result.then === 'function') {
+                    result.then(setupMermaidZoom).catch(function(err) {
+                      console.error('Mermaid run error (encrypted post):', err);
+                    });
+                  } else {
+                    setTimeout(setupMermaidZoom, 300);
+                  }
+                } catch (e) {
+                  console.error('Error running mermaid (encrypted post):', e);
+                }
+              });
+              mermaidObserver.observe(document.body, { childList: true, subtree: true });
+            }
           }
         });
       </script>

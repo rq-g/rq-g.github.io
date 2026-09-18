@@ -1,5 +1,6 @@
 document.addEventListener('DOMContentLoaded', function() {
-    const header = document.querySelector('header');
+    /* 必须按 id 取：页面内容里也可能出现 <header>（如关于页的标题容器） */
+    const header = document.getElementById('site-header');
 
     // 添加汉堡菜单
     function setupMobileMenu() {

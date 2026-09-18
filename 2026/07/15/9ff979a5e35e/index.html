@@ -50,7 +50,8 @@ article: http://ogp.me/ns/article#">
 <body>
 <main>
     
-    <header>
+    
+<header id="site-header">
     <nav>
         <ul>
             
@@ -290,7 +291,7 @@ article: http://ogp.me/ns/article#">
 <li><strong>地图是活的</strong> —— 排土线边界每天随作业推进而移动，地图要能增量更新并同步到车端。</li>
 </ol>
 <hr>
-<h2 id="二、分层架构：六层模型与依赖方向"><a href="#二、分层架构：六层模型与依赖方向" class="headerlink" title="二、分层架构：六层模型与依赖方向"></a>二、分层架构：六层模型与依赖方向</h2><p>只看服务清单，18 个应用是一张平铺的网；按<strong>职责与依赖方向</strong>切开，它其实是一个非常标准的六层结构，外加一条纵向贯穿的能力带。</p>
+<h2 id="二、分层架构：六层模型与依赖方向"><a href="#二、分层架构：六层模型与依赖方向" class="headerlink" title="二、分层架构：六层模型与依赖方向"></a>二、分层架构：六层模型与依赖方向</h2><p>只看服务清单，20 个应用是一张平铺的网；按<strong>职责与依赖方向</strong>切开，它其实是一个非常标准的六层结构，外加一条纵向贯穿的能力带。</p>
 <div class="al-wrap">
 <style>
 .al-wrap{max-width:860px;margin:20px auto;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}
@@ -400,8 +401,13 @@ article: http://ogp.me/ns/article#">
 </tr>
 <tr>
 <td>L4 processor</td>
+<td>报文到达即算（车端秒级上报）</td>
+<td>派车决策，事件驱动</td>
+</tr>
+<tr>
+<td>L4 service 编组线程</td>
 <td>1 秒一轮</td>
-<td>调度决策扫描</td>
+<td>编组配置缓存同步（<strong>不派车</strong>）</td>
 </tr>
 <tr>
 <td>L3 算法</td>
@@ -415,8 +421,16 @@ article: http://ogp.me/ns/article#">
 </tr>
 </tbody></table>
 <p>把不同时间尺度的逻辑塞进同一个进程，快的必然被慢的拖住。<code>rcloud-dispatch</code> 拆成 <code>service</code>（连库、低频管控）+ <code>processor</code>（不连库、纯消费 MQ 做计算）就是这条约束的直接产物。</p>
+<blockquote>
+<p><strong>一个容易搞错的地方</strong>：很多人（包括我一开始）以为”1 秒一轮的调度线程”就是派车决策本身。实际拆开看是两件事——</p>
+<ul>
+<li><code>DispatchGroupMainThread</code>（在 <strong>service</strong>，每编组一个、周期 1000ms）干的是<strong>编组配置缓存的心跳</strong>：比对编组版本号，变了就异步刷新编组&#x2F;工作面&#x2F;卸载区配置并给 Redis 续期；</li>
+<li>真正的派车决策 <code>LoadTaskService.doLoadTaskSendScaner(TruckTaskRealInfoDTO)</code> 在 <strong>processor</strong>，由 <code>LoadTaskTruckInfoHandler</code> <strong>消费车端实时状态报文触发</strong>——是<strong>事件驱动</strong>，不是定时扫描。</li>
+</ul>
+<p>换句话说，”1 秒”的节奏感来自车端上报频率，不是调度线程的周期。第四篇会把这个区别展开。</p>
+</blockquote>
 <p><strong>约束二：车端是不可信边界。</strong> L1 永远只能通过 L2 进入系统。L2 必须完成鉴权（JT808 的 <code>0x0100</code> 注册 &#x2F; <code>0x0102</code> 鉴权）、会话绑定、解码、异常报文丢弃。业务层拿到的永远是结构化 DTO，不是字节流。</p>
-<p><strong>约束三：指令下行必须异步。</strong> L4 → L2 不允许 Feign 直达，代码里也确实如此——<code>dispatch</code> → <code>equipment</code> → <strong>RocketMQ</strong> → <code>exchange</code>。原因很直接：调度线程 1 秒一轮，而一次同步调用要叠加车端应答等待（<code>SyncFuture</code> 有超时），同步等于自废武功。</p>
+<p><strong>约束三：指令下行必须异步。</strong> L4 → L2 不允许 Feign 直达，代码里也确实如此——<code>dispatch</code> → <code>equipment</code> → <strong>RocketMQ</strong> → <code>exchange</code>。原因很直接：派车决策要等车端应答（<code>SyncFuture</code> 那套有超时），而它是在 MQ 消费线程里跑的，同步等一个往返会把消费线程整条堵住。</p>
 <h3 id="2-3-现实里的三处跨层违规（附证据）"><a href="#2-3-现实里的三处跨层违规（附证据）" class="headerlink" title="2.3 现实里的三处跨层违规（附证据）"></a>2.3 现实里的三处跨层违规（附证据）</h3><p>架构图画得再干净，代码里总会有妥协。这三处是真正在生产代码里存在的：</p>
 <table>
 <thead>
@@ -436,7 +450,7 @@ article: http://ogp.me/ns/article#">
 <tr>
 <td><strong>2</strong></td>
 <td><strong>L4 内部双向 Feign 环</strong></td>
-<td>dispatch → equipment：<code>truckProtocolFeignService.sendLoadTask()</code>；equipment → dispatch：<code>CheckLoadPointFeignClient</code>、<code>DispatchGroupBusinessFeignClient</code>、<code>DispatchLogFeignClient</code>、<code>DispatchMaintenanceRecordFeignClient</code>（均为 <code>@FeignClient(FeignServiceConstant.DISPATCH)</code>）</td>
+<td>dispatch → equipment：<code>truckProtocolFeignService.sendLoadTask()</code>；equipment → dispatch：<strong>9 个</strong> <code>@FeignClient(FeignServiceConstant.DISPATCH)</code>——<code>CheckLoadPointFeignClient</code>、<code>DebugPanelFeignClient</code>、<code>DepartureAndParkFeignClient</code>、<code>DispatchGroupBusinessFeignClient</code>、<code>DispatchGroupFeignClient</code>、<code>DispatchLogFeignClient</code>、<code>DispatchMaintenanceRecordFeignClient</code>、<code>DispatchRegionFeignClient</code>、<code>LoadBufferPointFeignClient</code></td>
 <td>任一服务重启或变慢，另一侧请求直接失败；无熔断时形成雪崩。更麻烦的是它让”调度状态归谁所有”变得模糊</td>
 </tr>
 <tr>
@@ -488,7 +502,10 @@ article: http://ogp.me/ns/article#">
 </tbody></table>
 <p>一句话概括规则：<strong>写权限只归一个域，跨域读取走 Feign 或 MQ</strong>。目前唯一的破坏者是 L3 算法层对 Redis 的读写。</p>
 <hr>
-<h2 id="三、服务全景：18-个可独立部署的应用"><a href="#三、服务全景：18-个可独立部署的应用" class="headerlink" title="三、服务全景：18 个可独立部署的应用"></a>三、服务全景：18 个可独立部署的应用</h2><p>系统按 Maven 多模块组织，父 POM 是 <code>com.rockai:superPOM</code>。下面这张表是从代码里逐个启动类统计出来的（不是猜的）：</p>
+<h2 id="三、服务全景：20-个可独立部署的应用"><a href="#三、服务全景：20-个可独立部署的应用" class="headerlink" title="三、服务全景：20 个可独立部署的应用"></a>三、服务全景：20 个可独立部署的应用</h2><p>系统按 Maven 多模块组织，父 POM 是 <code>com.rockai:superPOM</code>。下面这张表是从代码里逐个启动类统计出来的（不是猜的）——<strong>20 个启动类，20 行，一一对应</strong>：</p>
+<blockquote>
+<p>本轮复核时补上了早期统计漏掉的三个：<code>rcloud-report</code>（报表）、<code>rcloud-alarm-service</code> 与 <code>rcloud-alarm-feishu-service</code>（告警与其飞书通道）。它们都是货真价实的启动类，且 <code>rcloud-report</code> 在<a href="/2026/07/18/2d6edb561e4a/" title="露天矿山无人驾驶调度平台（三）：服务治理——网关鉴权、Feign 拓扑与自研健康巡检">第三篇</a>的 Feign 拓扑里本就被 4 个 Client 调用着——只是没被算进”服务清单”。</p>
+</blockquote>
 <table>
 <thead>
 <tr>
@@ -582,6 +599,21 @@ article: http://ogp.me/ns/article#">
 <td><code>rcloud-logistics-service</code></td>
 <td>物流服务</td>
 </tr>
+<tr>
+<td><code>RCloudReportApplication</code></td>
+<td><code>rcloud-report</code></td>
+<td>产量&#x2F;工况报表（MQ 消费 + 定时聚合）</td>
+</tr>
+<tr>
+<td><code>RCloudAlarmApplication</code></td>
+<td><code>rcloud-alarm</code></td>
+<td>告警服务</td>
+</tr>
+<tr>
+<td><code>RCloudAlarmFeishuApplication</code></td>
+<td><code>rcloud-alarm-feishu-service</code></td>
+<td>告警的飞书通知通道（独立应用）</td>
+</tr>
 </tbody></table>
 <p>外加两个纯二方库模块：<code>rcloud-common</code>（core &#x2F; redis-starter &#x2F; redisson-starter &#x2F; rocketmq-starter）与各服务的 <code>-api</code> 模块（Feign 接口 + DTO）。</p>
 <blockquote>
@@ -614,7 +646,7 @@ article: http://ogp.me/ns/article#">
 <tr>
 <td>消息</td>
 <td>RocketMQ（自研 starter）</td>
-<td>60+ topic，按设备类型分段命名</td>
+<td>全平台 118 个 topic 常量，其中 equipment 一个类就占 86 个，按设备类型分段命名</td>
 </tr>
 <tr>
 <td>ORM</td>
@@ -661,7 +693,22 @@ article: http://ogp.me/ns/article#">
 <td>自研 rcloud-system-health</td>
 <td>非 Actuator</td>
 </tr>
+<tr>
+<td><strong>运行时</strong></td>
+<td><strong>JDK 1.8</strong>（<code>jdk:1.8.0.201-alpine</code> 基础镜像）</td>
+<td>与 <code>jakarta.*</code> 注解并存，迁移中间态的另一处证据</td>
+</tr>
 </tbody></table>
+<h3 id="4-1-实测运行时基线（这几个值直接决定容量上限）"><a href="#4-1-实测运行时基线（这几个值直接决定容量上限）" class="headerlink" title="4.1 实测运行时基线（这几个值直接决定容量上限）"></a>4.1 实测运行时基线（这几个值直接决定容量上限）</h3><p>技术栈只说明”用了什么”，而下面这些来自 Nacos 的实际配置值，才决定”能撑多少”：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># rcloud-common-rocketmq.yaml</span></span><br><span class="line"><span class="attr">consumeThreadMin: 20 / consumeThreadMax:</span> <span class="number">60</span>     <span class="comment"># 消费线程池</span></span><br><span class="line"><span class="attr">consumeMessageBatchMaxSize:</span> <span class="number">1</span>                   <span class="comment"># 不攒批</span></span><br><span class="line"><span class="attr">defaultTopicQueueNums:</span> <span class="number">2</span>                        <span class="comment"># ← 单 topic 只有 2 个队列</span></span><br><span class="line"><span class="attr">sendMsgTimeout: 1000 / retryTimesWhenSendFailed:</span> <span class="number">2</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># rcloud-common-redis.yaml</span></span><br><span class="line"><span class="attr">host:</span> <span class="number">172.28</span><span class="number">.1</span><span class="number">.77</span><span class="string">:6379</span>                          <span class="comment"># ← 单点，无集群/哨兵</span></span><br><span class="line"><span class="attr">lettuce.pool.max-active:</span> <span class="number">2000</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># rcloud-common-mqtt.yaml</span></span><br><span class="line"><span class="attr">services:</span> <span class="string">tcp://172.28.1.81:1883</span>                <span class="comment"># ← 单 EMQX</span></span><br><span class="line"><span class="attr">qos:</span> <span class="number">2</span>                                          <span class="comment"># ← 遥测也用 QoS2</span></span><br></pre></td></tr></table></figure>
+
+<p>三个最值得注意的点：</p>
+<ol>
+<li><strong><code>defaultTopicQueueNums=2</code></strong> —— 单 topic 最多 2 个队列并行消费，<strong>实例数超过 2 个时多余实例分不到消息</strong>，水平扩展被封住；</li>
+<li><strong>Redis 与 EMQX 都是单点</strong> —— 这两个是真正的 SPOF，Redis 一挂，编组选主、实时状态、分布式锁全停；</li>
+<li><strong><code>qos=2</code></strong> —— 每条遥测数据要 4 次握手（PUBLISH→PUBREC→PUBREL→PUBCOMP），对 1Hz 的高频遥测来说代价偏高，控制指令才真正需要它。</li>
+</ol>
+<p>这些数字会在<a href="/2026/07/28/e8ffc4d9d553/" title="露天矿山无人驾驶调度平台（七）：性能瓶颈与容量评估——100 台矿卡到底能不能上">第七篇</a>里被用来推导容量。</p>
 <hr>
 <h2 id="五、一次装载任务的端到端链路"><a href="#五、一次装载任务的端到端链路" class="headerlink" title="五、一次装载任务的端到端链路"></a>五、一次装载任务的端到端链路</h2><p>这是整个系统最核心的一条链路，理解它就理解了 80% 的架构：</p>
 <pre class="mermaid">flowchart TD
@@ -671,40 +718,44 @@ article: http://ogp.me/ns/article#">
         MHS -->|"登录 / 状态"| CPF["CommonProtocolFeign → equipment"]
         MHS -->|"其余・按 base_agreement_info 配置的 topic"| MQ1["RocketMQ"]
     end
-    subgraph S2["[2] 状态进入调度"]
-        PROC["dispatch-processor・LoadTaskTruckInfoHandler"]
-    end
-    subgraph S3["[3] 调度决策・LoadTaskService"]
-        C1["① 基础校验・WORK + 自动驾驶・编组未禁用"] --> C2["② 区域匹配・getRegionDetailByRegionPOICode"]
+    subgraph S2["[2] processor：MQ 驱动的派车决策（LoadTaskService）"]
+        PROC["LoadTaskTruckInfoHandler・消费状态报文"] --> C1["① 基础校验・WORK + 自动驾驶・编组未禁用"]
+        C1 --> C2["② 区域匹配・getRegionDetailByRegionPOICode"]
         C2 --> C3["③ 幂等闸门・truckId 已在列表则跳过"]
         C3 --> C4["④ 选挖机・getDispatchExcavatorInfoByTruckId"]
         C4 --> C5["⑤ 调算法・getDispatchByLoad"]
         C5 --> C6["⑥ 取等待点・getWaitingPointByPOICode"]
     end
-    subgraph S4["[4] 任务下发"]
+    subgraph S3["[3] 任务下发"]
         SEND["truckProtocolFeignService.sendLoadTask"] --> EQ["equipment"] --> MQ2["RocketMQ・exchangeConsumerTopic"] --> EXC2["exchange"] -->|"Netty / MQTT"| TRUCK2["车端"]
         RETRY["RetryService・30s × 5 次重发"] -.- EXC2
     end
-    subgraph S5["[5] 打幂等标记"]
+    subgraph S4["[4] 打幂等标记"]
         MARK["redisRuntimeTruckService.addTruckIdToLoadTaskList"]
     end
+    subgraph S5["[5] 并行的另一条线：service 的 1 秒编组线程"]
+        GMT["DispatchGroupMainThread・每编组 1s"] --> REF["刷新编组 / 工作面 / 卸载区配置缓存"]
+        REF -.->|"只读配置，不派车"| C1
+    end
     MQ1 --> PROC
-    PROC --> C1
     C6 --> SEND
     SEND -.-> MARK</pre>
 
 <p>几个值得注意的设计决策：</p>
 <ul>
-<li><strong>计算在 processor，管控在 service</strong>。<code>rcloud-dispatch-service</code> 连库、提供 HTTP 配置与查询接口；<code>rcloud-dispatch-processor</code> 不连库，纯消费 MQ 做计算，结果通过 Feign 回写。这个拆分让”高频计算”和”低频管控”可以独立伸缩。</li>
-<li><strong>指令不走 Feign 直达车端</strong>。dispatch → equipment → <strong>RocketMQ</strong> → exchange → 车端，中间用消息队列解耦，避免调度线程被网络 I&#x2F;O 拖住。</li>
+<li><strong>决策在 processor、管控在 service，分界线是”有没有被 MQ 触发”</strong>。<code>rcloud-dispatch-service</code> 连库、提供 HTTP 配置与查询接口，并跑 1 秒一轮的编组配置缓存同步线程；<code>rcloud-dispatch-processor</code> 不连库，MQ 一到就做决策，结果通过 Feign 回写。这个拆分让”高频计算”和”低频管控”可以独立伸缩。</li>
+<li><strong>派车是事件驱动、不是定时轮询</strong>。这一点特别容易看错：<code>DispatchGroupMainThread</code> 的 javadoc 里还列着”下发装载任务””下发卸载任务””装载等待区扫描”等 9 项职责，但<strong>实现里只剩第 1 项</strong>（刷新配置缓存），其余 8 项早已迁到 processor 由 MQ 触发。注释与实现分叉了，读代码时必须以 <code>doBusiness()</code> 的实际方法体为准。</li>
+<li><strong>指令不走 Feign 直达车端</strong>。dispatch → equipment → <strong>RocketMQ</strong> → exchange → 车端，中间用消息队列解耦，避免消费线程被网络 I&#x2F;O 拖住。</li>
 <li><strong>协议是配置化的</strong>。<code>base_agreement_info</code> 表定义了每种协议报文对应的 topic，exchange 按表分派，新增协议不用改网关代码——这是典型的”配置化协议网关”。</li>
 </ul>
 <hr>
-<h2 id="六、读这套代码时的三个”反直觉”之处"><a href="#六、读这套代码时的三个”反直觉”之处" class="headerlink" title="六、读这套代码时的三个”反直觉”之处"></a>六、读这套代码时的三个”反直觉”之处</h2><ol>
-<li><strong>dispatch 里没有 MQ 生产者</strong>。所有 topic 都在 <code>DispatchMQTopicConstant</code> 定义，但 11 个消费者全在 processor，service 一个生产者都没有——它只被别人调用。</li>
-<li><strong>exchange 的 JT808 TCP 通道实际没启用</strong>。<code>RCloudExchangeApplication</code> 里 <code>TCPServer.start()</code> 被注释掉了，<code>NettyServerBootstrapRunner</code> 整个类是注释状态，真正跑的是 DTU 通道（20001 端口）+ MQTT。</li>
-<li><strong>map 服务的 <code>lanelet2_*</code> 六张表没有对应的 Entity&#x2F;Mapper</strong>。库表是遗留的（外部工具写入），Java 侧真值在 MinIO 的 OSM 文件 + 内存 <code>OSMMapContainerDTO</code>。</li>
+<h2 id="六、读这套代码时的四个”反直觉”之处"><a href="#六、读这套代码时的四个”反直觉”之处" class="headerlink" title="六、读这套代码时的四个”反直觉”之处"></a>六、读这套代码时的四个”反直觉”之处</h2><ol>
+<li><strong>dispatch 里没有 MQ 生产者</strong>。所有 topic 都在 <code>DispatchMQTopicConstant</code> 定义（11 个），但 11 个消费者全在 processor（consumer 目录下正好 11 个 Handler），service 一个生产者都没有——它只被别人调用。</li>
+<li><strong>“1 秒一轮”的不是派车，是配置缓存</strong>。<code>DispatchGroupMainThread</code> 每编组一个线程、周期 1000ms，但 <code>doBusiness()</code> 只做编组配置同步；派车由 processor 消费 MQ 触发。它的 javadoc 里还留着 8 项早已迁走的职责。</li>
+<li><strong>exchange 的 JT808 TCP 通道实际没启用</strong>。<code>RCloudExchangeApplication</code> 里 <code>tcpServer.start()</code> 两行被注释，<code>NettyServerBootstrapRunner</code> 整个类是注释状态，真正在跑的是 <code>WithOutTCPServer</code>（<code>withOut.tcp.port</code> &#x3D; 20001，逗号分隔文本）+ MQTT。</li>
+<li><strong>map 服务的 <code>lanelet2_*</code> 七张表没有对应的 Entity&#x2F;Mapper</strong>。库表是遗留的（外部工具写入），Java 侧真值在 MinIO 的 OSM 文件 + 内存 <code>OSMMapContainerDTO</code>。</li>
 </ol>
+<p>第 4 条再补一层：<strong>本系统的”服务清单”和”仓库清单”并不相等</strong>。<code>FeignServiceConstant</code> 里定义了 13 个服务名，其中 <strong>4 个在本仓库群里找不到任何启动类</strong>——<code>rcloud-report</code>、<code>rcloud-pre-algorithm</code>、<code>rcloud-safety-guarantee</code>、<code>rcloud-exchange-qingyan</code>。而它们不是摆设：processor 有 4 个 Client 在调 <code>REPORT</code>，equipment 有 2 个 Client 在调 <code>SAFETY_GUARANTEE</code>。所以”这套系统有几个服务”这个问题，取决于你问的是<strong>代码边界</strong>还是<strong>部署边界</strong>——前者 17 个（本仓库群里的启动类），后者更大。</p>
 <p>这些”看起来矛盾”的地方，往往藏着系统的演进史，后面几篇会逐个展开。</p>
 <hr>
 <h2 id="小结"><a href="#小结" class="headerlink" title="小结"></a>小结</h2><table>
@@ -716,7 +767,7 @@ article: http://ogp.me/ns/article#">
 </thead>
 <tbody><tr>
 <td>规模</td>
-<td>18 个可部署服务，10+ Maven 聚合工程</td>
+<td>20 个可部署服务（另有 4 个仅在 <code>FeignServiceConstant</code> 里出现的编外服务名），12 个 Maven 聚合工程，3477 个 Java 文件 &#x2F; 34.8 万行代码</td>
 </tr>
 <tr>
 <td>分层</td>
@@ -724,7 +775,7 @@ article: http://ogp.me/ns/article#">
 </tr>
 <tr>
 <td>架构风格</td>
-<td>微服务 + 事件驱动，计算与管控分离</td>
+<td>微服务 + 事件驱动，决策与管控分离；<strong>派车是 MQ 事件驱动，不是定时扫描</strong></td>
 </tr>
 <tr>
 <td>最核心的链路</td>
@@ -855,28 +906,28 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(253)</span>
+                        <span>(255)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2026/" aria-label="分类: 2026">
                         2026
-                        <span>(52)</span>
+                        <span>(54)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%99%BA%E6%85%A7%E7%9F%BF%E5%B1%B1/" aria-label="分类: 智慧矿山">
                         智慧矿山
-                        <span>(6)</span>
+                        <span>(8)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%99%BA%E6%85%A7%E7%9F%BF%E5%B1%B1/%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1/" aria-label="分类: 架构设计">
                         架构设计
-                        <span>(5)</span>
+                        <span>(7)</span>
                     </a>
                 </div>
             
@@ -1296,6 +1347,44 @@ article: http://ogp.me/ns/article#">
             }
             
             setTimeout(setupMermaidZoom, 2000);
+
+            /* 加密文章专用：正文要等解密成功后才由 hexo-blog-encrypt 注入 DOM，
+               上面这轮扫描看到的只有解密表单，所以图表不会被渲染。
+               这里等原始正文出现（.post-content 里出现 mermaid），再补跑一轮
+               规整 + run；跑完立即断开观察者。 */
+            if (typeof page !== 'undefined' && page && page.encrypt) {
+              var mermaidBooted = false;
+              var mermaidObserver = new MutationObserver(function() {
+                if (mermaidBooted) return;
+                var pending = document.querySelectorAll(
+                  '.post-content pre.mermaid, .post-content .mermaid:not([data-processed])');
+                if (!pending.length) return;
+
+                mermaidBooted = true;
+                mermaidObserver.disconnect();
+
+                document.querySelectorAll('.post-content pre.mermaid').forEach(function(pre) {
+                  var div = document.createElement('div');
+                  div.className = 'mermaid';
+                  div.textContent = pre.textContent || pre.innerText;
+                  pre.parentNode.replaceChild(div, pre);
+                });
+
+                try {
+                  var result = mermaid.run();
+                  if (result && typeof result.then === 'function') {
+                    result.then(setupMermaidZoom).catch(function(err) {
+                      console.error('Mermaid run error (encrypted post):', err);
+                    });
+                  } else {
+                    setTimeout(setupMermaidZoom, 300);
+                  }
+                } catch (e) {
+                  console.error('Error running mermaid (encrypted post):', e);
+                }
+              });
+              mermaidObserver.observe(document.body, { childList: true, subtree: true });
+            }
           }
         });
       </script>

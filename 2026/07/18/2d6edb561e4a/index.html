@@ -50,7 +50,8 @@ article: http://ogp.me/ns/article#">
 <body>
 <main>
     
-    <header>
+    
+<header id="site-header">
     <nav>
         <ul>
             
@@ -272,9 +273,13 @@ article: http://ogp.me/ns/article#">
 
 <p>而且权限粒度做到了 <strong>接口级</strong>：<code>SysInterface</code> + <code>SysPermissionInterface</code> 两张表维护「权限 → (url, method)」的映射，网关直接查这个关系做鉴权。</p>
 <p>这种设计的好处是：<strong>同一套 RBAC 能同时服务 Web 管理端、车端 HMI、驾驶舱、监控大屏 7 类终端</strong>，每类终端看到的权限集不同。相比常见的”只做菜单权限”，这套做到了接口级，安全性高一档。</p>
-<h3 id="1-3-一个小-bug：TraceId-没传下去"><a href="#1-3-一个小-bug：TraceId-没传下去" class="headerlink" title="1.3 一个小 bug：TraceId 没传下去"></a>1.3 一个小 bug：TraceId 没传下去</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// TraceIdResponseFilter</span></span><br><span class="line"><span class="type">ServerWebExchange</span> <span class="variable">newExchange</span> <span class="operator">=</span> exchange.mutate()   <span class="comment">// mutate() 返回新对象</span></span><br><span class="line">        .request(newRequest)</span><br><span class="line">        .build();</span><br><span class="line"><span class="comment">// 但没有把 newExchange 赋值回 exchange，也没有传给 chain.filter(newExchange)</span></span><br></pre></td></tr></table></figure>
+<h3 id="1-3-一个小-bug：TraceId-没传下去"><a href="#1-3-一个小-bug：TraceId-没传下去" class="headerlink" title="1.3 一个小 bug：TraceId 没传下去"></a>1.3 一个小 bug：TraceId 没传下去</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// TraceIdResponseFilter</span></span><br><span class="line">exchange.getRequest().mutate().header(TRACE_ID_HEADER, traceId).build();</span><br><span class="line"><span class="keyword">return</span> chain.filter(exchange).then(...);</span><br></pre></td></tr></table></figure>
 
-<p>结果：<code>X-Trace-Id</code> 生成了，但下游服务收不到。<strong>链路追踪形同虚设</strong>——在 18 个服务的调用链里，没有 traceId 意味着排查一次跨服务问题要靠人肉对齐日志时间戳。</p>
+<p>注意第一行：<code>mutate()</code> 返回的是<strong>新的 request 对象</strong>，<code>header(...)</code> 把 traceId 加在副本上，<code>.build()</code> 交出新 request——然后<strong>这个结果被直接丢掉了</strong>。最后 <code>chain.filter(exchange)</code> 用的还是<strong>原来那个 exchange</strong>，所以 header 从未生效。</p>
+<p>结果：<code>X-Trace-Id</code> 生成了，但下游服务收不到。<strong>链路追踪形同虚设</strong>——在 20 个服务的调用链里，没有 traceId 意味着排查一次跨服务问题要靠人肉对齐日志时间戳。</p>
+<blockquote>
+<p>正确写法是先构造新 exchange 再往下传：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">ServerWebExchange</span> <span class="variable">mutated</span> <span class="operator">=</span> exchange.mutate()</span><br><span class="line">        .request(exchange.getRequest().mutate().header(TRACE_ID_HEADER, traceId).build())</span><br><span class="line">        .build();</span><br><span class="line"><span class="keyword">return</span> chain.filter(mutated).then(...);</span><br></pre></td></tr></table></figure></blockquote>
 <hr>
 <h2 id="二、用户上下文：裸-ThreadLocal-的隐患"><a href="#二、用户上下文：裸-ThreadLocal-的隐患" class="headerlink" title="二、用户上下文：裸 ThreadLocal 的隐患"></a>二、用户上下文：裸 ThreadLocal 的隐患</h2><h3 id="2-1-传递链路"><a href="#2-1-传递链路" class="headerlink" title="2.1 传递链路"></a>2.1 传递链路</h3><pre class="mermaid">flowchart TD
     GW["网关・解析 JWT"] -->|"写 header：userId / userName"| INT["下游服务・LoginUserInfoInterceptor"]
@@ -287,7 +292,13 @@ article: http://ogp.me/ns/article#">
 
 <h3 id="2-2-三个问题"><a href="#2-2-三个问题" class="headerlink" title="2.2 三个问题"></a>2.2 三个问题</h3><p><strong>问题一：没有 TTL，异步场景静默丢失。</strong></p>
 <p>全库搜 <code>TransmittableThreadLocal</code> &#x2F; <code>TtlMDC</code> 零命中。而 <code>rcloud-system-health-service</code> 里大量使用 <code>CompletableFuture</code> 并行探测，<code>rcloud-dispatch</code> 里有 <code>Executors.newFixedThreadPool(5)</code> 和多个自建 Thread——<strong>这些线程里 <code>LoginUserUtils.get()</code> 一律返回 null</strong>。</p>
-<p>如果某个异步任务里写了操作日志（<code>MyMetaObjectHandler</code> 自动填充 createBy），就会填成 null。</p>
+<p>这里要补一句容易想当然的话：null 并不会体现为”操作人字段是空”。因为 <code>MyMetaObjectHandler</code> <strong>压根没读 <code>LoginUserUtils</code></strong>，它把 <code>createBy</code>&#x2F;<code>updateBy</code> 写死成了字符串：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">this</span>.setFieldValByName(<span class="string">&quot;createBy&quot;</span>, <span class="string">&quot;auto&quot;</span> + <span class="string">&quot;&quot;</span>, metaObject);</span><br><span class="line"><span class="built_in">this</span>.setFieldValByName(<span class="string">&quot;updateBy&quot;</span>, <span class="string">&quot;auto&quot;</span> + <span class="string">&quot;&quot;</span>, metaObject);</span><br></pre></td></tr></table></figure>
+
+<p>（<code>rcloud-system-service</code> 那份更省事，<code>createBy</code> 都不填。）所以真实症状不是”异步时丢成 null”，而是<strong>所有自动填充的记录里操作人恒为 <code>&quot;auto&quot;</code>，谁也追溯不到</strong>——埋点在主线程也没用，因为它根本没接。裸 <code>ThreadLocal</code> 的问题依然存在（任何自己取用户上下文的代码在异步线程里都会拿到 null），但别把它和 <code>createBy</code> 混为一谈。</p>
+<blockquote>
+<p>顺带一提：<code>MyMetaObjectHandler</code> 在 5 个服务里各有一份副本，而且<strong>并不一致</strong>——dispatch &#x2F; eam &#x2F; equipment &#x2F; exchange 写 <code>isDelete = &quot;0&quot;</code>（字符串），<code>rcloud-system-service</code> 写 <code>isDelete = 2</code>（整数）。配合 <code>YesOrNoEnum</code>（<code>1=是 / 2=否</code>）和 <code>DispatchGroupMainThread</code> 里用 <code>YesOrNoEnum.YES</code> 判”已删除”，等于<strong>全项目对”未删除”存在 0 和 2 两种取值</strong>。这是”复制式复用”最典型的下场。</p>
+</blockquote>
 <p><strong>问题二：服务间调用无签名，内网裸奔可提权。</strong></p>
 <p>网关验了 JWT，但服务之间的 Feign 调用<strong>只传了两个明文 header</strong>。只要能访问内网，任何人都可以构造：</p>
 <figure class="highlight http"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">POST http://rcloud-dispatch/departure/create</span><br><span class="line"><span class="attribute">userId</span><span class="punctuation">: </span>1</span><br><span class="line"><span class="attribute">userName</span><span class="punctuation">: </span>admin</span><br></pre></td></tr></table></figure>
@@ -302,12 +313,17 @@ article: http://ogp.me/ns/article#">
 </ol>
 </blockquote>
 <p><strong>问题三：同一个拦截器被复制了 7 份。</strong></p>
-<p><code>LoginUserInfoFeignInterceptor</code> 在 system &#x2F; dispatch &#x2F; dispatch-service &#x2F; dispatch-processor &#x2F; equipment &#x2F; largescreen &#x2F; keda 各有一份，代码完全相同。同理 <code>LoginUserInfoConfig</code>、<code>MyMetaObjectHandler</code>、<code>Lock4jConfig</code>、<code>DistanceUtils</code>、<code>RegionUtil</code> 也都是复制品。</p>
-<p><strong>这类”复制式复用”是微服务拆分时最常见的债务</strong>——本该把这些横切关注点收进 <code>rcloud-common</code> 的 starter 里。</p>
+<p><code>LoginUserInfoFeignInterceptor</code> 在 system-service &#x2F; dispatch-service &#x2F; dispatch-processor &#x2F; equipment-service &#x2F; <strong>eam-service</strong> &#x2F; largescreen-service &#x2F; keda-service 各有一份，代码完全相同（注意<strong>没有</strong>一个叫 <code>dispatch</code> 的模块，也没有 web-interface 那份）。同理 <code>LoginUserInfoConfig</code>、<code>MyMetaObjectHandler</code>、<code>Lock4jConfig</code>、<code>DistanceUtils</code>、<code>RegionUtil</code> 也都是复制品；<code>CoordinateUtil</code> 在 dispatch-service &#x2F; map-service &#x2F; keda-service 还各有一份。</p>
+<p><strong>这类”复制式复用”是微服务拆分时最常见的债务</strong>——本该把这些横切关注点收进 <code>rcloud-common</code> 的 starter 里。而且副本一旦分散就会各自漂移：<code>MyMetaObjectHandler</code> 的 <code>isDelete</code> 取值分裂（<code>&quot;0&quot;</code> vs <code>2</code>）、<code>MapFeignService</code> 的缓存 TTL 从 30 秒变成 10 分钟，都是这么来的。</p>
 <hr>
-<h2 id="三、Feign-拓扑：一张图看懂谁依赖谁"><a href="#三、Feign-拓扑：一张图看懂谁依赖谁" class="headerlink" title="三、Feign 拓扑：一张图看懂谁依赖谁"></a>三、Feign 拓扑：一张图看懂谁依赖谁</h2><h3 id="3-1-服务名常量"><a href="#3-1-服务名常量" class="headerlink" title="3.1 服务名常量"></a>3.1 服务名常量</h3><p><code>FeignServiceConstant</code> 定义了 14 个服务名：</p>
+<h2 id="三、Feign-拓扑：一张图看懂谁依赖谁"><a href="#三、Feign-拓扑：一张图看懂谁依赖谁" class="headerlink" title="三、Feign 拓扑：一张图看懂谁依赖谁"></a>三、Feign 拓扑：一张图看懂谁依赖谁</h2><h3 id="3-1-服务名常量"><a href="#3-1-服务名常量" class="headerlink" title="3.1 服务名常量"></a>3.1 服务名常量</h3><p><code>FeignServiceConstant</code> 定义了 13 个服务名：</p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">rcloud-equipment                      rcloud-system</span><br><span class="line">rcloud-map                            rcloud-dispatch</span><br><span class="line">rcloud-dispatch-processor             rcloud-report</span><br><span class="line">rcloud-largescreen                    rcloud-pre-algorithm</span><br><span class="line">rcloud-algorithm-platform             rcloud-algorithm-routeplanning-jni</span><br><span class="line">rcloud-safety-guarantee               rcloud-exchange-qingyan</span><br><span class="line">rcloud-equipment-ext-transportationsales</span><br></pre></td></tr></table></figure>
 
+<p>这 13 个名字里有个容易被忽略的事实：<strong>其中 4 个在本仓库群里找不到任何启动类</strong>——<code>rcloud-report</code>、<code>rcloud-pre-algorithm</code>、<code>rcloud-safety-guarantee</code>、<code>rcloud-exchange-qingyan</code>。而它们不是摆设，是实实在在的调用目标：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// processor 侧有 4 个 Client 打向 REPORT</span></span><br><span class="line"><span class="comment">// equipment 侧有 2 个 Client 打向 SAFETY_GUARANTEE</span></span><br></pre></td></tr></table></figure>
+
+<p>所以”这套系统有多少服务”取决于口径：<strong>代码边界是 17 个启动类，部署边界更大</strong>。这 4 个服务要么是别团队交付、要么是已下线但常量没删——无论哪种，都值得在文档里标出来，否则新人按常量去 Nacos 上找实例会一头雾水。</p>
+<p>（另外注意：常量里没有 <code>rcloud-web-interface</code>、<code>rcloud-map-extend-boundarymerge</code>、<code>rcloud-keda-service</code>、<code>rcloud-eam</code>、<code>rcloud-logistics-service</code>、<code>rcloud-equipment-ext-trafficlight</code>——它们不需要被 Feign 调用，所以不在这里。）</p>
 <h3 id="3-2-dispatch-的出向依赖"><a href="#3-2-dispatch-的出向依赖" class="headerlink" title="3.2 dispatch 的出向依赖"></a>3.2 dispatch 的出向依赖</h3><table>
 <thead>
 <tr>
@@ -348,10 +364,31 @@ article: http://ogp.me/ns/article#">
 <td>EquipLastInfo</td>
 </tr>
 </tbody></table>
-<p>processor 侧则回过头来调 <code>rcloud-dispatch</code> 的 12 个 Client（LoadJobTask &#x2F; DispatchGroup &#x2F; DispatchRegion &#x2F; DispatchParkSpace &#x2F; DispatchMaterial &#x2F; DispatchLog …）。</p>
+<p>processor 侧则回过头来调 <code>rcloud-dispatch</code> 的 12 个 Client（LoadJobTask &#x2F; DispatchGroup &#x2F; DispatchGroupBusiness &#x2F; DispatchRegion &#x2F; DispatchParkSpace &#x2F; DispatchMaterial &#x2F; DispatchLog &#x2F; DispatchMaintenanceRecord &#x2F; LoadBufferPoint &#x2F; DepartureAndPark &#x2F; DispatchMaintenance …）。按 <code>@FeignClient</code> 的 value 逐个统计，两侧的出向分布是这样的：</p>
+<table>
+<thead>
+<tr>
+<th>发起方</th>
+<th>目标 → Client 数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>dispatch-service（共 23 个）</td>
+<td>equipment 8、dispatch-processor 5、system 4、map 2、report 1、routeplanning-jni 1、largescreen 1、algorithm-platform 1</td>
+</tr>
+<tr>
+<td>dispatch-processor（共 26 个）</td>
+<td><strong>dispatch 12</strong>、equipment 5、report 4、map 2、system 1、transportationsales 1、algorithm-platform 1</td>
+</tr>
+<tr>
+<td>equipment-service（共 28 个）</td>
+<td>system 9、<strong>dispatch 9</strong>、map 4、safety-guarantee 2、report 2、dispatch-processor 1、algorithm-platform 1</td>
+</tr>
+</tbody></table>
+<p>这张表比”谁依赖谁”更有信息量：<strong>dispatch 与 processor 互调、equipment 既是 dispatch 的下游又是 dispatch 的上游</strong>，而 <code>report</code> &#x2F; <code>safety-guarantee</code> 这些编外服务在两处出现，说明它们已经深度参与了运行时链路。</p>
 <h3 id="3-3-存在真实的循环依赖"><a href="#3-3-存在真实的循环依赖" class="headerlink" title="3.3 存在真实的循环依赖"></a>3.3 存在真实的循环依赖</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">rcloud-equipment ──Feign──&gt; rcloud-dispatch       (DispatchRegionFeignClient 等)</span><br><span class="line">rcloud-dispatch  ──Feign──&gt; rcloud-equipment      (TruckProtocolFeignClient 等)</span><br></pre></td></tr></table></figure>
 
-<p>把 equipment 侧的出向 Client 列全（<code>rcloud-equipment-service/.../framework/feign/client/</code>），会发现这不是孤例：</p>
+<p>把 equipment 侧的出向 Client 列全（<code>rcloud-equipment-service/.../framework/feign/client/</code>），会发现这不是孤例——打向 <code>FeignServiceConstant.DISPATCH</code> 的一共有 <strong>9 个</strong>（不是三五个）：</p>
 <table>
 <thead>
 <tr>
@@ -366,12 +403,27 @@ article: http://ogp.me/ns/article#">
 <td>装载点校验</td>
 </tr>
 <tr>
+<td><code>DebugPanelFeignClient</code></td>
+<td><code>FeignServiceConstant.DISPATCH</code></td>
+<td>调试面板推送</td>
+</tr>
+<tr>
+<td><code>DepartureAndParkFeignClient</code></td>
+<td><code>FeignServiceConstant.DISPATCH</code></td>
+<td>发车&#x2F;收车请求</td>
+</tr>
+<tr>
 <td><code>DispatchGroupBusinessFeignClient</code></td>
 <td><code>FeignServiceConstant.DISPATCH</code></td>
 <td>排土线更新&#x2F;重置&#x2F;关闭、挖机急停联动、取车列表</td>
 </tr>
 <tr>
-<td><code>DispatchLogFeignService</code> → <code>DispatchLogFeignClient</code></td>
+<td><code>DispatchGroupFeignClient</code></td>
+<td><code>FeignServiceConstant.DISPATCH</code></td>
+<td>编组信息查询</td>
+</tr>
+<tr>
+<td><code>DispatchLogFeignClient</code></td>
 <td><code>FeignServiceConstant.DISPATCH</code></td>
 <td>装载区驶出日志回写</td>
 </tr>
@@ -381,12 +433,17 @@ article: http://ogp.me/ns/article#">
 <td>维保结束通知</td>
 </tr>
 <tr>
-<td><code>DebugPanelFeignService</code></td>
+<td><code>DispatchRegionFeignClient</code></td>
 <td><code>FeignServiceConstant.DISPATCH</code></td>
-<td>调试面板推送</td>
+<td>区域信息查询</td>
+</tr>
+<tr>
+<td><code>LoadBufferPointFeignClient</code></td>
+<td><code>FeignServiceConstant.DISPATCH</code></td>
+<td>装载缓冲点</td>
 </tr>
 </tbody></table>
-<p>也就是说 equipment 至少有 5 个 Client 反向打回 dispatch，而 dispatch 又有 <code>TruckProtocolFeignClient</code> 打回 equipment——<strong>两个服务在 Feign 层面是双向强耦合</strong>。从<a href="/2026/07/15/9ff979a5e35e/" title="露天矿山无人驾驶调度平台（一）：架构全景">分层模型</a>看，这还只是 L4 内部的问题；更严重的是 L2 的 <code>rcloud-exchange</code> 也通过 <code>CommonProtocolFeign</code>、<code>EquipmentFeignAPIClient</code>、<code>SystemFeignAPIClient</code> 反向依赖 L4，属于明确的跨层反向调用。</p>
+<p>而 dispatch 又有 8 个 Client 打回 equipment（TruckProtocol &#x2F; ExcavatorProtocol &#x2F; LoaderProtocol &#x2F; DTUProtocol &#x2F; Equipment &#x2F; EquipCheck &#x2F; EquipExcavatorInstructionLog &#x2F; TrafficLight）——<strong>两个服务在 Feign 层面是双向强耦合，而且是 8 ↔ 9 的密集互调</strong>。从<a href="/2026/07/15/9ff979a5e35e/" title="露天矿山无人驾驶调度平台（一）：架构全景">分层模型</a>看，这还只是 L4 内部的问题；更严重的是 L2 的 <code>rcloud-exchange</code> 也通过 <code>CommonProtocolFeign</code>、<code>EquipmentFeignAPIClient</code>、<code>SystemFeignAPIClient</code> 反向依赖 L4，属于明确的跨层反向调用。</p>
 <p>配合各服务 bootstrap.yml 里统一的：</p>
 <figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">main:</span></span><br><span class="line">    <span class="attr">allow-circular-references:</span> <span class="literal">true</span></span><br></pre></td></tr></table></figure>
 
@@ -403,7 +460,7 @@ article: http://ogp.me/ns/article#">
 </thead>
 <tbody><tr>
 <td>超时</td>
-<td>仅 dispatch 配了 <code>Request.Options(1, MINUTES, 1, MINUTES)</code>，其余服务用默认；1 分钟超时对 1 秒周期的调度线程过长</td>
+<td><strong>只有 dispatch 显式设了值</strong>：<code>Request.Options(1, MINUTES, 1, MINUTES, true)</code>；web-interface 虽也定义了 <code>FeignConfig</code>，但用的是 <code>new Request.Options()</code> 默认（10s 连接 &#x2F; 60s 读），等于没配；其余服务全默认。1 分钟读超时对 MQ 消费线程过长</td>
 </tr>
 <tr>
 <td>重试</td>
@@ -422,7 +479,14 @@ article: http://ogp.me/ns/article#">
 <td>spring-cloud-loadbalancer，默认轮询</td>
 </tr>
 </tbody></table>
-<p><strong>没有熔断是最大的风险</strong>：<code>dispatch → equipment → RocketMQ → exchange</code> 这条链路上，只要 equipment 慢了，调度线程就会被拖住，进而所有车的派车延迟。</p>
+<p><strong>没有熔断是最大的风险</strong>：<code>dispatch → equipment → RocketMQ → exchange</code> 这条链路上，只要 equipment 慢了，做派车决策的 MQ 消费线程就会被拖住（注意不是”1 秒调度线程”——那条只刷缓存，这个区别见<a href="/2026/07/15/9ff979a5e35e/" title="露天矿山无人驾驶调度平台（一）：架构全景">第一篇</a>），进而所有车的派车延迟。</p>
+<p>这个”拖住”是可以量化的。派车决策在 processor 里串行走 6<del>8 次 Feign（区域、地图、点检、可调度挖机、算法、等待点、下发），单条约 300</del>400ms；而消费线程池只有 20~60 个线程、且被 10 个 topic 共享。于是：</p>
+<ul>
+<li>任一下游从 50ms 变慢到 500ms，单条决策耗时翻到 ~3s，线程池瞬间打满；</li>
+<li>消费能力从 ~100 msg&#x2F;s 掉到十几 msg&#x2F;s，<strong>MQ 开始积压</strong>；</li>
+<li>积压超过 5 秒后，<code>isRealTimeData()</code> 把这些数据判为过期<strong>直接丢弃</strong>——不是”慢一点”，而是”任务漏下发”。</li>
+</ul>
+<p>完整的推导过程和 100 台矿卡的可行性判定见<a href="/2026/07/28/e8ffc4d9d553/" title="露天矿山无人驾驶调度平台（七）：性能瓶颈与容量评估——100 台矿卡到底能不能上">第七篇</a>；熔断的具体配置建议见<a href="/2026/09/18/a29ec235e929/" title="露天矿山无人驾驶调度平台（八）：性能优化与升级路线——从 50 台到 500 台">第八篇</a>。</p>
 <blockquote>
 <p>建议最小改动方案：</p>
 <ol>
@@ -433,9 +497,19 @@ article: http://ogp.me/ns/article#">
 </blockquote>
 <hr>
 <h2 id="四、自研健康巡检平台：全项目最有特色的基建"><a href="#四、自研健康巡检平台：全项目最有特色的基建" class="headerlink" title="四、自研健康巡检平台：全项目最有特色的基建"></a>四、自研健康巡检平台：全项目最有特色的基建</h2><p>这是我认为整个系统里<strong>最值得写进简历</strong>的部分。</p>
-<h3 id="4-1-架构"><a href="#4-1-架构" class="headerlink" title="4.1 架构"></a>4.1 架构</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">rcloud-system-health-client (埋进各业务服务)</span><br><span class="line">    └─ HealthController 暴露：</span><br><span class="line">       /health/heartbeat  /health/mysql   /health/redis</span><br><span class="line">       /health/minio      /health/rocketmq</span><br><span class="line">       /health/mqtt       /health/mqttclient</span><br><span class="line">       /health/tdengine</span><br><span class="line"></span><br><span class="line">rcloud-system-health-service (巡检服务端)</span><br><span class="line">    └─ HealthService.doCheckHealth()</span><br><span class="line">       1. 从 Nacos 拉取所有注册实例</span><br><span class="line">       2. 按 YamlConfig.servicelist 过滤目标服务</span><br><span class="line">       3. Executors.newFixedThreadPool(30) 并行探测各实例</span><br><span class="line">       4. 单实例内 7 类组件用 CompletableFuture 并行探测</span><br><span class="line">       5. 汇总 HealthProblemEnum 问题（如 MYSQL_INSERT_ERROR、</span><br><span class="line">          ROCKETMQ_TOPIC_UNCREATED）</span><br></pre></td></tr></table></figure>
+<h3 id="4-1-架构：一个”本该是-SDK”的设计"><a href="#4-1-架构：一个”本该是-SDK”的设计" class="headerlink" title="4.1 架构：一个”本该是 SDK”的设计"></a>4.1 架构：一个”本该是 SDK”的设计</h3><p>先纠正一个容易产生的误解。看模块名 <code>rcloud-system-health-client</code> 会以为它是”埋进各业务服务的客户端 SDK”，但<strong>它并没有被任何模块依赖</strong>（全仓按 artifactId 搜索只命中它自己的 pom）。真实形态是——</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">各业务服务（9 个模块）各自手写一份 HealthController</span><br><span class="line">    └─ @RequestMapping(&quot;/health&quot;) 暴露若干探测端点，但**每个服务的端点集合都不一样**：</span><br><span class="line">       equipment-service    heartbeat  rocketmq  redis  mysql  minio</span><br><span class="line">       exchange-service     heartbeat  mqttclient  rocketmq  mysql  tdengine</span><br><span class="line">       system-service       heartbeat  mysql  redis  minio</span><br><span class="line">       map-service          heartbeat  mysql  minio  redis</span><br><span class="line">       dispatch-service     heartbeat  mysql  redis</span><br><span class="line">       dispatch-processor   heartbeat  rocketmq  redis</span><br><span class="line">       largescreen-service  heartbeat  rocketmq  redis</span><br><span class="line">       equipment-ext-trafficlight  heartbeat（仅此一个）</span><br><span class="line">       system-health-client        heartbeat（仅此一个）</span><br><span class="line"></span><br><span class="line">rcloud-system-health-service（巡检服务端）</span><br><span class="line">    └─ HealthService.doCheckHealth()</span><br><span class="line">       1. 从 Nacos 拉取所有注册实例</span><br><span class="line">       2. 按 YamlConfig.servicelist 过滤目标服务</span><br><span class="line">       3. Executors.newFixedThreadPool(30) 并行探测各实例</span><br><span class="line">       4. 单实例内多类组件用 CompletableFuture 并行探测</span><br><span class="line">       5. 汇总 HealthProblemEnum 问题（如 MYSQL_INSERT_ERROR、</span><br><span class="line">          ROCKETMQ_TOPIC_UNCREATED）</span><br></pre></td></tr></table></figure>
 
-<h3 id="4-2-设计亮点"><a href="#4-2-设计亮点" class="headerlink" title="4.2 设计亮点"></a>4.2 设计亮点</h3><p><strong>(1) 两级并行</strong>。服务间用线程池并行，服务内用 <code>CompletableFuture</code> 并行——18 个服务 × 8 类组件的巡检能在秒级完成。</p>
+<p>这个”复制 + 各自裁剪”的形态带来两个直接后果：</p>
+<ol>
+<li><strong>巡检覆盖度取决于别人抄得全不全</strong>。<code>equipment-ext-trafficlight</code> 只抄了 <code>/health/heartbeat</code>，等于它上面的 RocketMQ &#x2F; Redis &#x2F; DB 一律不在巡检范围内；而 <code>dispatch-service</code> 抄了 mysql+redis 却没抄 minio，尽管它也读地图文件。<strong>巡检结论”全部正常”的可信区间，等于所有服务里抄得最少的那一份。</strong></li>
+<li><strong><code>rcloud-system-health-client</code> 成了一个死模块</strong>——它和 <code>health-service</code> 的 <code>spring.application.name</code> 都叫 <code>rcloud-system-health</code>（见 4.3），而它自己只有 heartbeat。它更像是”当初想做成 starter、最后没做”的残留。</li>
+</ol>
+<p>顺带一提，文中若看到 <code>/health/mqtt</code>，那是笔误：全仓只有 <code>/health/mqttclient</code>。</p>
+<blockquote>
+<p>改进方向：把 <code>HealthController</code> + 各组件探测逻辑收进 <code>health-client</code> 做成真正的 starter（按 classpath 自动装配：有 Redis 才暴露 redis 探测、有 MinIO 才暴露 minio 探测），各服务一行依赖接入。这一步同时解决了”覆盖不均”和”复制漂移”两个问题。</p>
+</blockquote>
+<h3 id="4-2-设计亮点"><a href="#4-2-设计亮点" class="headerlink" title="4.2 设计亮点"></a>4.2 设计亮点</h3><p><strong>(1) 两级并行</strong>。服务间用线程池并行，服务内用 <code>CompletableFuture</code> 并行——十几个服务 × 若干类组件的巡检能在秒级完成。</p>
 <p><strong>(2) 防重入</strong>。<code>AtomicBoolean isChecking</code> 保证上一轮没跑完不会启动下一轮，避免巡检本身把系统压垮。</p>
 <p><strong>(3) 探测的是”能用”而不是”能连”</strong>。比如 MySQL 不是 <code>SELECT 1</code>，而是真的做一次 insert&#x2F;delete 探测（<code>MYSQL_INSERT_ERROR</code> 这个枚举就是证据）；RocketMQ 检查的是 <strong>topic 是否真的创建</strong>（<code>ROCKETMQ_TOPIC_UNCREATED</code>）。</p>
 <p>这一点比 Spring Boot Actuator 的 <code>HealthIndicator</code> 做得更实——Actuator 的 DataSource 健康检查默认就是 <code>SELECT 1</code>，能连上但磁盘满了、只读了、权限被回收了都发现不了。</p>
@@ -443,7 +517,7 @@ article: http://ogp.me/ns/article#">
 <h3 id="4-3-一个待确认的问题"><a href="#4-3-一个待确认的问题" class="headerlink" title="4.3 一个待确认的问题"></a>4.3 一个待确认的问题</h3><p><code>health-client</code> 和 <code>health-service</code> 的 <code>spring.application.name</code> <strong>都叫 <code>rcloud-system-health</code></strong>：</p>
 <figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 两个模块的 bootstrap.yml</span></span><br><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">application:</span></span><br><span class="line">    <span class="attr">name:</span> <span class="string">rcloud-system-health</span></span><br></pre></td></tr></table></figure>
 
-<p>而且 health-client 的 pom 没有被任何业务服务显式依赖。这说明接入方式可能是手工拷贝代码，或者改名后没同步——<strong>如果不处理，client 和 service 会注册成同一个服务的两个实例，Nacos 上会出现同名实例互相干扰</strong>。</p>
+<p>而且 health-client 的 pom 没有被任何业务服务显式依赖（这也是 4.1 里”各服务手抄 HealthController”的佐证）。<strong>如果不处理，client 和 service 会注册成同一个服务的两个实例，Nacos 上会出现同名实例互相干扰</strong>——巡检服务端自己也会被自己当成被巡检对象。</p>
 <hr>
 <h2 id="五、可观测性：目前是空白"><a href="#五、可观测性：目前是空白" class="headerlink" title="五、可观测性：目前是空白"></a>五、可观测性：目前是空白</h2><table>
 <thead>
@@ -470,10 +544,10 @@ article: http://ogp.me/ns/article#">
 </tr>
 <tr>
 <td>定时任务</td>
-<td>equipment 引了 <code>xxl-job-core</code> 且配了 <code>XxlJobConfig</code>，但 <strong>bootstrap.yml 里的 xxl.job 配置整段被注释</strong>，且全项目无一个 <code>@XxlJob</code> 处理器 —— 半成品</td>
+<td><code>xxl-job-core</code> 只引在 <strong>rcloud-dispatch-service</strong>（<code>XxlJobConfig</code> 也在这个模块），而 <code>rcloud-equipment-ext-transportationsales</code> 的 <code>bootstrap.yml</code> 里有一段<strong>被注释掉的</strong> <code>xxl.job</code> 配置；全项目无一个 <code>@XxlJob</code> 处理器 —— 两处半成品，分散在两个仓库</td>
 </tr>
 </tbody></table>
-<p>对于一个有 18 个服务、调度线程 1 秒一轮的系统，<strong>没有链路追踪是排查问题的最大障碍</strong>。</p>
+<p>对于一个有 20 个服务、决策链路横跨 4~5 跳的系统，<strong>没有链路追踪是排查问题的最大障碍</strong>。</p>
 <hr>
 <h2 id="六、治理改进优先级"><a href="#六、治理改进优先级" class="headerlink" title="六、治理改进优先级"></a>六、治理改进优先级</h2><table>
 <thead>
@@ -644,21 +718,21 @@ article: http://ogp.me/ns/article#">
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/" aria-label="分类: 技术">
                         技术
-                        <span>(253)</span>
+                        <span>(255)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2026/" aria-label="分类: 2026">
                         2026
-                        <span>(52)</span>
+                        <span>(54)</span>
                     </a>
                 </div>
             
                 <div class="category-item">
                     <a href="/categories/%E6%8A%80%E6%9C%AF/2026/%E6%99%BA%E6%85%A7%E7%9F%BF%E5%B1%B1/" aria-label="分类: 智慧矿山">
                         智慧矿山
-                        <span>(6)</span>
+                        <span>(8)</span>
                     </a>
                 </div>
             
@@ -1085,6 +1159,44 @@ article: http://ogp.me/ns/article#">
             }
             
             setTimeout(setupMermaidZoom, 2000);
+
+            /* 加密文章专用：正文要等解密成功后才由 hexo-blog-encrypt 注入 DOM，
+               上面这轮扫描看到的只有解密表单，所以图表不会被渲染。
+               这里等原始正文出现（.post-content 里出现 mermaid），再补跑一轮
+               规整 + run；跑完立即断开观察者。 */
+            if (typeof page !== 'undefined' && page && page.encrypt) {
+              var mermaidBooted = false;
+              var mermaidObserver = new MutationObserver(function() {
+                if (mermaidBooted) return;
+                var pending = document.querySelectorAll(
+                  '.post-content pre.mermaid, .post-content .mermaid:not([data-processed])');
+                if (!pending.length) return;
+
+                mermaidBooted = true;
+                mermaidObserver.disconnect();
+
+                document.querySelectorAll('.post-content pre.mermaid').forEach(function(pre) {
+                  var div = document.createElement('div');
+                  div.className = 'mermaid';
+                  div.textContent = pre.textContent || pre.innerText;
+                  pre.parentNode.replaceChild(div, pre);
+                });
+
+                try {
+                  var result = mermaid.run();
+                  if (result && typeof result.then === 'function') {
+                    result.then(setupMermaidZoom).catch(function(err) {
+                      console.error('Mermaid run error (encrypted post):', err);
+                    });
+                  } else {
+                    setTimeout(setupMermaidZoom, 300);
+                  }
+                } catch (e) {
+                  console.error('Error running mermaid (encrypted post):', e);
+                }
+              });
+              mermaidObserver.observe(document.body, { childList: true, subtree: true });
+            }
           }
         });
       </script>
